@@ -1,0 +1,43 @@
+CREATE TABLE IF NOT EXISTS items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  category TEXT NOT NULL,
+  title TEXT NOT NULL,
+  notes TEXT,
+  due_date TEXT,
+  recurrence TEXT NOT NULL DEFAULT 'none',
+  recur_day INTEGER,
+  amount TEXT,
+  status TEXT NOT NULL DEFAULT 'open',
+  created_by TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  last_reminded TEXT
+);
+
+CREATE TABLE IF NOT EXISTS apartments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  url TEXT,
+  deal_type TEXT,
+  title TEXT,
+  price INTEGER,
+  admin_fee INTEGER,
+  bedrooms INTEGER,
+  bathrooms INTEGER,
+  area_m2 REAL,
+  price_per_m2 INTEGER,
+  parking INTEGER,
+  stratum INTEGER,
+  location TEXT,
+  year_built INTEGER,
+  amenities TEXT,
+  source_site TEXT,
+  raw_note TEXT,
+  scrape_status TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_by TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  visit_date TEXT,
+  ruled_out_reason TEXT,
+  ruled_out_at TEXT
+);

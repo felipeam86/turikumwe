@@ -1,0 +1,19 @@
+name = "household"
+main = "src/index.ts"
+compatibility_date = "2026-07-01"
+
+# 07:30 America/Bogota (UTC-5, no DST) = 12:30 UTC
+[triggers]
+crons = ["30 12 * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "household"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+[vars]
+GROUP_CHAT_ID = "REPLACE_WITH_GROUP_CHAT_ID"
+
+# Secrets (set with `wrangler secret put`):
+#   BOT_TOKEN, TG_WEBHOOK_SECRET, ANTHROPIC_API_KEY
+# .html imports use wrangler's built-in Text rule — no custom rules needed.

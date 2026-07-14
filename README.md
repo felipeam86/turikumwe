@@ -1,0 +1,71 @@
+# Household + Apartment-Hunt Worker
+
+One Cloudflare Worker: a Telegram group is the only input. Plain messages become tracked household items (Claude parses them into ops), listing URLs become scraped + extracted apartments, a daily digest posts every morning, and two Access-protected web screens (`/dashboard.html`, `/apartments.html`) mirror the data.
+
+## Setup
+
+### 1. Install & create the database
+
+Wrangler requires Node.js ≥ 22 (`nvm use 22`).
+
+```sh
+npm install
+npx wrangler d1 create household
+```
+
+Paste the returned `database_id` into `wrangler.toml`, then apply the schema:
+
+```sh
+npx wrangler d1 execute household --remote --file schema.sql
+```
+
+(For local dev: same command with `--local`.)
+
+### 2. Config
+
+In `wrangler.toml`, set `GROUP_CHAT_ID` to the Telegram group's chat id (usually negative, e.g. `-100123456789`). Then set the three secrets:
+
+```sh
+npx wrangler secret put BOT_TOKEN          # from @BotFather
+npx wrangler secret put TG_WEBHOOK_SECRET  # any random string, e.g. `openssl rand -hex 32`
+npx wrangler secret put ANTHROPIC_API_KEY
+```
+
+### 3. Deploy
+
+```sh
+npx wrangler deploy
+```
+
+Cloudflare Access can't cover `*.workers.dev`, so give the Worker a **custom domain** on a zone you own (Worker → Settings → Domains & Routes → Custom domain, e.g. `casa.example.com`). Use that hostname below.
+
+### 4. Register the Telegram webhook
+
+```sh
+curl "https://api.telegram.org/bot$BOT_TOKEN/setWebhook" \
+  -d "url=https://casa.example.com/telegram-webhook" \
+  -d "secret_token=$TG_WEBHOOK_SECRET"
+```
+
+Telegram sends the secret in the `X-Telegram-Bot-Api-Secret-Token` header; the Worker rejects anything else. Note: with BotFather privacy mode on (default), the bot only sees group messages that mention it or replies — run `/setprivacy` → Disable so it sees every message in the group.
+
+### 5. Cloudflare Access
+
+In Zero Trust → Access → Applications, create two self-hosted applications on the custom domain:
+
+1. **Webhook bypass** — application domain `casa.example.com`, path `telegram-webhook`; one policy with action **Bypass**, include **Everyone**. (The webhook is protected only by the secret token.)
+2. **Web UI** — application domain `casa.example.com` (all paths); one policy with action **Allow**, include **Emails** = your two email addresses; login method **One-time PIN**.
+
+Access matches the most specific application first, so the webhook stays open while everything else requires the PIN login.
+
+The cron (07:30 America/Bogota = `30 12 * * *` UTC) is already in `wrangler.toml` and posts the digest on deploy — nothing to configure.
+
+## Endpoints
+
+| Route | Auth | What |
+|---|---|---|
+| `POST /telegram-webhook` | secret token header | Telegram updates: item ops, apartment URLs, "what's pending?" |
+| `GET /dashboard.html` | Access | Read-only household overview |
+| `GET /apartments.html` | Access | Apartment comparison (mobile-first cards) |
+| `GET /apartments-data.json` | Access | Data for the apartments screen |
+| `POST /apartments-action` | Access | `set_visit` / `rescrape` / `rule_out` / `reactivate` |
