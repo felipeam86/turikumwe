@@ -2,6 +2,11 @@ name = "household"
 main = "src/index.ts"
 compatibility_date = "2026-07-01"
 
+workers_dev = false
+routes = [
+  { pattern = "turikumwe.cc", custom_domain = true },
+]
+
 # 07:30 America/Bogota (UTC-5, no DST) = 12:30 UTC
 [triggers]
 crons = ["30 12 * * *"]
@@ -9,10 +14,10 @@ crons = ["30 12 * * *"]
 [[d1_databases]]
 binding = "DB"
 database_name = "household"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "819edb7b-dbfd-4cd6-8f88-73987be40545"
 
 [vars]
-GROUP_CHAT_ID = "REPLACE_WITH_GROUP_CHAT_ID"
+GROUP_CHAT_ID = "-5328221345"
 
 # Secrets (set with `wrangler secret put`):
 #   BOT_TOKEN, TG_WEBHOOK_SECRET, ANTHROPIC_API_KEY
