@@ -12,13 +12,12 @@ export interface Env {
 const TZ = 'America/Bogota'; // UTC-5, no DST
 const MODEL = 'claude-sonnet-5';
 
-const CATEGORIES = ['bills', 'groceries', 'baby', 'pediatrician', 'health', 'general'] as const;
+const CATEGORIES = ['bills', 'events', 'groceries', 'health', 'general'] as const;
 const CAT_LABEL: Record<string, string> = {
-  bills: 'Bills', groceries: 'Groceries', baby: 'Baby',
-  pediatrician: 'Pediatrician Qs', health: 'Health', general: 'General',
+  bills: 'Bills', events: 'Events', groceries: 'Groceries', health: 'Health', general: 'General',
 };
 const CAT_EMOJI: Record<string, string> = {
-  bills: '💵', groceries: '🛒', baby: '👶', pediatrician: '🩺', health: '❤️', general: '📌',
+  bills: '💵', events: '📅', groceries: '🛒', health: '❤️', general: '📌',
 };
 
 // ---- date helpers ----
@@ -316,7 +315,7 @@ async function handleUpdate(env: Env, update: any) {
   const sys = [
     'You are the parser for a household logging assistant used by a couple in a Telegram group to track home life.',
     `Today is ${td} (${wd}) in the household timezone. Convert incoming messages into structured operations.`,
-    'Categories: bills, groceries, baby, pediatrician, health, general.',
+    'Categories: bills, events, groceries, health, general.',
     'Return ONLY a JSON object: {"ops":[...]}. No prose, no code fences.',
     'Each op is exactly one of:',
     '  {"action":"add","category":"<cat>","title":"<short label>","due_date":"YYYY-MM-DD"|null,"recurrence":"monthly"|"none","recur_day":<1-31>|null,"amount":"<string>"|null}',
@@ -332,7 +331,10 @@ async function handleUpdate(env: Env, update: any) {
     '- Bills that recur (rent, mortgage, utilities, subscriptions, internet, phone): recurrence="monthly", recur_day=the day-of-month it is due, due_date=the NEXT upcoming occurrence (YYYY-MM-DD). One-off bills: recurrence="none", set due_date.',
     '- Convert every relative date to an absolute YYYY-MM-DD, choosing the next upcoming occurrence. "the 20th" => 20th of this month if still ahead, else next month.',
     '- To mark something done/paid/bought, use "complete" with the matching OPEN ITEM id ("rent paid", "got the diapers", "done with the pharmacy run").',
-    '- Grocery titles are just the item ("diapers", "formula"). Pediatrician items are the question to ask the doctor.',
+    '- events: things that happen on a date — birthdays, anniversaries, appointments, and social plans (lunch with a friend, a movie, a dinner). Put the date in due_date, recurrence "none", title = a short description.',
+    '- groceries: anything to buy for the home — food, drinks, household and cleaning supplies (dish sponge, detergent, paper towels), toiletries, diapers, formula. Title = just the item.',
+    '- health: any health matter for anyone in the household — Felipe, Lucia, or the baby Mateo: symptoms, medications, doctor or pediatrician appointments, questions to ask the doctor, things to monitor.',
+    '- Anything that does not clearly fit bills/events/groceries/health goes in general. Never drop an item.',
     '- Keep titles short and clear. If a message is ambiguous or pure chit-chat, use {"action":"none"}.',
     '- Emit {"action":"rescrape"} when the user asks to retry reading apartment listings. There are currently ' + blockedCount + ' apartment(s) awaiting re-read.',
     'OPEN ITEMS: ' + JSON.stringify(openForModel),
@@ -358,17 +360,19 @@ async function handleUpdate(env: Env, update: any) {
   let wantQuery = false;
   let wantRescrape = false;
   for (const op of ops) {
-    if (op.action === 'add' && op.title && CATEGORIES.includes(op.category)) {
+    if (op.action === 'add' && op.title) {
+      // ponytail: coerce an unknown/missing category to general so a mis-parse never drops the item
+      const cat = (CATEGORIES as readonly string[]).includes(op.category) ? op.category : 'general';
       await run(env,
         `INSERT INTO items (category,title,notes,due_date,recurrence,recur_day,amount,status,created_by,created_at,updated_at)
          VALUES (?,?,?,?,?,?,?, 'open', ?, ?, ?)`,
-        op.category, String(op.title).slice(0, 120), null,
+        cat, String(op.title).slice(0, 120), null,
         op.due_date || null, op.recurrence === 'monthly' ? 'monthly' : 'none',
         op.recur_day || null, op.amount || null, who, now, now);
       let d = '';
       if (op.due_date) d = ' — ' + dueLabel(op.due_date, td).replace(/^⚠️ /, '');
       if (op.recurrence === 'monthly') d += ' (monthly)';
-      added.push(`${CAT_EMOJI[op.category]} ${op.title}${d}`);
+      added.push(`${CAT_EMOJI[cat]} ${op.title}${d}`);
     } else if (op.action === 'complete' && op.id != null) {
       const it = await get(env, 'SELECT * FROM items WHERE id=? AND status=?', op.id, 'open');
       if (!it) continue;
