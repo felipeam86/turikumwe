@@ -65,7 +65,16 @@ The cron (07:30 America/Bogota = `30 12 * * *` UTC) is already in `wrangler.toml
 | Route | Auth | What |
 |---|---|---|
 | `POST /telegram-webhook` | secret token header | Telegram updates: item ops, apartment URLs, "what's pending?" |
-| `GET /dashboard.html` | Access | Read-only household overview |
+| `GET /` | Access | Home screen: pick Household or Apartamentos |
+| `GET /dashboard.html` | Access | Household overview, tap ✓ to complete items |
+| `POST /items-action` | Access | `complete` an item (monthly items roll forward); echoes to the Telegram group |
 | `GET /apartments.html` | Access | Apartment comparison (mobile-first cards) |
 | `GET /apartments-data.json` | Access | Data for the apartments screen |
-| `POST /apartments-action` | Access | `set_visit` / `rescrape` / `rule_out` / `reactivate` |
+| `POST /apartments-action` | Access | `set_visit` / `rescrape` / `rule_out` / `reactivate`; echoes to the Telegram group |
+| `GET /manifest.json`, `GET /icon.png` | Access | PWA manifest + icon (icons inlined as data URIs — Chrome fetches manifest icons without the Access cookie) |
+
+## Install on Android
+
+Open the site in Chrome → menu ⋮ → **Agregar a pantalla principal** (Chrome may also show an install prompt on its own). The app opens standalone with its own icon.
+
+Web actions and installability depend on the Cloudflare Access session, so set a long **Session Duration** (e.g. 1 month) on the Web UI Access application (Zero Trust → Access → Applications → edit → Session Duration) to keep the OTP login rare.

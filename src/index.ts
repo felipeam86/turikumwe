@@ -1,5 +1,7 @@
 import dashboardHtml from './dashboard.html';
 import apartmentsHtml from './apartments.html';
+import homeHtml from './home.html';
+import { ICON_192, ICON_512 } from './icons';
 
 export interface Env {
   DB: D1Database;
@@ -67,6 +69,19 @@ async function run(env: Env, sql: string, ...binds: unknown[]) {
 }
 async function openItems(env: Env) {
   return all(env, "SELECT id,category,title,notes,due_date,recurrence,recur_day,amount FROM items WHERE status='open' ORDER BY category, id");
+}
+// complete an open item; monthly items roll forward instead of closing
+async function completeItem(env: Env, id: number): Promise<{ ok: boolean; title?: string; next?: string }> {
+  const it = await get(env, 'SELECT * FROM items WHERE id=? AND status=?', id, 'open');
+  if (!it) return { ok: false };
+  const now = new Date().toISOString();
+  if (it.recurrence === 'monthly' && it.due_date) {
+    const next = addMonth(it.due_date, it.recur_day);
+    await run(env, 'UPDATE items SET due_date=?, last_reminded=NULL, updated_at=? WHERE id=?', next, now, it.id);
+    return { ok: true, title: it.title, next };
+  }
+  await run(env, 'UPDATE items SET status=?, updated_at=? WHERE id=?', 'done', now, it.id);
+  return { ok: true, title: it.title };
 }
 
 // ---- telegram ----
@@ -375,16 +390,8 @@ async function handleUpdate(env: Env, update: any) {
       if (op.recurrence === 'monthly') d += ' (monthly)';
       added.push(`${CAT_EMOJI[cat]} ${op.title}${d}`);
     } else if (op.action === 'complete' && op.id != null) {
-      const it = await get(env, 'SELECT * FROM items WHERE id=? AND status=?', op.id, 'open');
-      if (!it) continue;
-      if (it.recurrence === 'monthly' && it.due_date) {
-        const next = addMonth(it.due_date, it.recur_day);
-        await run(env, 'UPDATE items SET due_date=?, last_reminded=NULL, updated_at=? WHERE id=?', next, now, it.id);
-        completed.push(`${it.title} ✓ (next: ${fmtDate(next)})`);
-      } else {
-        await run(env, 'UPDATE items SET status=?, updated_at=? WHERE id=?', 'done', now, it.id);
-        completed.push(`${it.title} ✓`);
-      }
+      const r = await completeItem(env, Number(op.id));
+      if (r.ok) completed.push(`${r.title} ✓${r.next ? ` (next: ${fmtDate(r.next)})` : ''}`);
     } else if (op.action === 'query') {
       wantQuery = true;
     } else if (op.action === 'rescrape') {
@@ -455,37 +462,92 @@ async function dashboardPage(env: Env): Promise<Response> {
   const open = await openItems(env);
   const esc = (s: any) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const strip = (s: string) => s.replace('⚠️ ', '');
-  const rowHtml = (title: string, rec: string, meta: string, cls: string) =>
-    '<div class="row"><span class="title">' + esc(title) + rec + '</span><span class="meta ' + cls + '">' + esc(meta) + '</span></div>';
+  const dueCls = (iso: string | null) => {
+    if (!iso) return '';
+    const n = daysBetween(td, iso);
+    return n <= 0 ? 'err' : n === 1 ? 'warn' : '';
+  };
+  const byDue = (a: any, b: any) => {
+    const da = a.due_date || '9999', db = b.due_date || '9999';
+    return da < db ? -1 : da > db ? 1 : a.id - b.id;
+  };
+  const rowHtml = (i: any, metaOverride?: string) => {
+    const rec = i.recurrence === 'monthly' ? '<span class="rec">monthly</span>' : '';
+    const meta = metaOverride ?? (i.due_date ? strip(dueLabel(i.due_date, td)) : (i.amount || ''));
+    return '<div class="row" id="it' + i.id + '"><span class="title">' + esc(i.title) + rec + '</span>' +
+      '<span class="meta ' + dueCls(i.due_date) + '">' + esc(meta) + '</span>' +
+      '<button class="done" data-id="' + i.id + '" aria-label="Done">✓</button></div>';
+  };
   const bills = open.filter((i: any) => i.category === 'bills' && i.due_date);
-  const dueBills = bills.filter((b: any) => daysBetween(td, b.due_date) <= 1).sort((a: any, b: any) => a.due_date < b.due_date ? -1 : 1);
+  const dueBills = bills.filter((b: any) => daysBetween(td, b.due_date) <= 1).sort(byDue);
   let sections = '';
   if (dueBills.length) {
     let rows = '';
-    for (const b of dueBills) {
-      const n = daysBetween(td, b.due_date);
-      const cls = n <= 0 ? 'err' : 'warn';
-      const amt = b.amount ? (' · ' + b.amount) : '';
-      rows += rowHtml(b.title + amt, '', strip(dueLabel(b.due_date, td)), cls);
-    }
+    for (const b of dueBills) rows += rowHtml(b, (b.amount ? b.amount + ' · ' : '') + strip(dueLabel(b.due_date, td)));
     sections += '<div class="card attention"><h2>💵 Bills needing attention<span class="count">' + dueBills.length + '</span></h2>' + rows + '</div>';
   }
   for (const cat of CATEGORIES) {
-    const items = open.filter((i: any) => i.category === cat && !(cat === 'bills' && dueBills.some((d: any) => d.id === i.id)));
+    const items = open.filter((i: any) => i.category === cat && !(cat === 'bills' && dueBills.some((d: any) => d.id === i.id))).sort(byDue);
     if (!items.length) continue;
     let rows = '';
-    for (const i of items) {
-      let meta = '';
-      if (i.due_date) meta = strip(dueLabel(i.due_date, td));
-      else if (i.amount) meta = i.amount;
-      const rec = i.recurrence === 'monthly' ? '<span class="rec">monthly</span>' : '';
-      rows += rowHtml(i.title, rec, meta, '');
-    }
+    for (const i of items) rows += rowHtml(i);
     sections += '<div class="card"><h2>' + CAT_EMOJI[cat] + ' ' + CAT_LABEL[cat] + '<span class="count">' + items.length + '</span></h2>' + rows + '</div>';
   }
   if (!sections) sections = '<div class="card empty">Nothing tracked yet — log something in the group. 🎉</div>';
   const updated = new Intl.DateTimeFormat('es-CO', { timeZone: TZ, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date());
   return html(dashboardHtml.replace('{{SECTIONS}}', sections).replace('{{UPDATED}}', updated));
+}
+
+async function homePage(env: Env): Promise<Response> {
+  const td = today();
+  const open = await openItems(env);
+  const dueSoon = open.filter((i: any) => i.due_date && daysBetween(td, i.due_date) <= 1).length;
+  const hhMeta = open.length
+    ? `${open.length} open item${open.length === 1 ? '' : 's'}` + (dueSoon ? ` · ${dueSoon} due soon` : '')
+    : 'Nothing pending 🎉';
+  const aptCount = Number((await get(env, "SELECT COUNT(*) c FROM apartments WHERE status='active'"))?.c || 0);
+  const nv = await get(env, "SELECT visit_date FROM apartments WHERE status='active' AND visit_date>=? ORDER BY visit_date LIMIT 1", td);
+  let aptMeta = aptCount ? `${aptCount} activo${aptCount === 1 ? '' : 's'}` : 'Aún no hay apartamentos';
+  if (nv) aptMeta += ` · visita ${fmtDate(nv.visit_date)}`;
+  const todayLabel = new Intl.DateTimeFormat('es-CO', { timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long' }).format(new Date());
+  return html(homeHtml.replace('{{TODAY}}', todayLabel).replace('{{HH_META}}', hhMeta).replace('{{APT_META}}', aptMeta));
+}
+
+// Cloudflare Access injects the logged-in user's email on every request
+function webUser(req: Request): string {
+  return (req.headers.get('cf-access-authenticated-user-email') || '').split('@')[0];
+}
+
+function manifestResponse(): Response {
+  // ponytail: icons as data URIs — Chrome fetches manifest icons without the Access cookie, so plain URLs would 302 to the login page
+  const m = {
+    name: 'Turikumwe', short_name: 'Turikumwe',
+    start_url: '/', scope: '/', display: 'standalone',
+    background_color: '#0e1013', theme_color: '#0e1013',
+    icons: [
+      { src: 'data:image/png;base64,' + ICON_192, sizes: '192x192', type: 'image/png', purpose: 'any' },
+      { src: 'data:image/png;base64,' + ICON_512, sizes: '512x512', type: 'image/png', purpose: 'any' },
+      { src: 'data:image/png;base64,' + ICON_512, sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+    ],
+  };
+  return new Response(JSON.stringify(m), { headers: { 'content-type': 'application/manifest+json' } });
+}
+
+function iconResponse(): Response {
+  const bytes = Uint8Array.from(atob(ICON_192), (c) => c.charCodeAt(0));
+  return new Response(bytes, { headers: { 'content-type': 'image/png', 'cache-control': 'public, max-age=86400' } });
+}
+
+async function itemsAction(env: Env, req: Request, ctx: ExecutionContext): Promise<Response> {
+  const b: any = await req.json().catch(() => ({}));
+  if (b.action !== 'complete') return json({ ok: false, error: 'unknown action' }, 400);
+  const id = Number(b.id);
+  if (!id) return json({ ok: false, error: 'missing id' }, 400);
+  const r = await completeItem(env, id);
+  if (!r.ok) return json({ ok: false, error: 'not-found' }, 404);
+  const who = webUser(req);
+  ctx.waitUntil(tgSend(env, `✓ *${r.title}*${r.next ? ` (next: ${fmtDate(r.next)})` : ''} — vía web${who ? ' · ' + who : ''}`).catch(() => {}));
+  return json({ ok: true, next: r.next ? fmtDate(r.next) : null });
 }
 
 async function apartmentsData(env: Env): Promise<Response> {
@@ -494,24 +556,34 @@ async function apartmentsData(env: Env): Promise<Response> {
   return json({ apartments: rows, ruledOut, today: today() });
 }
 
-async function apartmentsAction(env: Env, req: Request): Promise<Response> {
+async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): Promise<Response> {
   const b: any = await req.json().catch(() => ({}));
   const id = Number(b.id);
   if (!id) return json({ ok: false, error: 'missing id' }, 400);
+  const who = webUser(req);
+  const via = ` — vía web${who ? ' · ' + who : ''}`;
+  const echo = (msg: string) => ctx.waitUntil(tgSend(env, msg).catch(() => {}));
+  const aptName = (r: any) => r.location || r.title || ('apto ' + r.id);
   if (b.action === 'set_visit') {
     const vd = (b.visit_date == null || b.visit_date === '') ? null : String(b.visit_date);
     await run(env, 'UPDATE apartments SET visit_date=?, updated_at=? WHERE id=?', vd, new Date().toISOString(), id);
-    return json({ ok: true, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
+    const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
+    if (row) echo(vd ? `📅 Visita a *${aptName(row)}* → ${fmtDate(vd)}${via}` : `📅 Visita a *${aptName(row)}* cancelada${via}`);
+    return json({ ok: true, row });
   }
   if (b.action === 'rule_out') {
     const reason = (b.reason && String(b.reason).trim()) ? String(b.reason).trim().slice(0, 120) : null;
     const now = new Date().toISOString();
     await run(env, "UPDATE apartments SET status='ruled_out', ruled_out_reason=?, ruled_out_at=?, updated_at=? WHERE id=?", reason, now, now, id);
-    return json({ ok: true, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
+    const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
+    if (row) echo(`🚫 *${aptName(row)}* descartado${reason ? ' — ' + reason : ''}${via}`);
+    return json({ ok: true, row });
   }
   if (b.action === 'reactivate') {
     await run(env, "UPDATE apartments SET status='active', ruled_out_reason=NULL, ruled_out_at=NULL, updated_at=? WHERE id=?", new Date().toISOString(), id);
-    return json({ ok: true, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
+    const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
+    if (row) echo(`↩️ *${aptName(row)}* de vuelta en la lista${via}`);
+    return json({ ok: true, row });
   }
   if (b.action === 'rescrape') {
     const res = await rescrapeOne(env, id);
@@ -534,10 +606,14 @@ export default {
       return new Response('ok');
     }
 
+    if (req.method === 'GET' && path === '/') return homePage(env);
     if (req.method === 'GET' && path === '/dashboard.html') return dashboardPage(env);
     if (req.method === 'GET' && path === '/apartments.html') return html(apartmentsHtml);
     if (req.method === 'GET' && path === '/apartments-data.json') return apartmentsData(env);
-    if (req.method === 'POST' && path === '/apartments-action') return apartmentsAction(env, req);
+    if (req.method === 'GET' && path === '/manifest.json') return manifestResponse();
+    if (req.method === 'GET' && path === '/icon.png') return iconResponse();
+    if (req.method === 'POST' && path === '/apartments-action') return apartmentsAction(env, req, ctx);
+    if (req.method === 'POST' && path === '/items-action') return itemsAction(env, req, ctx);
 
     return new Response('not found', { status: 404 });
   },
