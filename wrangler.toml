@@ -7,9 +7,9 @@ routes = [
   { pattern = "turikumwe.cc", custom_domain = true },
 ]
 
-# 07:30 America/Bogota (UTC-5, no DST) = 12:30 UTC
+# 07:30 digest + 19:00 still-due-today nudge, America/Bogota (UTC-5, no DST)
 [triggers]
-crons = ["30 12 * * *"]
+crons = ["30 12 * * *", "0 0 * * *"]
 
 [[d1_databases]]
 binding = "DB"

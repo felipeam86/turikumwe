@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS apartments (
   source_site TEXT,
   raw_note TEXT,
   scrape_status TEXT,
+  image_url TEXT,
+  notes TEXT,
   status TEXT NOT NULL DEFAULT 'active',
   created_by TEXT,
   created_at TEXT NOT NULL,

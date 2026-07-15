@@ -21,6 +21,14 @@ npx wrangler d1 execute household --remote --file schema.sql
 
 (For local dev: same command with `--local`.)
 
+**Migrating a database created before the apartment photo/notes columns:**
+
+Run this **before** `wrangler deploy` — `schema.sql` uses `CREATE TABLE IF NOT EXISTS`, so re-applying it won't add the columns, and the new Worker's apartment `INSERT`/`UPDATE`s reference `image_url`/`notes` and will fail until they exist:
+
+```sh
+npx wrangler d1 execute household --remote --command "ALTER TABLE apartments ADD COLUMN image_url TEXT; ALTER TABLE apartments ADD COLUMN notes TEXT"
+```
+
 ### 2. Config
 
 In `wrangler.toml`, set `GROUP_CHAT_ID` to the Telegram group's chat id (usually negative, e.g. `-100123456789`). Then set the three secrets:
