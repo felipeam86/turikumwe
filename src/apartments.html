@@ -1,6 +1,9 @@
 <!DOCTYPE html>
 <html lang="es"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0e1013">
+<link rel="manifest" href="/manifest.json" crossorigin="use-credentials">
+<link rel="icon" href="/icon.png">
 <title>Apartamentos</title>
 <style>
   :root{
@@ -12,8 +15,16 @@
   *{box-sizing:border-box;}
   body{font-family:var(--font-ui);background:var(--bg);color:var(--fg);margin:0;padding:18px 14px 34px;-webkit-font-smoothing:antialiased;}
   .wrap{max-width:1040px;margin:0 auto;}
-  h1{font-size:22px;margin:0 0 2px;letter-spacing:-.01em;}
+  nav{display:flex;gap:8px;margin-bottom:12px;}
+  nav a{color:var(--muted);text-decoration:none;font-size:13px;font-weight:600;padding:0 14px;min-height:38px;display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:999px;white-space:nowrap;}
+  nav a.on{color:var(--fg);border-color:var(--accent);background:rgba(122,162,255,.12);}
   .sub{color:var(--muted);font-size:13px;margin-bottom:16px;}
+  .visits{background:var(--bg-raised);border:1px solid var(--accent);border-radius:14px;padding:10px 16px;margin-bottom:6px;}
+  .visits .vt{font-size:13px;font-weight:600;color:var(--accent);margin-bottom:2px;}
+  .visits .vrow{padding:6px 0;border-top:1px solid var(--border);font-size:14px;display:flex;gap:10px;align-items:baseline;}
+  .visits .vrow:first-of-type{border-top:none;}
+  .visits .vd2{font-weight:600;white-space:nowrap;}
+  .visits .vwho{color:var(--muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;}
   h2.sect{font-size:15px;margin:20px 2px 10px;font-weight:600;display:flex;align-items:center;gap:8px;}
   .count{color:var(--muted);font-weight:400;font-size:12px;}
   .grid{display:grid;gap:12px;grid-template-columns:1fr;}
@@ -58,8 +69,9 @@
   .rrow a.link{min-height:38px;padding:4px 10px;}
 </style></head><body>
 <div class="wrap">
-  <h1>🏢 Apartamentos</h1>
+  <nav><a href="/">⌂</a><a href="/dashboard.html">🏠 Household</a><a class="on" href="/apartments.html">🏢 Apartamentos</a></nav>
   <div class="sub" id="sub">Cargando…</div>
+  <div id="visits"></div>
   <div id="root"></div>
   <div id="ruledRoot"></div>
   <div class="foot">Fija la fecha de visita, vuelve a leer un link, o descarta un apartamento aquí.<br>También puedes escribir al grupo de Telegram: "descarta el de Chico Norte" o "reactiva el apto 2".</div>
@@ -72,17 +84,32 @@ function mny(n){return (n==null||isNaN(Number(n)))?"—":"$"+Number(n).toLocaleS
 function toast(t){var el=document.getElementById("toast");el.textContent=t;el.classList.add("show");setTimeout(function(){el.classList.remove("show");},1800);}
 function num(v){return v==null?"—":v;}
 function spec(k,v,best){return "<div class=\"spec\"><span class=\"k\">"+k+"</span><span class=\"v"+(best?" best":"")+"\">"+v+"</span></div>";}
+// ponytail: for rent the number that matters is price+admin; buy keeps the raw sale price
+function ppmOf(r,isRent){
+  if(isRent){
+    if(r.price!=null&&r.area_m2>0)return Math.round((Number(r.price)+Number(r.admin_fee||0))/Number(r.area_m2));
+    return null;
+  }
+  return (r.price_per_m2&&r.price_per_m2>0)?r.price_per_m2:null;
+}
 function card(r,best,isRent){
-  var isBest=best&&r.price_per_m2===best;
+  var ppm=ppmOf(r,isRent);
+  var isBest=best&&ppm===best;
   var flag=(r.scrape_status&&r.scrape_status!=="ok")?"<span class=\"flag\">sin leer</span>":"";
   var sub=(r.title&&r.location)?"<div class=\"sub2\">"+esc(r.title)+"</div>":"";
   var vd=r.visit_date?esc(r.visit_date):"";
   var h="<div class=\"apt\">";
   h+="<div class=\"head\"><div class=\"loc\">"+esc(r.location||r.title||"—")+flag+sub+"</div>";
-  h+="<div class=\"price\">"+mny(r.price)+(isRent&&r.price!=null?"<span class=\"per\">/mes</span>":"");
-  h+="<span class=\"adm\">Admin "+mny(r.admin_fee)+"</span></div></div>";
+  if(isRent&&r.price!=null){
+    var total=Number(r.price)+Number(r.admin_fee||0);
+    h+="<div class=\"price\">"+mny(total)+"<span class=\"per\">/mes</span>";
+    h+="<span class=\"adm\">"+(r.admin_fee?("arriendo "+mny(r.price)+" + admin "+mny(r.admin_fee)):"sin admin reportada")+"</span></div></div>";
+  }else{
+    h+="<div class=\"price\">"+mny(r.price);
+    h+="<span class=\"adm\">Admin "+mny(r.admin_fee)+"</span></div></div>";
+  }
   h+="<div class=\"specs\">";
-  h+=spec("$/m²",mny(r.price_per_m2),isBest);
+  h+=spec(isRent?"$/m² total":"$/m²",mny(ppm),isBest);
   h+=spec("Hab",num(r.bedrooms),false);
   h+=spec("Baños",num(r.bathrooms),false);
   h+=spec("m²",num(r.area_m2),false);
@@ -98,10 +125,26 @@ function card(r,best,isRent){
 }
 function section(title,list,isRent){
   if(!list.length)return "";
-  var ppm=list.map(function(r){return r.price_per_m2;}).filter(function(v){return v&&v>0;});
+  // best value first; cards without enough data go last
+  var sorted=list.slice().sort(function(a,b){
+    var pa=ppmOf(a,isRent),pb=ppmOf(b,isRent);
+    return (pa==null?Infinity:pa)-(pb==null?Infinity:pb);
+  });
+  var ppm=sorted.map(function(r){return ppmOf(r,isRent);}).filter(function(v){return v&&v>0;});
   var best=ppm.length?Math.min.apply(null,ppm):null;
-  var h="<h2 class=\"sect\">"+title+" <span class=\"count\">"+list.length+"</span></h2><div class=\"grid\">";
-  for(var i=0;i<list.length;i++)h+=card(list[i],best,isRent);
+  var h="<h2 class=\"sect\">"+title+" <span class=\"count\">"+sorted.length+"</span></h2><div class=\"grid\">";
+  for(var i=0;i<sorted.length;i++)h+=card(sorted[i],best,isRent);
+  h+="</div>";return h;
+}
+function fmtVisit(s){try{return new Date(s+"T00:00:00Z").toLocaleDateString("es-CO",{timeZone:"UTC",weekday:"short",day:"numeric",month:"short"});}catch(e){return s;}}
+function visitsStrip(rows){
+  var vis=rows.filter(function(r){return r.visit_date&&r.visit_date>=(DATA.today||"");})
+    .sort(function(a,b){return a.visit_date<b.visit_date?-1:1;});
+  if(!vis.length)return "";
+  var h="<div class=\"visits\"><div class=\"vt\">📅 Próximas visitas</div>";
+  for(var i=0;i<vis.length;i++){var r=vis[i];
+    h+="<div class=\"vrow\"><span class=\"vd2\">"+fmtVisit(r.visit_date)+"</span><span class=\"vwho\">"+esc(r.location||r.title||("apto "+r.id))+"</span></div>";
+  }
   h+="</div>";return h;
 }
 function ruledDate(s){if(!s)return "";try{return new Date(s).toLocaleDateString("es-CO",{day:"2-digit",month:"short"});}catch(e){return "";}}
@@ -126,6 +169,7 @@ function render(){
   var rows=DATA.apartments||[];var ruled=DATA.ruledOut||[];
   var parts=[rows.length+" activo(s)"];if(ruled.length)parts.push(ruled.length+" descartado(s)");
   document.getElementById("sub").textContent=parts.join(" · ")+" · "+(DATA.today||"");
+  document.getElementById("visits").innerHTML=visitsStrip(rows);
   if(!rows.length&&!ruled.length){document.getElementById("root").innerHTML="<div class=\"empty\">Aún no hay apartamentos. Envía un link al grupo de Telegram para empezar.</div>";document.getElementById("ruledRoot").innerHTML="";return;}
   var buy=rows.filter(function(r){return r.deal_type==="buy";});
   var rent=rows.filter(function(r){return r.deal_type==="rent";});
@@ -176,6 +220,7 @@ document.addEventListener("click",function(e){
   }
 });
 load();
-setInterval(load,60000);
+// refresh when the tab/app regains focus (data changes a few times a day, not per minute)
+document.addEventListener("visibilitychange",function(){if(!document.hidden)load();});
 </script>
 </body></html>

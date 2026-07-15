@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0e1013">
+<link rel="manifest" href="/manifest.json" crossorigin="use-credentials">
+<link rel="icon" href="/icon.png">
+<title>Turikumwe</title>
+<style>
+  :root{
+    --bg:#0e1013;--bg-raised:#171a20;--fg:#e8eaed;--muted:#8b919c;--border:#272c35;
+    --accent:#7aa2ff;--ok:#4ade80;--warn:#fbbf24;--err:#f87171;
+    --font-ui:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    color-scheme:dark;
+  }
+  *{box-sizing:border-box;}
+  body{font-family:var(--font-ui);background:var(--bg);color:var(--fg);margin:0;padding:26px 16px 28px;-webkit-font-smoothing:antialiased;}
+  .wrap{max-width:520px;margin:0 auto;}
+  h1{font-size:26px;margin:0 0 2px;letter-spacing:-.01em;}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:22px;}
+  a.big{display:flex;align-items:center;gap:14px;background:var(--bg-raised);border:1px solid var(--border);border-radius:16px;padding:18px 16px;margin-bottom:14px;text-decoration:none;color:var(--fg);}
+  a.big:active{border-color:var(--accent);}
+  a.big .ico{font-size:30px;line-height:1;}
+  a.big .name{font-size:17px;font-weight:700;}
+  a.big .m{color:var(--muted);font-size:13px;margin-top:3px;line-height:1.4;}
+  a.big .chev{margin-left:auto;color:var(--muted);font-size:20px;}
+  .foot{color:var(--muted);font-size:11px;text-align:center;margin-top:20px;line-height:1.5;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🏡 Turikumwe</h1>
+  <div class="sub">{{TODAY}}</div>
+  <a class="big" href="/dashboard.html">
+    <span class="ico">🏠</span>
+    <span><span class="name">Household</span><div class="m">{{HH_META}}</div></span>
+    <span class="chev">›</span>
+  </a>
+  <a class="big" href="/apartments.html">
+    <span class="ico">🏢</span>
+    <span><span class="name">Apartamentos</span><div class="m">{{APT_META}}</div></span>
+    <span class="chev">›</span>
+  </a>
+  <div class="foot">Todo se alimenta desde el grupo de Telegram.<br>Instala la app: menú de Chrome → “Agregar a pantalla principal”.</div>
+</div>
+</body>
+</html>
