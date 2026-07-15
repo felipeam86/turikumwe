@@ -132,7 +132,8 @@ function card(r,best,isRent){
   if(rn)h+="<div class=\"note\">“"+esc(rn)+"”</div>";
   if(r.notes)h+="<div class=\"note\">📝 "+esc(r.notes)+"</div>";
   h+="<div class=\"visit\"><span class=\"k\">Visita</span><input type=\"date\" data-id=\""+r.id+"\" class=\"vd\" value=\""+vd+"\"></div>";
-  h+="<div class=\"ctrl\"><button class=\"act rs\" data-id=\""+r.id+"\">Releer</button>";
+  h+="<div class=\"ctrl\"><button class=\"act nt\" data-id=\""+r.id+"\">Nota</button>";
+  h+="<button class=\"act rs\" data-id=\""+r.id+"\">Releer</button>";
   h+="<button class=\"act danger ro\" data-id=\""+r.id+"\" data-name=\""+esc(aptName(r))+"\">Descartar</button>";
   if(r.url)h+="<a class=\"link\" href=\""+esc(r.url)+"\" target=\"_blank\">link</a>";
   h+="</div></div>";
@@ -211,6 +212,17 @@ document.addEventListener("change",function(e){
 });
 document.addEventListener("click",function(e){
   var el=e.target;if(!el.classList)return;
+  if(el.classList.contains("nt")){
+    var id=Number(el.getAttribute("data-id"));
+    var note=prompt("Nota (se agrega a las anteriores, con la fecha):","");
+    if(note===null)return;note=note.trim();if(!note){toast("Nota vacía");return;}
+    el.disabled=true;
+    action({action:"apt_note",id:id,note:note}).then(function(res){
+      if(res&&res.ok){toast("Nota guardada 📝");}else{toast("Error al guardar");}
+      return load();
+    }).catch(function(){toast("Error de red");render();});
+    return;
+  }
   if(el.classList.contains("rs")){
     var id=Number(el.getAttribute("data-id"));
     el.disabled=true;var old=el.textContent;el.textContent="Leyendo…";

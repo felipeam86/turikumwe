@@ -703,6 +703,15 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
     const res = await rescrapeOne(env, id);
     return json({ ...res, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
   }
+  if (b.action === 'apt_note') {
+    const note = (b.note && String(b.note).trim()) ? String(b.note).trim().slice(0, 300) : null;
+    if (!note) return json({ ok: false, error: 'empty note' }, 400);
+    const stamped = today() + ': ' + note;
+    await run(env, "UPDATE apartments SET notes=COALESCE(notes||char(10),'')||?, updated_at=? WHERE id=?", stamped, new Date().toISOString(), id);
+    const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
+    if (row) echo(`📝 Nota en *${aptName(row)}*: ${note}${via}`);
+    return json({ ok: true, row });
+  }
   return json({ ok: false, error: 'unknown action' }, 400);
 }
 
