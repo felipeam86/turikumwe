@@ -16,7 +16,7 @@ const MODEL = 'claude-sonnet-5';
 
 const CATEGORIES = ['bills', 'events', 'groceries', 'health', 'pediatrician', 'general'] as const;
 const CAT_LABEL: Record<string, string> = {
-  bills: 'Bills', events: 'Events', groceries: 'Groceries', health: 'Health', pediatrician: 'Pediatrician Qs', general: 'General',
+  bills: 'Cuentas', events: 'Eventos', groceries: 'Mercado', health: 'Salud', pediatrician: 'Preguntas pediatra', general: 'General',
 };
 const CAT_EMOJI: Record<string, string> = {
   bills: '💵', events: '📅', groceries: '🛒', health: '❤️', pediatrician: '🩺', general: '📌',
@@ -28,7 +28,7 @@ function today(): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 }
 function weekday(): string {
-  return new Intl.DateTimeFormat('en-US', { timeZone: TZ, weekday: 'long' }).format(new Date());
+  return new Intl.DateTimeFormat('es-CO', { timeZone: TZ, weekday: 'long' }).format(new Date());
 }
 function daysBetween(fromISO: string, toISO: string): number {
   const a = Date.parse(fromISO + 'T00:00:00Z');
@@ -46,15 +46,28 @@ function addMonth(iso: string, recurDay?: number | null): string {
 }
 function fmtDate(iso: string): string {
   const [y, m, d] = iso.split('-').map(Number);
-  const mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][m - 1];
-  return `${mon} ${d}`;
+  const mon = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'][m - 1];
+  return `${d} ${mon}`;
 }
 function dueLabel(dueISO: string, todayISO: string): string {
   const n = daysBetween(todayISO, dueISO);
-  if (n < 0) return `⚠️ overdue ${-n}d (was ${fmtDate(dueISO)})`;
-  if (n === 0) return `⚠️ due TODAY (${fmtDate(dueISO)})`;
-  if (n === 1) return `due tomorrow (${fmtDate(dueISO)})`;
-  return `due ${fmtDate(dueISO)}`;
+  if (n < 0) return `⚠️ vencido hace ${-n}d (era ${fmtDate(dueISO)})`;
+  if (n === 0) return `⚠️ vence HOY (${fmtDate(dueISO)})`;
+  if (n === 1) return `vence mañana (${fmtDate(dueISO)})`;
+  return `vence ${fmtDate(dueISO)}`;
+}
+// due-date sort, nulls last; shared by digest and dashboard
+const byDue = (a: any, b: any) => {
+  const da = a.due_date || '9999', db = b.due_date || '9999';
+  return da < db ? -1 : da > db ? 1 : a.id - b.id;
+};
+// strip dueLabel's leading warning glyph; shared by digest, evening reminder, dashboard
+const stripWarn = (s: string) => s.replace(/^⚠️ /, '');
+// human name for an apartment row, with source_site as a last resort before the numeric id
+const aptName = (r: any) => r.location || r.title || r.source_site || ('apto ' + r.id);
+// decode the handful of HTML entities that appear in scraped attribute URLs (&amp; splits query params)
+function decodeHtml(s: string): string {
+  return s.replace(/&amp;/g, '&').replace(/&#0*38;/g, '&').replace(/&quot;/g, '"').replace(/&#0*39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
 }
 
 // ---- db helpers ----
@@ -71,31 +84,52 @@ async function openItems(env: Env) {
   return all(env, "SELECT id,category,title,notes,due_date,recurrence,recur_day,amount FROM items WHERE status='open' ORDER BY category, id");
 }
 // complete an open item; monthly items roll forward instead of closing
-async function completeItem(env: Env, id: number): Promise<{ ok: boolean; title?: string; next?: string }> {
+async function completeItem(env: Env, id: number): Promise<{ ok: boolean; title?: string; next?: string; category?: string }> {
   const it = await get(env, 'SELECT * FROM items WHERE id=? AND status=?', id, 'open');
   if (!it) return { ok: false };
   const now = new Date().toISOString();
   if (it.recurrence === 'monthly' && it.due_date) {
     const next = addMonth(it.due_date, it.recur_day);
     await run(env, 'UPDATE items SET due_date=?, last_reminded=NULL, updated_at=? WHERE id=?', next, now, it.id);
-    return { ok: true, title: it.title, next };
+    return { ok: true, title: it.title, next, category: it.category };
   }
   await run(env, 'UPDATE items SET status=?, updated_at=? WHERE id=?', 'done', now, it.id);
-  return { ok: true, title: it.title };
+  return { ok: true, title: it.title, category: it.category };
 }
 
 // ---- telegram ----
-async function tgSend(env: Env, text: string) {
+async function tgSend(env: Env, text: string, replyTo?: number) {
   const send = (payload: Record<string, unknown>) =>
     fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
     });
-  const r = await send({ chat_id: env.GROUP_CHAT_ID, text, parse_mode: 'Markdown' });
+  const reply = replyTo ? { reply_to_message_id: replyTo, allow_sending_without_reply: true } : {};
+  const r = await send({ chat_id: env.GROUP_CHAT_ID, text, parse_mode: 'Markdown', ...reply });
   // ponytail: if legacy-Markdown parsing rejects the text, resend plain rather than dropping the ack
-  if (!r.ok) await send({ chat_id: env.GROUP_CHAT_ID, text });
+  if (!r.ok) await send({ chat_id: env.GROUP_CHAT_ID, text, ...reply });
 }
+
+// fire-and-forget "typing…" indicator (Telegram shows it ~5s) so slow scrape/Claude work isn't dead air
+function tgTyping(env: Env) {
+  fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/sendChatAction`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ chat_id: env.GROUP_CHAT_ID, action: 'typing' }),
+  }).catch(() => {});
+}
+
+const HELP = [
+  '🤖 *Cómo usarme:*',
+  '• Anota lo que sea: "pagar el gas el 20", "cena con Andrés el viernes", "faltan pañales".',
+  '• Marca algo hecho: "pagué el arriendo", "ya compramos los pañales".',
+  '• Quita un error: "borra lo de la farmacia".',
+  '• Pregunta: "¿qué hay pendiente?"',
+  '• Pega el link de un apartamento y lo guardo con precio y detalles.',
+  '• Apartamentos: "agenda visita al apto 2 el sábado", "descarta el de Cedritos", "reactiva el apto 1", "el de Chicó nos gustó" (queda como nota), "reintenta" (relee links bloqueados).',
+  '📱 App: https://turikumwe.cc',
+].join('\n');
 
 // ---- claude ----
 async function claude(env: Env, system: string, user: string): Promise<string> {
@@ -161,7 +195,13 @@ async function scrapeListing(url: string): Promise<any> {
     const text = html.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 4000);
     const evidence = ['JSON-LD:\n' + jsonld, 'NEXT_DATA:\n' + next, 'META:\n' + meta, 'PAGE TEXT:\n' + text].join('\n\n').slice(0, 14000);
     if (!jsonld && !next && !meta && text.length < 200) return { ok: false, blocked: 'empty', host: siteOf(url) };
-    return { ok: true, evidence, host: siteOf(url) };
+    // deterministic regex, not Claude — LLMs mangle long CDN URLs and the meta evidence is truncated.
+    // match the og:image tag in either attribute order (the ["'] after og:image excludes og:image:width/alt),
+    // then pull + entity-decode its content so &amp;-split query params survive.
+    const ogTag = html.match(/<meta[^>]+og:image["'][^>]*>/i)?.[0];
+    const raw = ogTag ? ogTag.match(/content=["']([^"']+)["']/i)?.[1] : null;
+    const image = raw ? decodeHtml(raw) : null;
+    return { ok: true, evidence, host: siteOf(url), image };
   } catch (e: any) {
     return { ok: false, blocked: 'error', error: String(e && e.message || e), host: siteOf(url) };
   }
@@ -172,7 +212,8 @@ const EXTRACT_SYS = [
   'You get the message the user typed AND scraped evidence from the listing page (may be empty).',
   'Prefer the scraped evidence; fill gaps from the user message. Use null when unknown - never guess.',
   'Parse Colombian formats: "$1.600.000" = 1600000; "2.5M"/"2,5 millones" = 2500000; "65 m2" = 65. admin/administracion = monthly HOA fee.',
-  'Return ONLY JSON: {"title":str|null,"price":int|null,"admin_fee":int|null,"bedrooms":int|null,"bathrooms":int|null,"area_m2":number|null,"parking":int|null,"stratum":int|null,"location":str|null,"year_built":int|null,"amenities":str|null,"deal_type":"buy"|"rent"|"unknown"}.',
+  'Return ONLY JSON: {"is_listing":true|false,"title":str|null,"price":int|null,"admin_fee":int|null,"bedrooms":int|null,"bathrooms":int|null,"area_m2":number|null,"parking":int|null,"stratum":int|null,"location":str|null,"year_built":int|null,"amenities":str|null,"deal_type":"buy"|"rent"|"unknown"}.',
+  'is_listing: set false ONLY when the page/message is clearly NOT a property listing (video, news article, social post, storefront). When unsure, or when scraped evidence is unavailable, use true.',
   'price = monthly rent (rent) or sale price (buy). location = neighborhood + city. amenities = short comma list if notable.',
 ].join('\n');
 
@@ -183,16 +224,28 @@ async function extractFields(env: Env, input: string): Promise<any> {
 }
 
 async function ingestApartment(env: Env, url: string, msgText: string, who: string): Promise<any> {
+  // exact-URL dedup before the expensive scrape + Claude call
+  const existing = await get(env, 'SELECT id,status,scrape_status,location,title,source_site,ruled_out_reason FROM apartments WHERE url=? LIMIT 1', url);
+  if (existing) {
+    // a re-sent link whose first read was blocked is a retry, not a dup — re-read it now
+    if (existing.scrape_status && existing.scrape_status !== 'ok') {
+      const rr = await rescrapeOne(env, existing.id);
+      return { reread: true, id: existing.id, ok: rr.ok, blocked: rr.blocked, name: aptName(existing) };
+    }
+    return { dup: true, id: existing.id, status: existing.status, reason: existing.ruled_out_reason, name: aptName(existing) };
+  }
   const deal = classifyDeal(msgText);
   const scr = await scrapeListing(url);
   const input = 'USER MESSAGE:\n' + (msgText || '') + '\n\nDEAL HINT: ' + deal + '\n\nSCRAPED EVIDENCE (' + (scr.ok ? ('ok from ' + scr.host) : ('UNAVAILABLE: ' + scr.blocked)) + '):\n' + (scr.ok ? scr.evidence : '(none)');
   const f = await extractFields(env, input);
+  // only trust a "not a listing" verdict when we actually read the page — a blocked/empty scrape must still save
+  if (scr.ok && f.is_listing === false) return { skipped: true };
   const dt = (f.deal_type === 'buy' || f.deal_type === 'rent') ? f.deal_type : (deal !== 'unknown' ? deal : 'unknown');
   const ppm = (f.price && f.area_m2 && f.area_m2 > 0) ? Math.round(Number(f.price) / Number(f.area_m2)) : null;
   const now = new Date().toISOString();
   const res = await run(env,
-    "INSERT INTO apartments (url,deal_type,title,price,admin_fee,bedrooms,bathrooms,area_m2,price_per_m2,parking,stratum,location,year_built,amenities,source_site,raw_note,scrape_status,status,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?,?)",
-    url, dt, f.title || null, f.price || null, f.admin_fee || null, f.bedrooms || null, f.bathrooms || null, f.area_m2 || null, ppm, f.parking || null, f.stratum || null, f.location || null, f.year_built || null, f.amenities || null, scr.host || siteOf(url), msgText || null, scr.ok ? 'ok' : scr.blocked, who || 'group', now, now);
+    "INSERT INTO apartments (url,deal_type,title,price,admin_fee,bedrooms,bathrooms,area_m2,price_per_m2,parking,stratum,location,year_built,amenities,source_site,raw_note,scrape_status,image_url,status,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?,?)",
+    url, dt, f.title || null, f.price || null, f.admin_fee || null, f.bedrooms || null, f.bathrooms || null, f.area_m2 || null, ppm, f.parking || null, f.stratum || null, f.location || null, f.year_built || null, f.amenities || null, scr.host || siteOf(url), msgText || null, scr.ok ? 'ok' : scr.blocked, scr.image || null, who || 'group', now, now);
   return { id: res.meta.last_row_id, deal: dt, f, ppm, scr };
 }
 
@@ -203,8 +256,8 @@ async function applyScrapedFields(env: Env, row: any, scr: any): Promise<{ f: an
   const ppm = (f.price && f.area_m2 && f.area_m2 > 0) ? Math.round(Number(f.price) / Number(f.area_m2)) : row.price_per_m2;
   const now = new Date().toISOString();
   await run(env,
-    "UPDATE apartments SET deal_type=?,title=?,price=?,admin_fee=?,bedrooms=?,bathrooms=?,area_m2=?,price_per_m2=?,parking=?,stratum=?,location=?,year_built=?,amenities=?,scrape_status='ok',updated_at=? WHERE id=?",
-    dt, f.title || row.title, f.price ?? row.price, f.admin_fee ?? row.admin_fee, f.bedrooms ?? row.bedrooms, f.bathrooms ?? row.bathrooms, f.area_m2 ?? row.area_m2, ppm, f.parking ?? row.parking, f.stratum ?? row.stratum, f.location || row.location, f.year_built ?? row.year_built, f.amenities || row.amenities, now, row.id);
+    "UPDATE apartments SET deal_type=?,title=?,price=?,admin_fee=?,bedrooms=?,bathrooms=?,area_m2=?,price_per_m2=?,parking=?,stratum=?,location=?,year_built=?,amenities=?,image_url=?,scrape_status='ok',updated_at=? WHERE id=?",
+    dt, f.title || row.title, f.price ?? row.price, f.admin_fee ?? row.admin_fee, f.bedrooms ?? row.bedrooms, f.bathrooms ?? row.bathrooms, f.area_m2 ?? row.area_m2, ppm, f.parking ?? row.parking, f.stratum ?? row.stratum, f.location || row.location, f.year_built ?? row.year_built, f.amenities || row.amenities, scr.image || row.image_url, now, row.id);
   return { f, dt, ppm };
 }
 
@@ -224,6 +277,7 @@ async function retryBlockedScrapes(env: Env): Promise<{ updated: any[], still: a
   const rows = await all(env, "SELECT * FROM apartments WHERE status='active' AND scrape_status IS NOT NULL AND scrape_status!='ok'");
   const updated: any[] = []; const still: any[] = [];
   for (const row of rows) {
+    tgTyping(env); // each scrape can take up to 15s; keep the indicator alive per row
     const scr = await scrapeListing(row.url);
     if (!scr.ok) { still.push({ host: scr.host, blocked: scr.blocked }); continue; }
     const { f, dt, ppm } = await applyScrapedFields(env, row, scr);
@@ -264,15 +318,14 @@ async function buildDigestBody(env: Env, td: string, header: string): Promise<st
   const out: string[] = [header];
   // bills reminder set first (due within 1 day or overdue)
   const bills = open.filter((i: any) => i.category === 'bills' && i.due_date);
-  const dueBills = bills.filter((b: any) => daysBetween(td, b.due_date) <= 1)
-    .sort((a: any, b: any) => a.due_date < b.due_date ? -1 : 1);
+  const dueBills = bills.filter((b: any) => daysBetween(td, b.due_date) <= 1).sort(byDue);
   if (dueBills.length) {
-    out.push('💵 *Bills needing attention:*\n' + dueBills.map((b: any) =>
+    out.push('💵 *Cuentas por pagar ya:*\n' + dueBills.map((b: any) =>
       `• ${b.title}${b.amount ? (' (' + b.amount + ')') : ''} — ${dueLabel(b.due_date, td)}`).join('\n'));
   }
-  // everything else by category
+  // everything else by category, soonest due first
   for (const cat of CATEGORIES) {
-    const items = open.filter((i: any) => i.category === cat && !(cat === 'bills' && dueBills.some((d: any) => d.id === i.id)));
+    const items = open.filter((i: any) => i.category === cat && !(cat === 'bills' && dueBills.some((d: any) => d.id === i.id))).sort(byDue);
     if (!items.length) continue;
     const rows = items.map((i: any) => {
       let s = '• ' + i.title;
@@ -282,17 +335,30 @@ async function buildDigestBody(env: Env, td: string, header: string): Promise<st
     });
     out.push(`${CAT_EMOJI[cat]} *${CAT_LABEL[cat]}:*\n` + rows.join('\n'));
   }
-  if (out.length === 1) out.push('_All clear — nothing pending. 🎉_');
+  // upcoming apartment visits live in the apartments table, not items
+  const visits = await all(env, "SELECT location, title, source_site, id, visit_date FROM apartments WHERE status='active' AND visit_date>=? ORDER BY visit_date", td);
+  if (visits.length) {
+    out.push('🏢 *Visitas de apartamentos:*\n' + visits.map((v: any) =>
+      `• ${aptName(v)} — ${stripWarn(dueLabel(v.visit_date, td))}`).join('\n'));
+  }
+  if (out.length === 1) out.push('_Todo al día — nada pendiente. 🎉_');
   return out.join('\n\n');
 }
 
 async function sendDigest(env: Env) {
   const td = today();
   const wd = weekday();
-  const body = await buildDigestBody(env, td, `🏠 *Household check-in — ${wd} ${fmtDate(td)}*`);
-  // stamp reminders so we know they were surfaced
-  await run(env, "UPDATE items SET last_reminded=? WHERE status='open' AND due_date IS NOT NULL AND category='bills'", td);
-  await tgSend(env, body);
+  const body = await buildDigestBody(env, td, `🏠 *Pendientes de la casa — ${wd} ${fmtDate(td)}*`);
+  await tgSend(env, body + '\n\n📱 https://turikumwe.cc');
+}
+
+// evening nudge: only what is due today or overdue, only if there is something
+async function sendEveningReminder(env: Env) {
+  const td = today();
+  const due = (await openItems(env)).filter((i: any) => i.due_date && i.due_date <= td).sort(byDue);
+  if (!due.length) return;
+  await tgSend(env, '⚠️ *Sigue pendiente hoy:*\n' + due.map((i: any) =>
+    `• ${CAT_EMOJI[i.category]} ${i.title} — ${stripWarn(dueLabel(i.due_date, td))}`).join('\n'));
 }
 
 // ================= TELEGRAM UPDATE PROCESSING =================
@@ -304,22 +370,44 @@ async function handleUpdate(env: Env, update: any) {
   const who = [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(' ') || 'group';
   const td = today();
 
+  // any /command → help (it's just the two of them; no BotFather registration needed)
+  if (text.startsWith('/')) {
+    await tgSend(env, HELP, msg.message_id);
+    return;
+  }
+
   // URL message → apartment ingestion only
   if (URL_RE.test(text)) {
     const acks: string[] = [];
     for (const u of extractUrls(text)) {
+      tgTyping(env);
       try {
         const rec = await ingestApartment(env, u, text, who);
-        acks.push(apartmentAck(rec));
+        if (rec.reread) {
+          acks.push(rec.ok
+            ? '🔄 Ya lo tenías (#' + rec.id + ') y no se había podido leer — lo releí ahora. Míralo en la app.'
+            : '🔁 Ya lo tenías guardado: *' + rec.name + '* #' + rec.id + '. Sigo sin poder leer la página (' + (rec.blocked || 'error') + ').');
+        } else if (rec.dup) {
+          const st = rec.status === 'ruled_out' ? ' — estaba *descartado*' + (rec.reason ? ' (' + rec.reason + ')' : '') : '';
+          acks.push('🔁 Ya lo tenías guardado: *' + rec.name + '* #' + rec.id + st + '.');
+        } else if (rec.skipped) {
+          acks.push('🔗 Ese link no parece un anuncio de apartamento — no lo guardé. Si sí lo es, reenvíalo diciendo que es un apto.');
+        } else {
+          acks.push(apartmentAck(rec));
+        }
       } catch (e: any) {
         acks.push('No pude guardar un apartamento (' + String(e && e.message || e).slice(0, 80) + ').');
       }
     }
-    if (acks.length) await tgSend(env, acks.join('\n\n'));
+    // household text riding along with a URL is not parsed — say so instead of dropping it silently
+    const rest = text.replace(new RegExp(URL_RE.source, 'gi'), '').trim();
+    if (rest.length > 30) acks.push('_Ojo: en mensajes con link solo guardo el apartamento — si había algo más que anotar, envíalo aparte._');
+    if (acks.length) await tgSend(env, acks.join('\n\n'), msg.message_id);
     return;
   }
 
   // plain message → Claude ops
+  tgTyping(env);
   const wd = weekday();
   const open = await openItems(env);
   const openForModel = open.map((i: any) => ({ id: i.id, category: i.category, title: i.title, due_date: i.due_date }));
@@ -335,12 +423,14 @@ async function handleUpdate(env: Env, update: any) {
     'Each op is exactly one of:',
     '  {"action":"add","category":"<cat>","title":"<short label>","due_date":"YYYY-MM-DD"|null,"recurrence":"monthly"|"none","recur_day":<1-31>|null,"amount":"<string>"|null}',
     '  {"action":"complete","id":<id from OPEN ITEMS>}',
+    '  {"action":"remove","id":<id from OPEN ITEMS>} (user wants to delete/undo a mis-logged item without doing it: "borra eso", "quita el de la farmacia", "me equivoqué, eso no va")',
     '  {"action":"query"}   (user is asking what is pending / what is on the list)',
     '  {"action":"none"}    (chit-chat, greeting, nothing to track)',
     '  {"action":"rescrape"} (user asks to retry reading an apartment listing that could not be read automatically: "reintenta", "vuelve a intentar el scraping", "intenta de nuevo")',
     '  {"action":"set_visit","apt_id":<id from APARTMENTS>,"visit_date":"YYYY-MM-DD"|null} (user schedules a visit to an apartment: "voy a visitar el de Chico Norte el sábado", "la visita del apto 2 es el 20", "agenda visita apto 1 mañana"; use visit_date=null to cancel a visit)',
     '  {"action":"rule_out","apt_id":<id from APARTMENTS>,"reason":"<short reason>"|null} (user wants to discard / stop considering an apartment: "descarta el apto 2", "ya no me interesa el de Chico Norte", "quita el más caro", "bájalo de la lista", "rule out the Cedritos one"; if they say why, capture a short reason like "muy caro", "muy lejos", "sin parqueadero")',
     '  {"action":"reactivate","apt_id":<id from RULED OUT>} (user wants to reconsider a previously discarded apartment: "vuelve a considerar el apto 2", "reactiva el de Chico Norte", "devuelve el descartado a la lista")',
+    '  {"action":"apt_note","apt_id":<id from APARTMENTS>,"note":"<short note>"} (user records an opinion or fact about an apartment, often after a visit: "el de Chico Norte nos encantó", "apto 2: cocina pequeña pero buena luz", "el de Cedritos tiene mala vista")',
     'Rules:',
     '- One message may produce several ops (e.g. "low on diapers and formula" => two grocery adds).',
     '- Bills that recur (rent, mortgage, utilities, subscriptions, internet, phone): recurrence="monthly", recur_day=the day-of-month it is due, due_date=the NEXT upcoming occurrence (YYYY-MM-DD). One-off bills: recurrence="none", set due_date.',
@@ -364,15 +454,20 @@ async function handleUpdate(env: Env, update: any) {
     ops = Array.isArray(parsed.ops) ? parsed.ops : [];
   } catch (e: any) {
     console.log('ops parse error:', String(e && e.message || e));
+    // silence here would look identical to "nothing to track" — always say the message was lost
+    await tgSend(env, '🤖 No pude procesar ese mensaje (error temporal) — envíalo otra vez.', msg.message_id);
     return;
   }
 
   const now = new Date().toISOString();
   const added: string[] = [];
   const completed: string[] = [];
+  const removed: string[] = [];
+  const notFound: string[] = [];
   const visitsSet: string[] = [];
   const ruledOut: string[] = [];
   const reactivated: string[] = [];
+  const noted: string[] = [];
   let wantQuery = false;
   let wantRescrape = false;
   for (const op of ops) {
@@ -387,11 +482,19 @@ async function handleUpdate(env: Env, update: any) {
         op.recur_day || null, op.amount || null, who, now, now);
       let d = '';
       if (op.due_date) d = ' — ' + dueLabel(op.due_date, td).replace(/^⚠️ /, '');
-      if (op.recurrence === 'monthly') d += ' (monthly)';
+      if (op.recurrence === 'monthly') d += ' (mensual)';
       added.push(`${CAT_EMOJI[cat]} ${op.title}${d}`);
     } else if (op.action === 'complete' && op.id != null) {
       const r = await completeItem(env, Number(op.id));
-      if (r.ok) completed.push(`${r.title} ✓${r.next ? ` (next: ${fmtDate(r.next)})` : ''}`);
+      if (r.ok) completed.push(`${r.title} ✓${r.next ? ` (próx: ${fmtDate(r.next)})` : ''}`);
+      else notFound.push('#' + op.id);
+    } else if (op.action === 'remove' && op.id != null) {
+      const it = await get(env, 'SELECT * FROM items WHERE id=? AND status=?', Number(op.id), 'open');
+      if (it) {
+        // status='deleted' — every query filters status='open', so it vanishes everywhere; no migration needed
+        await run(env, "UPDATE items SET status='deleted', updated_at=? WHERE id=?", now, it.id);
+        removed.push(it.title);
+      } else notFound.push('#' + op.id);
     } else if (op.action === 'query') {
       wantQuery = true;
     } else if (op.action === 'rescrape') {
@@ -417,18 +520,29 @@ async function handleUpdate(env: Env, update: any) {
         await run(env, "UPDATE apartments SET status='active', ruled_out_reason=NULL, ruled_out_at=NULL, updated_at=? WHERE id=?", new Date().toISOString(), op.apt_id);
         reactivated.push(arow.location || arow.title || ('apto ' + arow.id));
       }
+    } else if (op.action === 'apt_note' && op.apt_id != null && op.note) {
+      // any status — recording why a ruled-out apartment was rejected is legit; a miss must not be silent
+      const arow = await get(env, "SELECT * FROM apartments WHERE id=?", op.apt_id);
+      if (arow) {
+        const note = td + ': ' + String(op.note).trim().slice(0, 300);
+        await run(env, "UPDATE apartments SET notes=COALESCE(notes||char(10),'')||?, updated_at=? WHERE id=?", note, new Date().toISOString(), op.apt_id);
+        noted.push(aptName(arow) + ' — ' + String(op.note).trim());
+      } else notFound.push('apto #' + op.apt_id);
     }
   }
 
   // build ack
   const lines: string[] = [];
-  if (added.length) lines.push('*Logged:*\n' + added.map(a => '• ' + a).join('\n'));
-  if (completed.length) lines.push('*Done:*\n' + completed.map(c => '• ' + c).join('\n'));
+  if (added.length) lines.push('*Anotado:*\n' + added.map(a => '• ' + a).join('\n'));
+  if (completed.length) lines.push('*Hecho:*\n' + completed.map(c => '• ' + c).join('\n'));
+  if (removed.length) lines.push('🗑 *Quitado:*\n' + removed.map(r => '• ' + r).join('\n'));
+  if (notFound.length) lines.push('❓ No encontré ' + notFound.join(', ') + ' — pregunta "¿qué hay pendiente?" para ver la lista.');
   if (visitsSet.length) lines.push('*Visita agendada:*\n' + visitsSet.map(v => '• ' + v).join('\n'));
   if (ruledOut.length) lines.push('🚫 *Descartado(s)* (siguen guardados en la app, sección Descartados):\n' + ruledOut.map(v => '• ' + v).join('\n'));
   if (reactivated.length) lines.push('↩️ *De vuelta en la lista:*\n' + reactivated.map(v => '• ' + v).join('\n'));
+  if (noted.length) lines.push('📝 *Nota guardada:*\n' + noted.map(n => '• ' + n).join('\n'));
   if (wantQuery) {
-    lines.push(await buildDigestBody(env, td, 'Here is what is pending:'));
+    lines.push(await buildDigestBody(env, td, 'Esto es lo pendiente:'));
   }
   if (wantRescrape) {
     const rr = await retryBlockedScrapes(env);
@@ -446,7 +560,7 @@ async function handleUpdate(env: Env, update: any) {
     }
     if (!rr.updated.length && !rr.still.length) lines.unshift('_No hay apartamentos pendientes por releer. 👍_');
   }
-  if (lines.length) await tgSend(env, lines.join('\n\n'));
+  if (lines.length) await tgSend(env, lines.join('\n\n'), msg.message_id);
 }
 
 // ================= WEB ROUTES =================
@@ -467,16 +581,12 @@ async function dashboardPage(env: Env): Promise<Response> {
     const n = daysBetween(td, iso);
     return n <= 0 ? 'err' : n === 1 ? 'warn' : '';
   };
-  const byDue = (a: any, b: any) => {
-    const da = a.due_date || '9999', db = b.due_date || '9999';
-    return da < db ? -1 : da > db ? 1 : a.id - b.id;
-  };
   const rowHtml = (i: any, metaOverride?: string) => {
-    const rec = i.recurrence === 'monthly' ? '<span class="rec">monthly</span>' : '';
+    const rec = i.recurrence === 'monthly' ? '<span class="rec">mensual</span>' : '';
     const meta = metaOverride ?? (i.due_date ? strip(dueLabel(i.due_date, td)) : (i.amount || ''));
     return '<div class="row" id="it' + i.id + '"><span class="title">' + esc(i.title) + rec + '</span>' +
       '<span class="meta ' + dueCls(i.due_date) + '">' + esc(meta) + '</span>' +
-      '<button class="done" data-id="' + i.id + '" aria-label="Done">✓</button></div>';
+      '<button class="done" data-id="' + i.id + '" aria-label="Hecho">✓</button></div>';
   };
   const bills = open.filter((i: any) => i.category === 'bills' && i.due_date);
   const dueBills = bills.filter((b: any) => daysBetween(td, b.due_date) <= 1).sort(byDue);
@@ -484,7 +594,7 @@ async function dashboardPage(env: Env): Promise<Response> {
   if (dueBills.length) {
     let rows = '';
     for (const b of dueBills) rows += rowHtml(b, (b.amount ? b.amount + ' · ' : '') + strip(dueLabel(b.due_date, td)));
-    sections += '<div class="card attention"><h2>💵 Bills needing attention<span class="count">' + dueBills.length + '</span></h2>' + rows + '</div>';
+    sections += '<div class="card attention"><h2>💵 Cuentas por pagar ya<span class="count">' + dueBills.length + '</span></h2>' + rows + '</div>';
   }
   for (const cat of CATEGORIES) {
     const items = open.filter((i: any) => i.category === cat && !(cat === 'bills' && dueBills.some((d: any) => d.id === i.id))).sort(byDue);
@@ -493,9 +603,10 @@ async function dashboardPage(env: Env): Promise<Response> {
     for (const i of items) rows += rowHtml(i);
     sections += '<div class="card"><h2>' + CAT_EMOJI[cat] + ' ' + CAT_LABEL[cat] + '<span class="count">' + items.length + '</span></h2>' + rows + '</div>';
   }
-  if (!sections) sections = '<div class="card empty">Nothing tracked yet — log something in the group. 🎉</div>';
+  if (!sections) sections = '<div class="card empty">Aún no hay nada — escribe algo al grupo. 🎉</div>';
   const updated = new Intl.DateTimeFormat('es-CO', { timeZone: TZ, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date());
-  return html(dashboardHtml.replace('{{SECTIONS}}', sections).replace('{{UPDATED}}', updated));
+  // function replacers: `sections`/amounts contain '$', which String.replace would treat as $&/$'/$$ patterns
+  return html(dashboardHtml.replace('{{SECTIONS}}', () => sections).replace('{{UPDATED}}', () => updated));
 }
 
 async function homePage(env: Env): Promise<Response> {
@@ -503,14 +614,15 @@ async function homePage(env: Env): Promise<Response> {
   const open = await openItems(env);
   const dueSoon = open.filter((i: any) => i.due_date && daysBetween(td, i.due_date) <= 1).length;
   const hhMeta = open.length
-    ? `${open.length} open item${open.length === 1 ? '' : 's'}` + (dueSoon ? ` · ${dueSoon} due soon` : '')
-    : 'Nothing pending 🎉';
+    ? `${open.length} pendiente${open.length === 1 ? '' : 's'}` + (dueSoon ? ` · ${dueSoon} vence${dueSoon === 1 ? '' : 'n'} ya` : '')
+    : 'Nada pendiente 🎉';
   const aptCount = Number((await get(env, "SELECT COUNT(*) c FROM apartments WHERE status='active'"))?.c || 0);
   const nv = await get(env, "SELECT visit_date FROM apartments WHERE status='active' AND visit_date>=? ORDER BY visit_date LIMIT 1", td);
   let aptMeta = aptCount ? `${aptCount} activo${aptCount === 1 ? '' : 's'}` : 'Aún no hay apartamentos';
   if (nv) aptMeta += ` · visita ${fmtDate(nv.visit_date)}`;
   const todayLabel = new Intl.DateTimeFormat('es-CO', { timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long' }).format(new Date());
-  return html(homeHtml.replace('{{TODAY}}', todayLabel).replace('{{HH_META}}', hhMeta).replace('{{APT_META}}', aptMeta));
+  // function replacers: apt meta can carry '$'-containing amounts that String.replace would mangle
+  return html(homeHtml.replace('{{TODAY}}', () => todayLabel).replace('{{HH_META}}', () => hhMeta).replace('{{APT_META}}', () => aptMeta));
 }
 
 // Cloudflare Access injects the logged-in user's email on every request
@@ -546,7 +658,10 @@ async function itemsAction(env: Env, req: Request, ctx: ExecutionContext): Promi
   const r = await completeItem(env, id);
   if (!r.ok) return json({ ok: false, error: 'not-found' }, 404);
   const who = webUser(req);
-  ctx.waitUntil(tgSend(env, `✓ *${r.title}*${r.next ? ` (next: ${fmtDate(r.next)})` : ''} — vía web${who ? ' · ' + who : ''}`).catch(() => {}));
+  // groceries are checked off in bursts at the store — one Telegram ping per item is spam
+  if (r.category !== 'groceries') {
+    ctx.waitUntil(tgSend(env, `✓ *${r.title}*${r.next ? ` (próx: ${fmtDate(r.next)})` : ''} — vía web${who ? ' · ' + who : ''}`).catch(() => {}));
+  }
   return json({ ok: true, next: r.next ? fmtDate(r.next) : null });
 }
 
@@ -563,7 +678,6 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
   const who = webUser(req);
   const via = ` — vía web${who ? ' · ' + who : ''}`;
   const echo = (msg: string) => ctx.waitUntil(tgSend(env, msg).catch(() => {}));
-  const aptName = (r: any) => r.location || r.title || ('apto ' + r.id);
   if (b.action === 'set_visit') {
     const vd = (b.visit_date == null || b.visit_date === '') ? null : String(b.visit_date);
     await run(env, 'UPDATE apartments SET visit_date=?, updated_at=? WHERE id=?', vd, new Date().toISOString(), id);
@@ -618,7 +732,10 @@ export default {
     return new Response('not found', { status: 404 });
   },
 
-  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+  async scheduled(controller: ScheduledController, env: Env): Promise<void> {
+    // '0 0 * * *' = the 19:00-Bogota evening cron in wrangler.toml; keep both strings in sync.
+    // Any other trigger (the 07:30 morning cron) sends the full digest.
+    if (controller.cron === '0 0 * * *') { await sendEveningReminder(env); return; }
     await sendDigest(env);
   },
 } satisfies ExportedHandler<Env>;

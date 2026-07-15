@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0e1013">
 <link rel="manifest" href="/manifest.json" crossorigin="use-credentials">
 <link rel="icon" href="/icon.png">
@@ -15,7 +15,7 @@
     color-scheme:dark;
   }
   *{box-sizing:border-box;}
-  body{font-family:var(--font-ui);background:var(--bg);color:var(--fg);margin:0;padding:26px 16px 28px;-webkit-font-smoothing:antialiased;}
+  body{font-family:var(--font-ui);background:var(--bg);color:var(--fg);margin:0;padding:26px 16px calc(28px + env(safe-area-inset-bottom));-webkit-font-smoothing:antialiased;}
   .wrap{max-width:520px;margin:0 auto;}
   h1{font-size:26px;margin:0 0 2px;letter-spacing:-.01em;}
   .sub{color:var(--muted);font-size:13px;margin-bottom:22px;}
@@ -34,7 +34,7 @@
   <div class="sub">{{TODAY}}</div>
   <a class="big" href="/dashboard.html">
     <span class="ico">🏠</span>
-    <span><span class="name">Household</span><div class="m">{{HH_META}}</div></span>
+    <span><span class="name">Hogar</span><div class="m">{{HH_META}}</div></span>
     <span class="chev">›</span>
   </a>
   <a class="big" href="/apartments.html">
@@ -44,5 +44,14 @@
   </a>
   <div class="foot">Todo se alimenta desde el grupo de Telegram.<br>Instala la app: menú de Chrome → “Agregar a pantalla principal”.</div>
 </div>
+<script>
+// the PWA resumes on this page — refresh the server-rendered counts when it's been a while.
+// seed with load time so a page loaded while hidden doesn't force-reload the instant it's first shown
+var hiddenAt=Date.now();
+document.addEventListener("visibilitychange",function(){
+  if(document.hidden){hiddenAt=Date.now();return;}
+  if(navigator.onLine!==false&&Date.now()-hiddenAt>60000)location.reload();
+});
+</script>
 </body>
 </html>

@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="es"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0e1013">
 <link rel="manifest" href="/manifest.json" crossorigin="use-credentials">
 <link rel="icon" href="/icon.png">
@@ -13,10 +13,11 @@
     color-scheme:dark;
   }
   *{box-sizing:border-box;}
-  body{font-family:var(--font-ui);background:var(--bg);color:var(--fg);margin:0;padding:18px 14px 34px;-webkit-font-smoothing:antialiased;}
+  body{font-family:var(--font-ui);background:var(--bg);color:var(--fg);margin:0;padding:18px 14px calc(34px + env(safe-area-inset-bottom));-webkit-font-smoothing:antialiased;}
   .wrap{max-width:1040px;margin:0 auto;}
   nav{display:flex;gap:8px;margin-bottom:12px;}
-  nav a{color:var(--muted);text-decoration:none;font-size:13px;font-weight:600;padding:0 14px;min-height:38px;display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:999px;white-space:nowrap;}
+  nav a{color:var(--muted);text-decoration:none;font-size:13px;font-weight:600;padding:0 14px;min-height:44px;display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:999px;white-space:nowrap;}
+  nav a:active{border-color:var(--accent);color:var(--accent);}
   nav a.on{color:var(--fg);border-color:var(--accent);background:rgba(122,162,255,.12);}
   .sub{color:var(--muted);font-size:13px;margin-bottom:16px;}
   .visits{background:var(--bg-raised);border:1px solid var(--accent);border-radius:14px;padding:10px 16px;margin-bottom:6px;}
@@ -30,15 +31,19 @@
   .grid{display:grid;gap:12px;grid-template-columns:1fr;}
   @media(min-width:760px){.grid{grid-template-columns:repeat(auto-fill,minmax(340px,1fr));}}
   .apt{background:var(--bg-raised);border:1px solid var(--border);border-radius:14px;padding:14px;}
+  .apt img.photo{width:100%;max-height:180px;object-fit:cover;border-radius:10px;margin-bottom:10px;display:block;}
   .head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;}
   .loc{font-size:15px;font-weight:700;line-height:1.3;min-width:0;}
   .sub2{color:var(--muted);font-size:12px;font-weight:400;margin-top:2px;}
   .price{text-align:right;font-size:16px;font-weight:700;white-space:nowrap;}
   .price .per{color:var(--muted);font-size:12px;font-weight:400;}
   .price .adm{display:block;color:var(--muted);font-size:11px;font-weight:400;margin-top:2px;}
-  .flag{display:inline-block;font-size:10px;color:var(--warn);border:1px solid var(--warn);border-radius:999px;padding:1px 7px;margin-left:6px;vertical-align:middle;}
+  .flag{display:inline-block;font-size:11px;color:var(--warn);border:1px solid var(--warn);border-radius:999px;padding:1px 7px;margin-left:6px;vertical-align:middle;}
+  .flag.new{color:var(--accent);border-color:var(--accent);}
   .specs{display:grid;grid-template-columns:repeat(3,1fr);gap:10px 8px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);}
-  .spec .k{display:block;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:1px;}
+  .spec .k{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:1px;}
+  .xtra{color:var(--muted);font-size:12px;margin-top:10px;line-height:1.45;}
+  .note{color:var(--muted);font-size:12px;margin-top:8px;padding-left:10px;border-left:2px solid var(--border);white-space:pre-line;line-height:1.5;}
   .spec .v{font-size:13px;font-weight:600;}
   .spec .v.best{color:var(--ok);}
   .visit{display:flex;align-items:center;gap:10px;margin-top:12px;}
@@ -46,13 +51,13 @@
   input[type=date]{flex:1;min-width:0;font-family:inherit;font-size:14px;min-height:42px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:10px;padding:6px 10px;}
   .ctrl{display:flex;gap:8px;margin-top:10px;}
   button.act{font-family:inherit;font-size:13px;min-height:42px;flex:1;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:10px;padding:6px 10px;cursor:pointer;}
-  button.act:hover{border-color:var(--accent);color:var(--accent);}
+  button.act:active{border-color:var(--accent);color:var(--accent);}
   button.act:disabled{opacity:.5;cursor:default;}
-  button.act.danger:hover{border-color:var(--err);color:var(--err);}
+  button.act.danger:active{border-color:var(--err);color:var(--err);}
   a.link{color:var(--accent);text-decoration:none;font-size:13px;display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:6px 12px;border:1px solid var(--border);border-radius:10px;}
   .empty{color:var(--muted);text-align:center;padding:30px 0;}
   .foot{color:var(--muted);font-size:11px;text-align:center;margin-top:18px;line-height:1.5;}
-  .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:8px 16px;border-radius:999px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none;}
+  .toast{position:fixed;left:50%;bottom:calc(22px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:8px 16px;border-radius:999px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none;}
   .toast.show{opacity:.95;}
   /* ruled-out (descartados) */
   details.ruled{background:transparent;border:1px dashed var(--border);border-radius:14px;padding:4px 14px 10px;margin-top:20px;}
@@ -65,11 +70,11 @@
   .rrow .rmeta{color:var(--muted);font-size:12px;}
   .rrow .reason{font-size:11px;color:var(--warn);border:1px solid var(--warn);border-radius:999px;padding:1px 8px;}
   .rrow .grow{flex:1;}
-  .rrow button.act{flex:0 0 auto;min-height:38px;}
-  .rrow a.link{min-height:38px;padding:4px 10px;}
+  .rrow button.act{flex:0 0 auto;min-height:44px;}
+  .rrow a.link{min-height:44px;padding:4px 10px;}
 </style></head><body>
 <div class="wrap">
-  <nav><a href="/">⌂</a><a href="/dashboard.html">🏠 Household</a><a class="on" href="/apartments.html">🏢 Apartamentos</a></nav>
+  <nav><a href="/">⌂</a><a href="/dashboard.html">🏠 Hogar</a><a class="on" href="/apartments.html">🏢 Apartamentos</a></nav>
   <div class="sub" id="sub">Cargando…</div>
   <div id="visits"></div>
   <div id="root"></div>
@@ -80,6 +85,7 @@
 <script>
 var DATA=null;
 function esc(s){s=(s==null?"":String(s));return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;");}
+function aptName(r){return r.location||r.title||r.source_site||("apto "+r.id);}
 function mny(n){return (n==null||isNaN(Number(n)))?"—":"$"+Number(n).toLocaleString("es-CO");}
 function toast(t){var el=document.getElementById("toast");el.textContent=t;el.classList.add("show");setTimeout(function(){el.classList.remove("show");},1800);}
 function num(v){return v==null?"—":v;}
@@ -96,10 +102,13 @@ function card(r,best,isRent){
   var ppm=ppmOf(r,isRent);
   var isBest=best&&ppm===best;
   var flag=(r.scrape_status&&r.scrape_status!=="ok")?"<span class=\"flag\">sin leer</span>":"";
+  // "nuevo" pill for 48h so a freshly shared listing is findable despite the $/m² sort
+  if(r.created_at&&Date.now()-Date.parse(r.created_at)<48*3600*1000)flag+="<span class=\"flag new\">nuevo</span>";
   var sub=(r.title&&r.location)?"<div class=\"sub2\">"+esc(r.title)+"</div>":"";
   var vd=r.visit_date?esc(r.visit_date):"";
   var h="<div class=\"apt\">";
-  h+="<div class=\"head\"><div class=\"loc\">"+esc(r.location||r.title||"—")+flag+sub+"</div>";
+  if(r.image_url)h+="<img class=\"photo\" src=\""+esc(r.image_url)+"\" loading=\"lazy\" alt=\"\" onerror=\"this.remove()\">";
+  h+="<div class=\"head\"><div class=\"loc\">"+esc(aptName(r))+flag+sub+"</div>";
   if(isRent&&r.price!=null){
     var total=Number(r.price)+Number(r.admin_fee||0);
     h+="<div class=\"price\">"+mny(total)+"<span class=\"per\">/mes</span>";
@@ -116,9 +125,15 @@ function card(r,best,isRent){
   h+=spec("Estr",num(r.stratum),false);
   h+=spec("Parq",num(r.parking),false);
   h+="</div>";
+  var xtra=[r.amenities?esc(r.amenities):"",r.year_built?("año "+esc(r.year_built)):""].filter(Boolean).join(" · ");
+  if(xtra)h+="<div class=\"xtra\">"+xtra+"</div>";
+  // what the user typed when sharing, minus the URL itself
+  var rn=(r.raw_note||"").replace(/https?:\/\/\S+/g,"").trim();
+  if(rn)h+="<div class=\"note\">“"+esc(rn)+"”</div>";
+  if(r.notes)h+="<div class=\"note\">📝 "+esc(r.notes)+"</div>";
   h+="<div class=\"visit\"><span class=\"k\">Visita</span><input type=\"date\" data-id=\""+r.id+"\" class=\"vd\" value=\""+vd+"\"></div>";
-  h+="<div class=\"ctrl\"><button class=\"act rs\" data-id=\""+r.id+"\">Re-scrape</button>";
-  h+="<button class=\"act danger ro\" data-id=\""+r.id+"\" data-name=\""+esc(r.location||r.title||("apto "+r.id))+"\">Descartar</button>";
+  h+="<div class=\"ctrl\"><button class=\"act rs\" data-id=\""+r.id+"\">Releer</button>";
+  h+="<button class=\"act danger ro\" data-id=\""+r.id+"\" data-name=\""+esc(aptName(r))+"\">Descartar</button>";
   if(r.url)h+="<a class=\"link\" href=\""+esc(r.url)+"\" target=\"_blank\">link</a>";
   h+="</div></div>";
   return h;
@@ -131,7 +146,8 @@ function section(title,list,isRent){
     return (pa==null?Infinity:pa)-(pb==null?Infinity:pb);
   });
   var ppm=sorted.map(function(r){return ppmOf(r,isRent);}).filter(function(v){return v&&v>0;});
-  var best=ppm.length?Math.min.apply(null,ppm):null;
+  // "best value" only means something when there is something to compare against
+  var best=ppm.length>1?Math.min.apply(null,ppm):null;
   var h="<h2 class=\"sect\">"+title+" <span class=\"count\">"+sorted.length+"</span></h2><div class=\"grid\">";
   for(var i=0;i<sorted.length;i++)h+=card(sorted[i],best,isRent);
   h+="</div>";return h;
@@ -143,7 +159,7 @@ function visitsStrip(rows){
   if(!vis.length)return "";
   var h="<div class=\"visits\"><div class=\"vt\">📅 Próximas visitas</div>";
   for(var i=0;i<vis.length;i++){var r=vis[i];
-    h+="<div class=\"vrow\"><span class=\"vd2\">"+fmtVisit(r.visit_date)+"</span><span class=\"vwho\">"+esc(r.location||r.title||("apto "+r.id))+"</span></div>";
+    h+="<div class=\"vrow\"><span class=\"vd2\">"+fmtVisit(r.visit_date)+"</span><span class=\"vwho\">"+esc(aptName(r))+"</span></div>";
   }
   h+="</div>";return h;
 }
@@ -157,7 +173,7 @@ function ruledSection(list){
     var bits=[deal,pr!=="—"?pr:"",r.area_m2?(r.area_m2+" m²"):"",r.price_per_m2?("≈"+mny(r.price_per_m2)+"/m²"):""].filter(Boolean).join(" · ");
     var reason=r.ruled_out_reason?"<span class=\"reason\">"+esc(r.ruled_out_reason)+"</span>":"";
     var when=ruledDate(r.ruled_out_at)?("descartado "+ruledDate(r.ruled_out_at)):"";
-    h+="<div class=\"rrow\"><span class=\"rloc\">"+esc(r.location||r.title||("apto "+r.id))+"</span>"+reason;
+    h+="<div class=\"rrow\"><span class=\"rloc\">"+esc(aptName(r))+"</span>"+reason;
     h+="<span class=\"rmeta\">"+esc(bits)+"</span><span class=\"grow\"></span>";
     h+="<span class=\"rmeta\">"+when+"</span>";
     if(r.url)h+="<a class=\"link\" href=\""+esc(r.url)+"\" target=\"_blank\">link</a>";
@@ -167,8 +183,11 @@ function ruledSection(list){
 }
 function render(){
   var rows=DATA.apartments||[];var ruled=DATA.ruledOut||[];
-  var parts=[rows.length+" activo(s)"];if(ruled.length)parts.push(ruled.length+" descartado(s)");
-  document.getElementById("sub").textContent=parts.join(" · ")+" · "+(DATA.today||"");
+  var parts=[rows.length+(rows.length===1?" activo":" activos")];
+  if(ruled.length)parts.push(ruled.length+(ruled.length===1?" descartado":" descartados"));
+  // toLocaleDateString returns the string "Invalid Date" (never throws) on bad input, so guard explicitly
+  var niceDay="";if(DATA.today){var nd=new Date(DATA.today+"T00:00:00Z");niceDay=isNaN(nd)?DATA.today:nd.toLocaleDateString("es-CO",{timeZone:"UTC",weekday:"long",day:"numeric",month:"long"});}
+  document.getElementById("sub").textContent=parts.join(" · ")+" · "+niceDay;
   document.getElementById("visits").innerHTML=visitsStrip(rows);
   if(!rows.length&&!ruled.length){document.getElementById("root").innerHTML="<div class=\"empty\">Aún no hay apartamentos. Envía un link al grupo de Telegram para empezar.</div>";document.getElementById("ruledRoot").innerHTML="";return;}
   var buy=rows.filter(function(r){return r.deal_type==="buy";});
@@ -178,14 +197,17 @@ function render(){
   document.getElementById("root").innerHTML=active;
   document.getElementById("ruledRoot").innerHTML=ruledSection(ruled);
 }
-function load(){return fetch("apartments-data.json").then(function(r){return r.json();}).then(function(d){DATA=d;render();});}
+function load(){return fetch("apartments-data.json").then(function(r){if(!r.ok)throw 0;return r.json();}).then(function(d){DATA=d;render();});}
+// a full-page reload (href="") lets Cloudflare Access run its login redirect, which fetch cannot follow
+function showRetry(){document.getElementById("sub").innerHTML="No se pudo cargar · <a href=\"\" style=\"color:var(--accent)\">Reintentar</a>";}
 function action(body){return fetch("apartments-action",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json();});}
 document.addEventListener("change",function(e){
   var el=e.target;if(!el.classList||!el.classList.contains("vd"))return;
   var id=Number(el.getAttribute("data-id"));
   action({action:"set_visit",id:id,visit_date:el.value||null}).then(function(res){
     if(res&&res.ok){toast(el.value?"Visita fijada":"Visita borrada");}else{toast("Error al guardar");}
-  }).catch(function(){toast("Error de red");});
+    return load(); // success → refresh the visits strip
+  }).catch(function(){toast("Error de red");render();}); // failure (incl. offline) → revert input from cached DATA
 });
 document.addEventListener("click",function(e){
   var el=e.target;if(!el.classList)return;
@@ -193,20 +215,22 @@ document.addEventListener("click",function(e){
     var id=Number(el.getAttribute("data-id"));
     el.disabled=true;var old=el.textContent;el.textContent="Leyendo…";
     action({action:"rescrape",id:id}).then(function(res){
-      if(res&&res.ok){toast("Releído ✓");}else{toast("No se pudo leer");}
+      if(res&&res.ok){toast("Releído ✓");}
+      else{toast("No se pudo leer"+(res&&res.blocked?(" ("+(res.blocked==="bot"?"el sitio bloquea robots":res.blocked)+")"):""));}
       return load();
     }).catch(function(){toast("Error de red");}).then(function(){el.disabled=false;el.textContent=old;});
     return;
   }
   if(el.classList.contains("ro")){
     var id=Number(el.getAttribute("data-id"));var name=el.getAttribute("data-name")||"este apartamento";
-    if(!confirm("¿Descartar "+name+"?\n\nSe guarda en la lista de Descartados (no se borra) y deja de contarse entre los activos. Puedes reconsiderarlo después.")) return;
-    var reason=prompt("¿Motivo? (opcional — ej. muy caro, muy lejos)","");
+    // one dialog: Cancel aborts, empty OK descarta sin motivo
+    var reason=prompt("¿Descartar "+name+"? Va a Descartados (reversible). Motivo opcional:","");
+    if(reason===null)return;
     el.disabled=true;el.textContent="…";
     action({action:"rule_out",id:id,reason:reason||null}).then(function(res){
       if(res&&res.ok){toast("Descartado 🚫");}else{toast("Error al descartar");}
       return load();
-    }).catch(function(){toast("Error de red");});
+    }).catch(function(){toast("Error de red");render();});
     return;
   }
   if(el.classList.contains("re")){
@@ -215,12 +239,12 @@ document.addEventListener("click",function(e){
     action({action:"reactivate",id:id}).then(function(res){
       if(res&&res.ok){toast("De vuelta en la lista ↩️");}else{toast("Error");}
       return load();
-    }).catch(function(){toast("Error de red");});
+    }).catch(function(){toast("Error de red");render();});
     return;
   }
 });
-load();
+load().catch(showRetry);
 // refresh when the tab/app regains focus (data changes a few times a day, not per minute)
-document.addEventListener("visibilitychange",function(){if(!document.hidden)load();});
+document.addEventListener("visibilitychange",function(){if(!document.hidden)load().catch(showRetry);});
 </script>
 </body></html>
