@@ -1,3 +1,4 @@
+import { EmailMessage } from 'cloudflare:email';
 import dashboardHtml from './dashboard.html';
 import apartmentsHtml from './apartments.html';
 import homeHtml from './home.html';
@@ -9,6 +10,9 @@ export interface Env {
   TG_WEBHOOK_SECRET: string;
   ANTHROPIC_API_KEY: string;
   GROUP_CHAT_ID: string;
+  INVITE_MAIL: SendEmail;
+  INVITE_FROM: string;
+  INVITE_TO: string;
 }
 
 const TZ = 'America/Bogota'; // UTC-5, no DST
@@ -71,6 +75,133 @@ const aptName = (r: any) => r.location || r.title || r.source_site || ('apto ' +
 // decode the handful of HTML entities that appear in scraped attribute URLs (&amp; splits query params)
 function decodeHtml(s: string): string {
   return s.replace(/&amp;/g, '&').replace(/&#0*38;/g, '&').replace(/&quot;/g, '"').replace(/&#0*39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+}
+
+// ---- calendar invites (iCalendar over the Email Routing send_email binding) ----
+// visit_date is wall-clock Bogota ("YYYY-MM-DD" or "YYYY-MM-DDTHH:MM"); Bogota has no DST,
+// so a fixed -05:00 VTIMEZONE is valid for every date.
+const icsEscape = (s: string) => String(s).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+// RFC 5545 §3.1: content lines fold at 75 octets; continuations start with a space
+function icsFold(line: string): string {
+  const bytes = new TextEncoder().encode(line);
+  if (bytes.length <= 74) return line;
+  const out: string[] = [];
+  let start = 0;
+  while (start < bytes.length) {
+    let end = Math.min(start + 74, bytes.length);
+    while (end > start && end < bytes.length && (bytes[end] & 0xc0) === 0x80) end--; // never split a UTF-8 char
+    out.push(new TextDecoder().decode(bytes.subarray(start, end)));
+    start = end;
+  }
+  return out.join('\r\n ');
+}
+const icsStampNow = () => new Date().toISOString().replace(/[-:]/g, '').slice(0, 15) + 'Z';
+// event window: timed visits get a 1-hour slot, date-only visits become an all-day event
+function icsWindow(vd: string): { start: string; end: string; allDay: boolean } {
+  if (vd.length > 10) {
+    const t = Date.parse(vd.slice(0, 16) + ':00Z'); // Z-anchored math: +1h with no timezone shifts
+    const f = (ms: number) => new Date(ms).toISOString().replace(/[-:]/g, '').slice(0, 15);
+    return { start: f(t), end: f(t + 3600000), allDay: false };
+  }
+  const d = Date.parse(vd.slice(0, 10) + 'T00:00:00Z');
+  const f = (ms: number) => new Date(ms).toISOString().replace(/[-:]/g, '').slice(0, 8);
+  return { start: f(d), end: f(d + 86400000), allDay: true };
+}
+const inviteTos = (env: Env) => env.INVITE_TO.split(',').map((s) => s.trim()).filter(Boolean);
+function visitIcs(env: Env, row: any, method: 'REQUEST' | 'CANCEL', vd: string): string {
+  const w = icsWindow(vd);
+  const desc = [
+    row.address ? 'Dirección: ' + row.address : '',
+    row.agent_name ? 'Agente: ' + row.agent_name : '',
+    row.agent_phone ? 'Tel: ' + row.agent_phone : '',
+    row.url ? 'Link: ' + row.url : '',
+  ].filter(Boolean).join('\n');
+  const lines = [
+    'BEGIN:VCALENDAR',
+    'PRODID:-//turikumwe//visitas//ES',
+    'VERSION:2.0',
+    'METHOD:' + method,
+    ...(w.allDay ? [] : [
+      'BEGIN:VTIMEZONE', 'TZID:' + TZ, 'BEGIN:STANDARD', 'DTSTART:19700101T000000',
+      'TZOFFSETFROM:-0500', 'TZOFFSETTO:-0500', 'TZNAME:-05', 'END:STANDARD', 'END:VTIMEZONE',
+    ]),
+    'BEGIN:VEVENT',
+    // stable UID per apartment + epoch-seconds SEQUENCE: a re-send after a reschedule
+    // strictly increases SEQUENCE, so calendars replace the event instead of duplicating it
+    `UID:visit-${row.id}@turikumwe.cc`,
+    'SEQUENCE:' + Math.floor(Date.now() / 1000),
+    'DTSTAMP:' + icsStampNow(),
+    `ORGANIZER;CN=Turikumwe:mailto:${env.INVITE_FROM}`,
+    ...inviteTos(env).map((a) => `ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${a}`),
+    w.allDay ? `DTSTART;VALUE=DATE:${w.start}` : `DTSTART;TZID=${TZ}:${w.start}`,
+    w.allDay ? `DTEND;VALUE=DATE:${w.end}` : `DTEND;TZID=${TZ}:${w.end}`,
+    'SUMMARY:' + icsEscape('Visita: ' + aptName(row)),
+    ...(row.address ? ['LOCATION:' + icsEscape(row.address)] : []),
+    ...(desc ? ['DESCRIPTION:' + icsEscape(desc)] : []),
+    'STATUS:' + (method === 'CANCEL' ? 'CANCELLED' : 'CONFIRMED'),
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ];
+  return lines.map(icsFold).join('\r\n') + '\r\n';
+}
+const b64 = (s: string) => {
+  const bytes = new TextEncoder().encode(s);
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+};
+const b64wrap = (s: string) => b64(s).replace(/(.{76})/g, '$1\r\n');
+// RFC 2047 for header values with accents ("Visita: Chicó")
+const encHeader = (s: string) => (/^[\x20-\x7e]*$/.test(s) ? s : `=?utf-8?B?${b64(s)}?=`);
+async function sendInviteMail(env: Env, row: any, method: 'REQUEST' | 'CANCEL', vd: string): Promise<void> {
+  const ics = visitIcs(env, row, method, vd);
+  const subject = (method === 'CANCEL' ? 'Cancelada — ' : '') + `Visita: ${aptName(row)} · ${fmtDate(vd)}${hhmm(vd)}`;
+  const text = [
+    (method === 'CANCEL' ? 'Visita cancelada: ' : 'Visita programada: ') + aptName(row),
+    'Fecha: ' + fmtDate(vd) + hhmm(vd),
+    row.address ? 'Dirección: ' + row.address : '',
+    row.agent_name ? 'Agente: ' + row.agent_name : '',
+    row.agent_phone ? 'Tel: ' + row.agent_phone : '',
+    row.url ? 'Link: ' + row.url : '',
+  ].filter(Boolean).join('\n');
+  const tos = inviteTos(env);
+  const boundary = 'turikumwe-' + row.id + '-' + Date.now().toString(36);
+  const raw = [
+    `From: Turikumwe <${env.INVITE_FROM}>`,
+    'To: ' + tos.join(', '),
+    'Subject: ' + encHeader(subject),
+    'Date: ' + new Date().toUTCString(),
+    `Message-ID: <visit-${row.id}-${Date.now().toString(36)}@turikumwe.cc>`,
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/plain; charset=utf-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    b64wrap(text),
+    `--${boundary}`,
+    `Content-Type: text/calendar; charset=utf-8; method=${method}`,
+    'Content-Transfer-Encoding: base64',
+    '',
+    b64wrap(ics),
+    `--${boundary}--`,
+    '',
+  ].join('\r\n');
+  for (const to of tos) await env.INVITE_MAIL.send(new EmailMessage(env.INVITE_FROM, to, raw));
+}
+// decide invite vs cancel after a visit change; returns an ack suffix and never throws —
+// a mail hiccup must not break the visit update itself, but it must not be silent either
+async function visitMail(env: Env, row: any, vd: string | null, oldVd: string | null): Promise<string> {
+  const td = today();
+  try {
+    if (vd && String(vd).slice(0, 10) >= td) { await sendInviteMail(env, row, 'REQUEST', String(vd)); return ' · 📧 invitación enviada'; }
+    if (!vd && oldVd && String(oldVd).slice(0, 10) >= td) { await sendInviteMail(env, row, 'CANCEL', String(oldVd)); return ' · 📧 cancelación enviada'; }
+    return ''; // past visits get no mail
+  } catch (e: any) {
+    console.log('invite mail error:', String(e && e.message || e));
+    return ' · ⚠️ no pude enviar el correo de invitación';
+  }
 }
 
 // ---- db helpers ----
@@ -527,7 +658,8 @@ async function handleUpdate(env: Env, update: any) {
       const arow = await get(env, "SELECT * FROM apartments WHERE id=? AND status='active'", op.apt_id);
       if (arow) {
         await run(env, 'UPDATE apartments SET visit_date=?, updated_at=? WHERE id=?', vd, new Date().toISOString(), op.apt_id);
-        visitsSet.push((arow.location || arow.title || ('apto ' + arow.id)) + (vd ? (' → ' + dueLabel(vd, td) + hhmm(vd)) : ' (visita cancelada)'));
+        const mail = await visitMail(env, arow, vd, arow.visit_date);
+        visitsSet.push((arow.location || arow.title || ('apto ' + arow.id)) + (vd ? (' → ' + dueLabel(vd, td) + hhmm(vd)) : ' (visita cancelada)') + mail);
       }
     } else if (op.action === 'rule_out' && op.apt_id != null) {
       const arow = await get(env, "SELECT * FROM apartments WHERE id=? AND status='active'", op.apt_id);
@@ -535,13 +667,15 @@ async function handleUpdate(env: Env, update: any) {
         const reason = (op.reason && String(op.reason).trim()) ? String(op.reason).trim().slice(0, 120) : null;
         const rnow = new Date().toISOString();
         await run(env, "UPDATE apartments SET status='ruled_out', ruled_out_reason=?, ruled_out_at=?, updated_at=? WHERE id=?", reason, rnow, rnow, op.apt_id);
-        ruledOut.push((arow.location || arow.title || ('apto ' + arow.id)) + (reason ? (' — ' + reason) : ''));
+        const mail = await visitMail(env, arow, null, arow.visit_date); // pending visit? tell the calendars it's off
+        ruledOut.push((arow.location || arow.title || ('apto ' + arow.id)) + (reason ? (' — ' + reason) : '') + mail);
       }
     } else if (op.action === 'reactivate' && op.apt_id != null) {
       const arow = await get(env, "SELECT * FROM apartments WHERE id=? AND status='ruled_out'", op.apt_id);
       if (arow) {
         await run(env, "UPDATE apartments SET status='active', ruled_out_reason=NULL, ruled_out_at=NULL, updated_at=? WHERE id=?", new Date().toISOString(), op.apt_id);
-        reactivated.push(arow.location || arow.title || ('apto ' + arow.id));
+        const mail = await visitMail(env, arow, arow.visit_date, null); // pending visit comes back → re-invite
+        reactivated.push((arow.location || arow.title || ('apto ' + arow.id)) + mail);
       }
     } else if (op.action === 'apt_note' && op.apt_id != null && op.note) {
       // any status — recording why a ruled-out apartment was rejected is legit; a miss must not be silent
@@ -703,23 +837,46 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
   const echo = (msg: string) => ctx.waitUntil(tgSend(env, msg).catch(() => {}));
   if (b.action === 'set_visit') {
     const vd = (b.visit_date == null || b.visit_date === '') ? null : String(b.visit_date);
+    const oldVd = (await get(env, 'SELECT visit_date FROM apartments WHERE id=?', id))?.visit_date || null;
     await run(env, 'UPDATE apartments SET visit_date=?, updated_at=? WHERE id=?', vd, new Date().toISOString(), id);
     const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
-    if (row) echo(vd ? `📅 Visita a *${aptName(row)}* → ${fmtDate(vd)}${hhmm(vd)}${via}` : `📅 Visita a *${aptName(row)}* cancelada${via}`);
+    if (row) ctx.waitUntil((async () => {
+      const mail = await visitMail(env, row, vd, oldVd);
+      await tgSend(env, (vd ? `📅 Visita a *${aptName(row)}* → ${fmtDate(vd)}${hhmm(vd)}` : `📅 Visita a *${aptName(row)}* cancelada`) + via + mail);
+    })().catch(() => {}));
     return json({ ok: true, row });
+  }
+  if (b.action === 'invite') {
+    // manual re-send from the calendar card, e.g. after editing the address or agent
+    const row = await get(env, "SELECT * FROM apartments WHERE id=? AND status='active'", id);
+    if (!row) return json({ ok: false, error: 'no encontrado' }, 404);
+    if (!row.visit_date) return json({ ok: false, error: 'sin fecha de visita' }, 400);
+    if (String(row.visit_date).slice(0, 10) < today()) return json({ ok: false, error: 'la visita ya pasó' }, 400);
+    try { await sendInviteMail(env, row, 'REQUEST', String(row.visit_date)); } catch (e: any) {
+      console.log('invite mail error:', String(e && e.message || e));
+      return json({ ok: false, error: 'no se pudo enviar el correo' }, 502);
+    }
+    echo(`📧 Invitación de *${aptName(row)}* enviada a los correos${via}`);
+    return json({ ok: true });
   }
   if (b.action === 'rule_out') {
     const reason = (b.reason && String(b.reason).trim()) ? String(b.reason).trim().slice(0, 120) : null;
     const now = new Date().toISOString();
     await run(env, "UPDATE apartments SET status='ruled_out', ruled_out_reason=?, ruled_out_at=?, updated_at=? WHERE id=?", reason, now, now, id);
     const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
-    if (row) echo(`🚫 *${aptName(row)}* descartado${reason ? ' — ' + reason : ''}${via}`);
+    if (row) ctx.waitUntil((async () => {
+      const mail = await visitMail(env, row, null, row.visit_date); // pending visit? tell the calendars it's off
+      await tgSend(env, `🚫 *${aptName(row)}* descartado${reason ? ' — ' + reason : ''}${via}${mail}`);
+    })().catch(() => {}));
     return json({ ok: true, row });
   }
   if (b.action === 'reactivate') {
     await run(env, "UPDATE apartments SET status='active', ruled_out_reason=NULL, ruled_out_at=NULL, updated_at=? WHERE id=?", new Date().toISOString(), id);
     const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
-    if (row) echo(`↩️ *${aptName(row)}* de vuelta en la lista${via}`);
+    if (row) ctx.waitUntil((async () => {
+      const mail = await visitMail(env, row, row.visit_date, null); // pending visit comes back → re-invite
+      await tgSend(env, `↩️ *${aptName(row)}* de vuelta en la lista${via}${mail}`);
+    })().catch(() => {}));
     return json({ ok: true, row });
   }
   if (b.action === 'rescrape') {
