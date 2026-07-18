@@ -16,8 +16,16 @@ binding = "DB"
 database_name = "household"
 database_id = "819edb7b-dbfd-4cd6-8f88-73987be40545"
 
+# calendar invites go out through Email Routing on turikumwe.cc — native binding, no API keys.
+# Recipients must be *verified* destination addresses in the zone's Email Routing settings.
+[[send_email]]
+name = "INVITE_MAIL"
+allowed_destination_addresses = ["felipeam86@gmail.com", "lucia.p.villar@gmail.com"]
+
 [vars]
 GROUP_CHAT_ID = "-5328221345"
+INVITE_FROM = "visitas@turikumwe.cc"
+INVITE_TO = "felipeam86@gmail.com,lucia.p.villar@gmail.com"
 
 # Secrets (set with `wrangler secret put`):
 #   BOT_TOKEN, TG_WEBHOOK_SECRET, ANTHROPIC_API_KEY
