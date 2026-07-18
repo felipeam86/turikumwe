@@ -72,16 +72,64 @@
   .rrow .grow{flex:1;}
   .rrow button.act{flex:0 0 auto;min-height:44px;}
   .rrow a.link{min-height:44px;padding:4px 10px;}
+  /* tag: same label => same color everywhere (hue derived from the text) */
+  .tag{display:inline-block;font-size:11px;font-weight:700;color:#12151b;border-radius:999px;padding:1px 9px;margin-left:6px;vertical-align:middle;}
+  .contact{color:var(--muted);font-size:12px;margin-top:10px;line-height:1.7;}
+  .tel{color:var(--accent);text-decoration:none;}
+  .ctrl{flex-wrap:wrap;}
+  .act.prim{border-color:var(--accent);color:var(--accent);}
+  /* desktop table view */
+  .toolbar{display:none;}
+  @media(min-width:760px){.toolbar{display:flex;justify-content:flex-end;margin-bottom:10px;}}
+  .viewtoggle{display:inline-flex;border:1px solid var(--border);border-radius:999px;overflow:hidden;}
+  .viewtoggle button{font-family:inherit;font-size:13px;font-weight:600;background:transparent;color:var(--muted);border:none;padding:9px 15px;cursor:pointer;}
+  .viewtoggle button.on{background:rgba(122,162,255,.14);color:var(--fg);}
+  .tablewrap{overflow-x:auto;border:1px solid var(--border);border-radius:12px;}
+  table.apttable{border-collapse:collapse;width:100%;font-size:13px;white-space:nowrap;}
+  .apttable th,.apttable td{padding:8px 10px;border-bottom:1px solid var(--border);text-align:left;vertical-align:middle;}
+  .apttable tbody tr:last-child td{border-bottom:none;}
+  .apttable thead th{position:sticky;top:0;background:var(--bg-raised);color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em;font-weight:600;}
+  .apttable th.sortable{cursor:pointer;user-select:none;}
+  .apttable th.sortable:hover{color:var(--fg);}
+  .apttable td.num{text-align:right;font-variant-numeric:tabular-nums;}
+  .apttable td.nm{font-weight:600;white-space:normal;min-width:150px;}
+  .apttable tbody tr:hover{background:rgba(255,255,255,.03);}
+  .apttable .tag{margin-left:0;}
+  .thumb{width:46px;height:46px;object-fit:cover;border-radius:8px;display:block;}
+  .thumb.noimg{background:var(--bg);border:1px solid var(--border);}
+  .rowact{display:flex;gap:6px;align-items:center;}
+  a.link.sm,button.act.sm{min-height:0;padding:4px 9px;font-size:12px;flex:0 0 auto;}
+  /* edit sheet (shared by cards + table) */
+  .modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:50;align-items:center;justify-content:center;padding:16px;}
+  .modal.show{display:flex;}
+  .sheet{background:var(--bg-raised);border:1px solid var(--border);border-radius:16px;padding:18px;width:100%;max-width:420px;}
+  .sheet .mh{font-size:16px;font-weight:700;margin-bottom:14px;}
+  .sheet label{display:block;font-size:12px;color:var(--muted);margin-bottom:12px;}
+  .sheet input{display:block;width:100%;margin-top:4px;font-family:inherit;font-size:16px;min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:10px;padding:6px 10px;}
+  .mctrl{display:flex;gap:8px;margin-top:4px;}
+  .mctrl .act{flex:1;}
 </style></head><body>
 <div class="wrap">
   <nav><a href="/">⌂</a><a href="/dashboard.html">🏠 Hogar</a><a class="on" href="/apartments.html">🏢 Apartamentos</a></nav>
   <div class="sub" id="sub">Cargando…</div>
+  <div class="toolbar"><div class="viewtoggle" id="viewtoggle">
+    <button class="vt-btn" data-view="cards">▦ Tarjetas</button>
+    <button class="vt-btn" data-view="table">▤ Tabla</button>
+  </div></div>
   <div id="visits"></div>
   <div id="root"></div>
   <div id="ruledRoot"></div>
   <div class="foot">Fija la fecha y hora de visita, vuelve a leer un link, o descarta un apartamento aquí.<br>También puedes responder al mensaje del apto en Telegram: "visita el martes a las 10am".</div>
 </div>
 <div class="toast" id="toast"></div>
+<div class="modal" id="editModal"><div class="sheet">
+  <div class="mh">Editar apartamento</div>
+  <label>Dirección<input id="e_address" type="text" autocomplete="off"></label>
+  <label>Agente<input id="e_agent" type="text" autocomplete="off"></label>
+  <label>Teléfono<input id="e_phone" type="tel" autocomplete="off"></label>
+  <label>Etiqueta<input id="e_tag" type="text" autocomplete="off" placeholder="p.ej. Chicó, Favorito"></label>
+  <div class="mctrl"><button class="act" id="e_cancel">Cancelar</button><button class="act prim" id="e_save">Guardar</button></div>
+</div></div>
 <script>
 var DATA=null;
 function esc(s){s=(s==null?"":String(s));return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;");}
@@ -90,6 +138,9 @@ function mny(n){return (n==null||isNaN(Number(n)))?"—":"$"+Number(n).toLocaleS
 function toast(t){var el=document.getElementById("toast");el.textContent=t;el.classList.add("show");setTimeout(function(){el.classList.remove("show");},1800);}
 function num(v){return v==null?"—":v;}
 function spec(k,v,best){return "<div class=\"spec\"><span class=\"k\">"+k+"</span><span class=\"v"+(best?" best":"")+"\">"+v+"</span></div>";}
+// deterministic hue from the tag text: same label => same color on every card and table row
+function tagColor(t){var s=String(t),h=0,i;for(i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))>>>0;return h%360;}
+function tagChip(t){var hue=tagColor(t);return "<span class=\"tag\" style=\"background:hsl("+hue+" 58% 62%)\">"+esc(t)+"</span>";}
 // ponytail: for rent the number that matters is price+admin; buy keeps the raw sale price
 function ppmOf(r,isRent){
   if(isRent){
@@ -110,7 +161,7 @@ function card(r,best,isRent){
   var vdInput=(vd&&vd.indexOf("T")<0)?vd+"T09:00":vd;
   var h="<div class=\"apt\">";
   if(r.image_url)h+="<img class=\"photo\" src=\""+esc(r.image_url)+"\" loading=\"lazy\" alt=\"\" onerror=\"this.remove()\">";
-  h+="<div class=\"head\"><div class=\"loc\">"+esc(aptName(r))+flag+sub+"</div>";
+  h+="<div class=\"head\"><div class=\"loc\">"+esc(aptName(r))+flag+(r.tag?tagChip(r.tag):"")+sub+"</div>";
   if(isRent&&r.price!=null){
     var total=Number(r.price)+Number(r.admin_fee||0);
     h+="<div class=\"price\">"+mny(total)+"<span class=\"per\">/mes</span>";
@@ -133,8 +184,14 @@ function card(r,best,isRent){
   var rn=(r.raw_note||"").replace(/https?:\/\/\S+/g,"").trim();
   if(rn)h+="<div class=\"note\">“"+esc(rn)+"”</div>";
   if(r.notes)h+="<div class=\"note\">📝 "+esc(r.notes)+"</div>";
+  var contact=[];
+  if(r.address)contact.push("📍 "+esc(r.address));
+  if(r.agent_name)contact.push("👤 "+esc(r.agent_name));
+  if(r.agent_phone)contact.push("📞 <a class=\"tel\" href=\"tel:"+esc(r.agent_phone)+"\">"+esc(r.agent_phone)+"</a>");
+  if(contact.length)h+="<div class=\"contact\">"+contact.join("<br>")+"</div>";
   h+="<div class=\"visit\"><span class=\"k\">Visita</span><input type=\"datetime-local\" data-id=\""+r.id+"\" class=\"vd\" value=\""+vdInput+"\"></div>";
-  h+="<div class=\"ctrl\"><button class=\"act nt\" data-id=\""+r.id+"\">Nota</button>";
+  h+="<div class=\"ctrl\"><button class=\"act ed\" data-id=\""+r.id+"\">Editar</button>";
+  h+="<button class=\"act nt\" data-id=\""+r.id+"\">Nota</button>";
   h+="<button class=\"act rs\" data-id=\""+r.id+"\">Releer</button>";
   h+="<button class=\"act danger ro\" data-id=\""+r.id+"\" data-name=\""+esc(aptName(r))+"\">Descartar</button>";
   if(r.url)h+="<a class=\"link\" href=\""+esc(r.url)+"\" target=\"_blank\">link</a>";
@@ -155,6 +212,98 @@ function section(title,list,isRent){
   for(var i=0;i<sorted.length;i++)h+=card(sorted[i],best,isRent);
   h+="</div>";return h;
 }
+// ---- desktop table view ----
+var SORT={key:"ppm",dir:1}; // default: best $/m² first, like the cards
+var COLS=[
+  {k:"thumb",label:""},
+  {k:"tag",label:"Etiqueta",type:"s"},
+  {k:"name",label:"Apto",type:"s"},
+  {k:"type",label:"Tipo",type:"s"},
+  {k:"price",label:"Precio",type:"n"},
+  {k:"ppm",label:"$/m²",type:"n"},
+  {k:"bedrooms",label:"Hab",type:"n"},
+  {k:"bathrooms",label:"Baños",type:"n"},
+  {k:"area_m2",label:"m²",type:"n"},
+  {k:"stratum",label:"Estr",type:"n"},
+  {k:"address",label:"Dirección",type:"s"},
+  {k:"agent_name",label:"Agente",type:"s"},
+  {k:"agent_phone",label:"Teléfono",type:"s"},
+  {k:"visit_date",label:"Visita",type:"s"},
+  {k:"actions",label:""}
+];
+// for rent the comparable price is arriendo+admin; buy uses the raw sale price
+function sortPrice(r){if(r.price==null)return null;return r.deal_type==="rent"?Number(r.price)+Number(r.admin_fee||0):Number(r.price);}
+function cellVal(r,k){
+  if(k==="name")return aptName(r);
+  if(k==="type")return r.deal_type||"";
+  if(k==="price")return sortPrice(r);
+  if(k==="ppm")return ppmOf(r,r.deal_type==="rent");
+  return r[k];
+}
+function sortRows(rows){
+  var col=null;for(var i=0;i<COLS.length;i++)if(COLS[i].k===SORT.key)col=COLS[i];
+  return rows.slice().sort(function(a,b){
+    var va=cellVal(a,SORT.key),vb=cellVal(b,SORT.key);
+    var na=(va==null||va===""),nb=(vb==null||vb===""); // blanks last, whichever the direction
+    if(na&&nb)return 0;if(na)return 1;if(nb)return -1;
+    if(col&&col.type==="n")return (Number(va)-Number(vb))*SORT.dir;
+    return String(va).localeCompare(String(vb),"es")*SORT.dir;
+  });
+}
+function tableRow(r){
+  var isRent=r.deal_type==="rent";
+  var thumb=r.image_url?"<img class=\"thumb\" src=\""+esc(r.image_url)+"\" loading=\"lazy\" alt=\"\" onerror=\"this.className='thumb noimg';this.removeAttribute('src')\">":"<span class=\"thumb noimg\"></span>";
+  var price=sortPrice(r);
+  var priceStr=price==null?"—":mny(price)+(isRent?"/mes":"");
+  var phone=r.agent_phone?"<a class=\"tel\" href=\"tel:"+esc(r.agent_phone)+"\">"+esc(r.agent_phone)+"</a>":"—";
+  var type=isRent?"Arriendo":r.deal_type==="buy"?"Compra":"—";
+  var h="<tr>";
+  h+="<td>"+thumb+"</td>";
+  h+="<td>"+(r.tag?tagChip(r.tag):"")+"</td>";
+  h+="<td class=\"nm\">"+esc(aptName(r))+"</td>";
+  h+="<td>"+type+"</td>";
+  h+="<td class=\"num\">"+priceStr+"</td>";
+  h+="<td class=\"num\">"+mny(ppmOf(r,isRent))+"</td>";
+  h+="<td class=\"num\">"+num(r.bedrooms)+"</td>";
+  h+="<td class=\"num\">"+num(r.bathrooms)+"</td>";
+  h+="<td class=\"num\">"+num(r.area_m2)+"</td>";
+  h+="<td class=\"num\">"+num(r.stratum)+"</td>";
+  h+="<td>"+esc(r.address||"—")+"</td>";
+  h+="<td>"+esc(r.agent_name||"—")+"</td>";
+  h+="<td>"+phone+"</td>";
+  h+="<td>"+(r.visit_date?esc(fmtVisit(r.visit_date)):"—")+"</td>";
+  h+="<td class=\"rowact\">"+(r.url?"<a class=\"link sm\" href=\""+esc(r.url)+"\" target=\"_blank\">link</a>":"")+"<button class=\"act sm ed\" data-id=\""+r.id+"\">✎</button></td>";
+  return h+"</tr>";
+}
+function tableView(rows){
+  if(!rows.length)return "<div class=\"empty\">Sin apartamentos activos.</div>";
+  var sorted=sortRows(rows);
+  var h="<div class=\"tablewrap\"><table class=\"apttable\"><thead><tr>";
+  for(var i=0;i<COLS.length;i++){var c=COLS[i];
+    if(!c.type){h+="<th>"+esc(c.label)+"</th>";continue;}
+    var arrow=SORT.key===c.k?(SORT.dir>0?" ▲":" ▼"):"";
+    h+="<th class=\"sortable\" data-sort=\""+c.k+"\">"+esc(c.label)+arrow+"</th>";
+  }
+  h+="</tr></thead><tbody>";
+  for(var j=0;j<sorted.length;j++)h+=tableRow(sorted[j]);
+  return h+"</tbody></table></div>";
+}
+// table is a desktop-only affordance; phones always get the cards
+var VIEW=localStorage.getItem("aptView")||"table";
+function isDesktop(){return window.innerWidth>=760;}
+function effView(){return isDesktop()?VIEW:"cards";}
+// ---- edit sheet (address / agent / phone / tag), shared by cards + table ----
+var EDIT_ID=null;
+function findApt(id){var all=(DATA.apartments||[]).concat(DATA.ruledOut||[]);for(var i=0;i<all.length;i++)if(all[i].id===id)return all[i];return null;}
+function openEdit(id){
+  var r=findApt(id);if(!r)return;EDIT_ID=id;
+  document.getElementById("e_address").value=r.address||"";
+  document.getElementById("e_agent").value=r.agent_name||"";
+  document.getElementById("e_phone").value=r.agent_phone||"";
+  document.getElementById("e_tag").value=r.tag||"";
+  document.getElementById("editModal").classList.add("show");
+}
+function closeEdit(){EDIT_ID=null;document.getElementById("editModal").classList.remove("show");}
 function fmtVisit(s){try{
   var day=new Date(s.slice(0,10)+"T00:00:00Z").toLocaleDateString("es-CO",{timeZone:"UTC",weekday:"short",day:"numeric",month:"short"});
   var t=s.length>10?s.slice(11,16):""; // wall-clock as typed; no TZ math on the time
@@ -196,12 +345,18 @@ function render(){
   var niceDay="";if(DATA.today){var nd=new Date(DATA.today+"T00:00:00Z");niceDay=isNaN(nd)?DATA.today:nd.toLocaleDateString("es-CO",{timeZone:"UTC",weekday:"long",day:"numeric",month:"long"});}
   document.getElementById("sub").textContent=parts.join(" · ")+" · "+niceDay;
   document.getElementById("visits").innerHTML=visitsStrip(rows);
+  // reflect the active view on the toggle (only visible on desktop)
+  var vt=document.getElementById("viewtoggle").getElementsByTagName("button");
+  for(var t=0;t<vt.length;t++)vt[t].className="vt-btn"+(vt[t].getAttribute("data-view")===VIEW?" on":"");
   if(!rows.length&&!ruled.length){document.getElementById("root").innerHTML="<div class=\"empty\">Aún no hay apartamentos. Envía un link al grupo de Telegram para empezar.</div>";document.getElementById("ruledRoot").innerHTML="";return;}
-  var buy=rows.filter(function(r){return r.deal_type==="buy";});
-  var rent=rows.filter(function(r){return r.deal_type==="rent";});
-  var unk=rows.filter(function(r){return r.deal_type!=="buy"&&r.deal_type!=="rent";});
-  var active=section("🛒 Compra",buy,false)+section("🔑 Arriendo",rent,true)+section("❔ Sin clasificar",unk,false);
-  document.getElementById("root").innerHTML=active;
+  if(effView()==="table"){
+    document.getElementById("root").innerHTML=tableView(rows);
+  }else{
+    var buy=rows.filter(function(r){return r.deal_type==="buy";});
+    var rent=rows.filter(function(r){return r.deal_type==="rent";});
+    var unk=rows.filter(function(r){return r.deal_type!=="buy"&&r.deal_type!=="rent";});
+    document.getElementById("root").innerHTML=section("🛒 Compra",buy,false)+section("🔑 Arriendo",rent,true)+section("❔ Sin clasificar",unk,false);
+  }
   document.getElementById("ruledRoot").innerHTML=ruledSection(ruled);
 }
 function load(){return fetch("apartments-data.json").then(function(r){if(!r.ok)throw 0;return r.json();}).then(function(d){DATA=d;render();});}
@@ -218,6 +373,9 @@ document.addEventListener("change",function(e){
 });
 document.addEventListener("click",function(e){
   var el=e.target;if(!el.classList)return;
+  if(el.classList.contains("vt-btn")){VIEW=el.getAttribute("data-view");localStorage.setItem("aptView",VIEW);render();return;}
+  if(el.classList.contains("sortable")){var k=el.getAttribute("data-sort");if(SORT.key===k)SORT.dir=-SORT.dir;else{SORT.key=k;SORT.dir=1;}render();return;}
+  if(el.classList.contains("ed")){openEdit(Number(el.getAttribute("data-id")));return;}
   if(el.classList.contains("nt")){
     var id=Number(el.getAttribute("data-id"));
     var note=prompt("Nota (se agrega a las anteriores, con la fecha):","");
@@ -261,7 +419,25 @@ document.addEventListener("click",function(e){
     return;
   }
 });
+// edit sheet
+document.getElementById("e_cancel").onclick=closeEdit;
+document.getElementById("editModal").addEventListener("click",function(e){if(e.target.id==="editModal")closeEdit();});
+document.getElementById("e_save").onclick=function(){
+  if(EDIT_ID==null)return;var btn=this;btn.disabled=true;
+  action({action:"set_fields",id:EDIT_ID,
+    address:document.getElementById("e_address").value,
+    agent_name:document.getElementById("e_agent").value,
+    agent_phone:document.getElementById("e_phone").value,
+    tag:document.getElementById("e_tag").value
+  }).then(function(res){
+    if(res&&res.ok){toast("Guardado ✓");}else{toast("Error al guardar");}
+    closeEdit();return load();
+  }).catch(function(){toast("Error de red");}).then(function(){btn.disabled=false;});
+};
 load().catch(showRetry);
+// re-render only when crossing the mobile/desktop line, so a phone never gets the table
+var wasDesktop=isDesktop();
+window.addEventListener("resize",function(){var d=isDesktop();if(d!==wasDesktop){wasDesktop=d;if(DATA)render();}});
 // refresh when the tab/app regains focus (data changes a few times a day, not per minute)
 document.addEventListener("visibilitychange",function(){if(!document.hidden)load().catch(showRetry);});
 </script>

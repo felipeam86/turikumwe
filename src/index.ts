@@ -726,6 +726,13 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
     const res = await rescrapeOne(env, id);
     return json({ ...res, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
   }
+  if (b.action === 'set_fields') {
+    // address / agent / phone / tag — quiet metadata edits, no Telegram echo
+    const clean = (v: any) => { const s = (v == null ? '' : String(v)).trim(); return s ? s.slice(0, 200) : null; };
+    await run(env, 'UPDATE apartments SET address=?, agent_name=?, agent_phone=?, tag=?, updated_at=? WHERE id=?',
+      clean(b.address), clean(b.agent_name), clean(b.agent_phone), clean(b.tag), new Date().toISOString(), id);
+    return json({ ok: true, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
+  }
   if (b.action === 'apt_note') {
     const note = (b.note && String(b.note).trim()) ? String(b.note).trim().slice(0, 300) : null;
     if (!note) return json({ ok: false, error: 'empty note' }, 400);

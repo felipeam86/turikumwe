@@ -29,6 +29,14 @@ Run this **before** `wrangler deploy` — `schema.sql` uses `CREATE TABLE IF NOT
 npx wrangler d1 execute household --remote --command "ALTER TABLE apartments ADD COLUMN image_url TEXT; ALTER TABLE apartments ADD COLUMN notes TEXT"
 ```
 
+**Migrating a database created before the apartment address/agent/tag columns:**
+
+Same reasoning — run **before** `wrangler deploy`, or the `set_fields` action will fail:
+
+```sh
+npx wrangler d1 execute household --remote --command "ALTER TABLE apartments ADD COLUMN address TEXT; ALTER TABLE apartments ADD COLUMN agent_name TEXT; ALTER TABLE apartments ADD COLUMN agent_phone TEXT; ALTER TABLE apartments ADD COLUMN tag TEXT"
+```
+
 ### 2. Config
 
 In `wrangler.toml`, set `GROUP_CHAT_ID` to the Telegram group's chat id (usually negative, e.g. `-100123456789`). Then set the three secrets:
@@ -78,7 +86,7 @@ The cron (07:30 America/Bogota = `30 12 * * *` UTC) is already in `wrangler.toml
 | `POST /items-action` | Access | `complete` an item (monthly items roll forward); echoes to the Telegram group |
 | `GET /apartments.html` | Access | Apartment comparison (mobile-first cards) |
 | `GET /apartments-data.json` | Access | Data for the apartments screen |
-| `POST /apartments-action` | Access | `set_visit` / `rescrape` / `rule_out` / `reactivate`; echoes to the Telegram group |
+| `POST /apartments-action` | Access | `set_visit` / `rescrape` / `rule_out` / `reactivate` / `apt_note` / `set_fields` (address, agent, phone, tag); most echo to the Telegram group |
 | `GET /manifest.json`, `GET /icon.png` | Access | PWA manifest + icon (icons inlined as data URIs — Chrome fetches manifest icons without the Access cookie) |
 
 ## Install on Android
