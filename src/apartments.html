@@ -99,6 +99,15 @@
   .thumb.noimg{background:var(--bg);border:1px solid var(--border);}
   .rowact{display:flex;gap:6px;align-items:center;}
   a.link.sm,button.act.sm{min-height:0;padding:4px 9px;font-size:12px;flex:0 0 auto;}
+  /* table view uses the whole screen width */
+  @media(min-width:760px){.wrap.wide{max-width:none;}}
+  /* click-to-edit cells */
+  .apttable td.ec{cursor:text;}
+  .apttable td.ec:hover{background:rgba(122,162,255,.09);}
+  .ec .mut{color:var(--muted);}
+  .cellin{font-family:inherit;font-size:13px;width:100%;min-width:120px;box-sizing:border-box;background:var(--bg);color:var(--fg);border:1px solid var(--accent);border-radius:6px;padding:4px 6px;}
+  .ec.num .cellin{min-width:74px;text-align:right;}
+  select.cellin{min-width:104px;}
   /* edit sheet (shared by cards + table) */
   .modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:50;align-items:center;justify-content:center;padding:16px;}
   .modal.show{display:flex;}
@@ -213,30 +222,30 @@ function section(title,list,isRent){
   h+="</div>";return h;
 }
 // ---- desktop table view ----
+// every listing field is editable in place; edit=type drives both the input widget and server coercion
 var SORT={key:"ppm",dir:1}; // default: best $/m² first, like the cards
 var COLS=[
   {k:"thumb",label:""},
-  {k:"tag",label:"Etiqueta",type:"s"},
-  {k:"name",label:"Apto",type:"s"},
-  {k:"type",label:"Tipo",type:"s"},
-  {k:"price",label:"Precio",type:"n"},
+  {k:"tag",label:"Etiqueta",type:"s",field:"tag",edit:"text"},
+  {k:"name",label:"Apto",type:"s",field:"location",edit:"text"},
+  {k:"type",label:"Tipo",type:"s",field:"deal_type",edit:"deal"},
+  {k:"price",label:"Precio",type:"n",field:"price",edit:"int"},
+  {k:"admin_fee",label:"Admin",type:"n",field:"admin_fee",edit:"int"},
   {k:"ppm",label:"$/m²",type:"n"},
-  {k:"bedrooms",label:"Hab",type:"n"},
-  {k:"bathrooms",label:"Baños",type:"n"},
-  {k:"area_m2",label:"m²",type:"n"},
-  {k:"stratum",label:"Estr",type:"n"},
-  {k:"address",label:"Dirección",type:"s"},
-  {k:"agent_name",label:"Agente",type:"s"},
-  {k:"agent_phone",label:"Teléfono",type:"s"},
-  {k:"visit_date",label:"Visita",type:"s"},
+  {k:"bedrooms",label:"Hab",type:"n",field:"bedrooms",edit:"int"},
+  {k:"bathrooms",label:"Baños",type:"n",field:"bathrooms",edit:"int"},
+  {k:"area_m2",label:"m²",type:"n",field:"area_m2",edit:"real"},
+  {k:"stratum",label:"Estr",type:"n",field:"stratum",edit:"int"},
+  {k:"parking",label:"Parq",type:"n",field:"parking",edit:"int"},
+  {k:"address",label:"Dirección",type:"s",field:"address",edit:"text"},
+  {k:"agent_name",label:"Agente",type:"s",field:"agent_name",edit:"text"},
+  {k:"agent_phone",label:"Teléfono",type:"s",field:"agent_phone",edit:"text"},
+  {k:"visit_date",label:"Visita",type:"s",field:"visit_date",edit:"visit"},
   {k:"actions",label:""}
 ];
-// for rent the comparable price is arriendo+admin; buy uses the raw sale price
-function sortPrice(r){if(r.price==null)return null;return r.deal_type==="rent"?Number(r.price)+Number(r.admin_fee||0):Number(r.price);}
 function cellVal(r,k){
   if(k==="name")return aptName(r);
   if(k==="type")return r.deal_type||"";
-  if(k==="price")return sortPrice(r);
   if(k==="ppm")return ppmOf(r,r.deal_type==="rent");
   return r[k];
 }
@@ -250,30 +259,77 @@ function sortRows(rows){
     return String(va).localeCompare(String(vb),"es")*SORT.dir;
   });
 }
-function tableRow(r){
+// formatted (read-only) display for one cell; "" means empty → shown as a clickable dash
+function cellDisplay(r,c){
   var isRent=r.deal_type==="rent";
-  var thumb=r.image_url?"<img class=\"thumb\" src=\""+esc(r.image_url)+"\" loading=\"lazy\" alt=\"\" onerror=\"this.className='thumb noimg';this.removeAttribute('src')\">":"<span class=\"thumb noimg\"></span>";
-  var price=sortPrice(r);
-  var priceStr=price==null?"—":mny(price)+(isRent?"/mes":"");
-  var phone=r.agent_phone?"<a class=\"tel\" href=\"tel:"+esc(r.agent_phone)+"\">"+esc(r.agent_phone)+"</a>":"—";
-  var type=isRent?"Arriendo":r.deal_type==="buy"?"Compra":"—";
+  if(c.k==="thumb")return r.image_url?"<img class=\"thumb\" src=\""+esc(r.image_url)+"\" loading=\"lazy\" alt=\"\" onerror=\"this.className='thumb noimg';this.removeAttribute('src')\">":"<span class=\"thumb noimg\"></span>";
+  if(c.k==="tag")return r.tag?tagChip(r.tag):"";
+  if(c.k==="name")return esc(aptName(r));
+  if(c.k==="type")return isRent?"Arriendo":r.deal_type==="buy"?"Compra":"";
+  if(c.k==="price")return r.price==null?"":mny(r.price)+(isRent?"/mes":"");
+  if(c.k==="admin_fee")return r.admin_fee==null?"":mny(r.admin_fee);
+  if(c.k==="ppm")return mny(ppmOf(r,isRent));
+  if(c.k==="visit_date")return r.visit_date?esc(fmtVisit(r.visit_date)):"";
+  if(c.k==="actions"){
+    var a="<div class=\"rowact\">";
+    if(r.url)a+="<a class=\"link sm\" href=\""+esc(r.url)+"\" target=\"_blank\">link</a>";
+    a+="<button class=\"act sm rs\" data-id=\""+r.id+"\">Releer</button>";
+    a+="<button class=\"act sm danger ro\" data-id=\""+r.id+"\" data-name=\""+esc(aptName(r))+"\">Descartar</button>";
+    return a+"</div>";
+  }
+  return r[c.k]==null?"":esc(r[c.k]);
+}
+function tableRow(r){
   var h="<tr>";
-  h+="<td>"+thumb+"</td>";
-  h+="<td>"+(r.tag?tagChip(r.tag):"")+"</td>";
-  h+="<td class=\"nm\">"+esc(aptName(r))+"</td>";
-  h+="<td>"+type+"</td>";
-  h+="<td class=\"num\">"+priceStr+"</td>";
-  h+="<td class=\"num\">"+mny(ppmOf(r,isRent))+"</td>";
-  h+="<td class=\"num\">"+num(r.bedrooms)+"</td>";
-  h+="<td class=\"num\">"+num(r.bathrooms)+"</td>";
-  h+="<td class=\"num\">"+num(r.area_m2)+"</td>";
-  h+="<td class=\"num\">"+num(r.stratum)+"</td>";
-  h+="<td>"+esc(r.address||"—")+"</td>";
-  h+="<td>"+esc(r.agent_name||"—")+"</td>";
-  h+="<td>"+phone+"</td>";
-  h+="<td>"+(r.visit_date?esc(fmtVisit(r.visit_date)):"—")+"</td>";
-  h+="<td class=\"rowact\">"+(r.url?"<a class=\"link sm\" href=\""+esc(r.url)+"\" target=\"_blank\">link</a>":"")+"<button class=\"act sm ed\" data-id=\""+r.id+"\">✎</button></td>";
+  for(var i=0;i<COLS.length;i++){var c=COLS[i];
+    var disp=cellDisplay(r,c);
+    if(c.edit){
+      var cls="ec"+(c.k==="name"?" nm":"")+(c.type==="n"?" num":"");
+      h+="<td class=\""+cls+"\" data-id=\""+r.id+"\" data-field=\""+c.field+"\" data-type=\""+c.edit+"\">"+(disp===""?"<span class=\"mut\">—</span>":disp)+"</td>";
+    }else{
+      h+="<td"+(c.k==="ppm"?" class=\"num\"":"")+">"+disp+"</td>";
+    }
+  }
   return h+"</tr>";
+}
+// swap a cell's text for an input; commit saves that one field, cancel re-renders from DATA
+function beginEdit(td){
+  if(td.getElementsByTagName("input").length||td.getElementsByTagName("select").length)return; // already editing
+  var id=Number(td.getAttribute("data-id")),field=td.getAttribute("data-field"),type=td.getAttribute("data-type");
+  var r=findApt(id);if(!r)return;var cur=r[field];
+  var input;
+  if(type==="deal"){
+    input=document.createElement("select");
+    input.innerHTML="<option value=\"buy\">Compra</option><option value=\"rent\">Arriendo</option><option value=\"unknown\">—</option>";
+    input.value=(cur==="buy"||cur==="rent")?cur:"unknown";
+  }else if(type==="visit"){
+    input=document.createElement("input");input.type="datetime-local";
+    var v=cur?String(cur):"";if(v&&v.indexOf("T")<0)v+="T09:00";input.value=v;
+  }else{
+    input=document.createElement("input");input.type="text";
+    if(type==="int"||type==="real")input.inputMode="decimal";
+    input.value=(cur==null?"":String(cur));
+  }
+  input.className="cellin";
+  td.textContent="";td.appendChild(input);input.focus();if(input.select)input.select();
+  var done=false;
+  function commit(save){
+    if(done)return;done=true;
+    if(save)saveField(id,field,type,input.value);else render();
+  }
+  input.addEventListener("blur",function(){commit(true);});
+  input.addEventListener("keydown",function(e){
+    if(e.key==="Enter"){e.preventDefault();input.blur();}
+    else if(e.key==="Escape"){commit(false);}
+  });
+  if(type==="deal"||type==="visit")input.addEventListener("change",function(){input.blur();});
+}
+function saveField(id,field,type,val){
+  var body=(type==="visit")?{action:"set_visit",id:id,visit_date:val||null}:{action:"edit",id:id,field:field,value:val};
+  action(body).then(function(res){
+    if(res&&res.ok){toast("Guardado ✓");}else{toast("Error al guardar");}
+    return load();
+  }).catch(function(){toast("Error de red");render();});
 }
 function tableView(rows){
   if(!rows.length)return "<div class=\"empty\">Sin apartamentos activos.</div>";
@@ -348,6 +404,8 @@ function render(){
   // reflect the active view on the toggle (only visible on desktop)
   var vt=document.getElementById("viewtoggle").getElementsByTagName("button");
   for(var t=0;t<vt.length;t++)vt[t].className="vt-btn"+(vt[t].getAttribute("data-view")===VIEW?" on":"");
+  // let the table use the full screen width; cards keep the centered column
+  document.querySelector(".wrap").classList.toggle("wide",effView()==="table");
   if(!rows.length&&!ruled.length){document.getElementById("root").innerHTML="<div class=\"empty\">Aún no hay apartamentos. Envía un link al grupo de Telegram para empezar.</div>";document.getElementById("ruledRoot").innerHTML="";return;}
   if(effView()==="table"){
     document.getElementById("root").innerHTML=tableView(rows);
@@ -375,6 +433,8 @@ document.addEventListener("click",function(e){
   var el=e.target;if(!el.classList)return;
   if(el.classList.contains("vt-btn")){VIEW=el.getAttribute("data-view");localStorage.setItem("aptView",VIEW);render();return;}
   if(el.classList.contains("sortable")){var k=el.getAttribute("data-sort");if(SORT.key===k)SORT.dir=-SORT.dir;else{SORT.key=k;SORT.dir=1;}render();return;}
+  var ecCell=el.classList.contains("ec")?el:(el.closest?el.closest(".ec"):null);
+  if(ecCell){beginEdit(ecCell);return;}
   if(el.classList.contains("ed")){openEdit(Number(el.getAttribute("data-id")));return;}
   if(el.classList.contains("nt")){
     var id=Number(el.getAttribute("data-id"));

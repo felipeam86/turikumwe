@@ -733,6 +733,32 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
       clean(b.address), clean(b.agent_name), clean(b.agent_phone), clean(b.tag), new Date().toISOString(), id);
     return json({ ok: true, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
   }
+  if (b.action === 'edit') {
+    // generic single-field edit — lets the table fill in any field by hand for listings that can't be scraped
+    const FIELDS: Record<string, 'int' | 'real' | 'text' | 'deal'> = {
+      location: 'text', title: 'text', deal_type: 'deal',
+      price: 'int', admin_fee: 'int', bedrooms: 'int', bathrooms: 'int',
+      area_m2: 'real', stratum: 'int', parking: 'int',
+      address: 'text', agent_name: 'text', agent_phone: 'text', tag: 'text',
+    };
+    const field = String(b.field || '');
+    const kind = FIELDS[field];
+    if (!kind) return json({ ok: false, error: 'bad field' }, 400);
+    let val: any = b.value;
+    if (kind === 'text') { const s = (val == null ? '' : String(val)).trim(); val = s ? s.slice(0, 300) : null; }
+    else if (kind === 'deal') { val = (val === 'buy' || val === 'rent') ? val : 'unknown'; }
+    else if (kind === 'int') { const d = String(val == null ? '' : val).replace(/[^\d-]/g, ''); val = (d === '' || d === '-') ? null : parseInt(d, 10); } // strip COP thousands dots
+    else { const d = String(val == null ? '' : val).replace(',', '.').replace(/[^\d.-]/g, ''); val = d === '' ? null : parseFloat(d); if (val != null && isNaN(val)) val = null; }
+    // field is an allowlisted column name (see FIELDS), so the interpolation is injection-safe
+    await run(env, `UPDATE apartments SET ${field}=?, updated_at=? WHERE id=?`, val, new Date().toISOString(), id);
+    // $/m² for a sale is stored (price_per_m2); recompute it whenever price or area changes
+    if (field === 'price' || field === 'area_m2') {
+      const row = await get(env, 'SELECT price, area_m2 FROM apartments WHERE id=?', id);
+      const ppm = (row && row.price && row.area_m2 > 0) ? Math.round(Number(row.price) / Number(row.area_m2)) : null;
+      await run(env, 'UPDATE apartments SET price_per_m2=? WHERE id=?', ppm, id);
+    }
+    return json({ ok: true, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
+  }
   if (b.action === 'apt_note') {
     const note = (b.note && String(b.note).trim()) ? String(b.note).trim().slice(0, 300) : null;
     if (!note) return json({ ok: false, error: 'empty note' }, 400);
