@@ -31,8 +31,9 @@ function weekday(): string {
   return new Intl.DateTimeFormat('es-CO', { timeZone: TZ, weekday: 'long' }).format(new Date());
 }
 function daysBetween(fromISO: string, toISO: string): number {
-  const a = Date.parse(fromISO + 'T00:00:00Z');
-  const b = Date.parse(toISO + 'T00:00:00Z');
+  // slice(0,10): tolerate a "YYYY-MM-DDTHH:MM" visit timestamp, not just a bare date
+  const a = Date.parse(fromISO.slice(0, 10) + 'T00:00:00Z');
+  const b = Date.parse(toISO.slice(0, 10) + 'T00:00:00Z');
   return Math.round((b - a) / 86400000);
 }
 function addMonth(iso: string, recurDay?: number | null): string {
@@ -45,10 +46,12 @@ function addMonth(iso: string, recurDay?: number | null): string {
   return `${ny}-${String(nm).padStart(2, '0')}-${String(nd).padStart(2, '0')}`;
 }
 function fmtDate(iso: string): string {
-  const [y, m, d] = iso.split('-').map(Number);
+  const [y, m, d] = iso.slice(0, 10).split('-').map(Number); // slice: ignore any "THH:MM" tail
   const mon = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'][m - 1];
   return `${d} ${mon}`;
 }
+// " HH:MM" suffix when a visit carries a clock time, else "" — visit_date may be a date or a datetime
+const hhmm = (ts: string) => { const t = String(ts || '').slice(11, 16); return t ? ' ' + t : ''; };
 function dueLabel(dueISO: string, todayISO: string): string {
   const n = daysBetween(todayISO, dueISO);
   if (n < 0) return `⚠️ vencido hace ${-n}d (era ${fmtDate(dueISO)})`;
@@ -127,7 +130,7 @@ const HELP = [
   '• Quita un error: "borra lo de la farmacia".',
   '• Pregunta: "¿qué hay pendiente?"',
   '• Pega el link de un apartamento y lo guardo con precio y detalles.',
-  '• Apartamentos: "agenda visita al apto 2 el sábado", "descarta el de Cedritos", "reactiva el apto 1", "el de Chicó nos gustó" (queda como nota), "reintenta" (relee links bloqueados).',
+  '• Apartamentos: responde al mensaje del apto y di "visita el martes a las 10am" y agendo la visita con hora; también "agenda visita al apto 2 el sábado 3pm", "descarta el de Cedritos", "reactiva el apto 1", "el de Chicó nos gustó" (queda como nota), "reintenta" (relee links bloqueados).',
   '📱 App: https://turikumwe.cc',
 ].join('\n');
 
@@ -339,7 +342,7 @@ async function buildDigestBody(env: Env, td: string, header: string): Promise<st
   const visits = await all(env, "SELECT location, title, source_site, id, visit_date FROM apartments WHERE status='active' AND visit_date>=? ORDER BY visit_date", td);
   if (visits.length) {
     out.push('🏢 *Visitas de apartamentos:*\n' + visits.map((v: any) =>
-      `• ${aptName(v)} — ${stripWarn(dueLabel(v.visit_date, td))}`).join('\n'));
+      `• ${aptName(v)} — ${stripWarn(dueLabel(v.visit_date, td))}${hhmm(v.visit_date)}`).join('\n'));
   }
   if (out.length === 1) out.push('_Todo al día — nada pendiente. 🎉_');
   return out.join('\n\n');
@@ -359,6 +362,24 @@ async function sendEveningReminder(env: Env) {
   if (!due.length) return;
   await tgSend(env, '⚠️ *Sigue pendiente hoy:*\n' + due.map((i: any) =>
     `• ${CAT_EMOJI[i.category]} ${i.title} — ${stripWarn(dueLabel(i.due_date, td))}`).join('\n'));
+}
+
+// When the user replies to the message that shared a listing (or the bot's ack for it) and asks to
+// schedule a visit, resolve which apartment so no name is needed: match the shared URL, then the "#id" the ack prints.
+async function replyAptFromMsg(env: Env, msg: any): Promise<{ id: number; name: string } | null> {
+  const rt = msg?.reply_to_message;
+  if (!rt) return null;
+  const t = String(rt.text || rt.caption || '');
+  for (const u of extractUrls(t)) {
+    const row = await get(env, 'SELECT * FROM apartments WHERE url=? LIMIT 1', u);
+    if (row) return { id: row.id, name: aptName(row) };
+  }
+  const m = t.match(/#(\d+)/);
+  if (m) {
+    const row = await get(env, 'SELECT * FROM apartments WHERE id=?', Number(m[1]));
+    if (row) return { id: row.id, name: aptName(row) };
+  }
+  return null;
 }
 
 // ================= TELEGRAM UPDATE PROCESSING =================
@@ -414,6 +435,7 @@ async function handleUpdate(env: Env, update: any) {
   const blockedCount = (await get(env, "SELECT COUNT(*) c FROM apartments WHERE status='active' AND scrape_status!='ok'"))?.c || 0;
   const aptList = (await all(env, "SELECT id, location, title, deal_type, visit_date FROM apartments WHERE status='active' ORDER BY created_at DESC")).map((a: any) => ({ id: a.id, name: (a.location || a.title || ('apto ' + a.id)), deal: a.deal_type, visit: a.visit_date }));
   const ruledList = (await all(env, "SELECT id, location, title, deal_type FROM apartments WHERE status='ruled_out' ORDER BY updated_at DESC")).map((a: any) => ({ id: a.id, name: (a.location || a.title || ('apto ' + a.id)), deal: a.deal_type }));
+  const replyApt = await replyAptFromMsg(env, msg); // set when this message replies to an apartment message
 
   const sys = [
     'You are the parser for a household logging assistant used by a couple in a Telegram group to track home life.',
@@ -427,7 +449,7 @@ async function handleUpdate(env: Env, update: any) {
     '  {"action":"query"}   (user is asking what is pending / what is on the list)',
     '  {"action":"none"}    (chit-chat, greeting, nothing to track)',
     '  {"action":"rescrape"} (user asks to retry reading an apartment listing that could not be read automatically: "reintenta", "vuelve a intentar el scraping", "intenta de nuevo")',
-    '  {"action":"set_visit","apt_id":<id from APARTMENTS>,"visit_date":"YYYY-MM-DD"|null} (user schedules a visit to an apartment: "voy a visitar el de Chico Norte el sábado", "la visita del apto 2 es el 20", "agenda visita apto 1 mañana"; use visit_date=null to cancel a visit)',
+    '  {"action":"set_visit","apt_id":<id from APARTMENTS>,"visit_date":"YYYY-MM-DDTHH:MM"|"YYYY-MM-DD"|null} (user schedules a visit to an apartment: "visito el de Chicó el martes a las 10am", "la visita del apto 2 es el 20 a las 3pm", "agenda visita apto 1 mañana"; include the clock time as THH:MM in 24h when the user gives one — "10am"=>T10:00, "3pm"=>T15:00 — otherwise date only; visit_date=null cancels a visit)',
     '  {"action":"rule_out","apt_id":<id from APARTMENTS>,"reason":"<short reason>"|null} (user wants to discard / stop considering an apartment: "descarta el apto 2", "ya no me interesa el de Chico Norte", "quita el más caro", "bájalo de la lista", "rule out the Cedritos one"; if they say why, capture a short reason like "muy caro", "muy lejos", "sin parqueadero")',
     '  {"action":"reactivate","apt_id":<id from RULED OUT>} (user wants to reconsider a previously discarded apartment: "vuelve a considerar el apto 2", "reactiva el de Chico Norte", "devuelve el descartado a la lista")',
     '  {"action":"apt_note","apt_id":<id from APARTMENTS>,"note":"<short note>"} (user records an opinion or fact about an apartment, often after a visit: "el de Chico Norte nos encantó", "apto 2: cocina pequeña pero buena luz", "el de Cedritos tiene mala vista")',
@@ -446,6 +468,7 @@ async function handleUpdate(env: Env, update: any) {
     'OPEN ITEMS: ' + JSON.stringify(openForModel),
     'APARTMENTS (active — for set_visit / rule_out): ' + JSON.stringify(aptList),
     'RULED OUT (for reactivate): ' + JSON.stringify(ruledList),
+    ...(replyApt ? ['REPLIED-TO APARTMENT (this message is a reply to a message about this apartment): ' + JSON.stringify(replyApt) + '. When the user says "this"/"it"/"the apartment" or schedules a visit / rules it out / adds a note without naming which apartment, use apt_id=' + replyApt.id + '.'] : []),
   ].join('\n');
 
   let ops: any[] = [];
@@ -504,7 +527,7 @@ async function handleUpdate(env: Env, update: any) {
       const arow = await get(env, "SELECT * FROM apartments WHERE id=? AND status='active'", op.apt_id);
       if (arow) {
         await run(env, 'UPDATE apartments SET visit_date=?, updated_at=? WHERE id=?', vd, new Date().toISOString(), op.apt_id);
-        visitsSet.push((arow.location || arow.title || ('apto ' + arow.id)) + (vd ? (' → ' + dueLabel(vd, td)) : ' (visita cancelada)'));
+        visitsSet.push((arow.location || arow.title || ('apto ' + arow.id)) + (vd ? (' → ' + dueLabel(vd, td) + hhmm(vd)) : ' (visita cancelada)'));
       }
     } else if (op.action === 'rule_out' && op.apt_id != null) {
       const arow = await get(env, "SELECT * FROM apartments WHERE id=? AND status='active'", op.apt_id);
@@ -619,7 +642,7 @@ async function homePage(env: Env): Promise<Response> {
   const aptCount = Number((await get(env, "SELECT COUNT(*) c FROM apartments WHERE status='active'"))?.c || 0);
   const nv = await get(env, "SELECT visit_date FROM apartments WHERE status='active' AND visit_date>=? ORDER BY visit_date LIMIT 1", td);
   let aptMeta = aptCount ? `${aptCount} activo${aptCount === 1 ? '' : 's'}` : 'Aún no hay apartamentos';
-  if (nv) aptMeta += ` · visita ${fmtDate(nv.visit_date)}`;
+  if (nv) aptMeta += ` · visita ${fmtDate(nv.visit_date)}${hhmm(nv.visit_date)}`;
   const todayLabel = new Intl.DateTimeFormat('es-CO', { timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long' }).format(new Date());
   // function replacers: apt meta can carry '$'-containing amounts that String.replace would mangle
   return html(homeHtml.replace('{{TODAY}}', () => todayLabel).replace('{{HH_META}}', () => hhMeta).replace('{{APT_META}}', () => aptMeta));
@@ -682,7 +705,7 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
     const vd = (b.visit_date == null || b.visit_date === '') ? null : String(b.visit_date);
     await run(env, 'UPDATE apartments SET visit_date=?, updated_at=? WHERE id=?', vd, new Date().toISOString(), id);
     const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
-    if (row) echo(vd ? `📅 Visita a *${aptName(row)}* → ${fmtDate(vd)}${via}` : `📅 Visita a *${aptName(row)}* cancelada${via}`);
+    if (row) echo(vd ? `📅 Visita a *${aptName(row)}* → ${fmtDate(vd)}${hhmm(vd)}${via}` : `📅 Visita a *${aptName(row)}* cancelada${via}`);
     return json({ ok: true, row });
   }
   if (b.action === 'rule_out') {
