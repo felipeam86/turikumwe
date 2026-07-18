@@ -20,12 +20,28 @@
   nav a:active{border-color:var(--accent);color:var(--accent);}
   nav a.on{color:var(--fg);border-color:var(--accent);background:rgba(122,162,255,.12);}
   .sub{color:var(--muted);font-size:13px;margin-bottom:16px;}
-  .visits{background:var(--bg-raised);border:1px solid var(--accent);border-radius:14px;padding:10px 16px;margin-bottom:6px;}
-  .visits .vt{font-size:13px;font-weight:600;color:var(--accent);margin-bottom:2px;}
-  .visits .vrow{padding:6px 0;border-top:1px solid var(--border);font-size:14px;display:flex;gap:10px;align-items:baseline;}
-  .visits .vrow:first-of-type{border-top:none;}
-  .visits .vd2{font-weight:600;white-space:nowrap;}
-  .visits .vwho{color:var(--muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;}
+  /* weekly visits calendar */
+  .cal{background:var(--bg-raised);border:1px solid var(--accent);border-radius:14px;padding:12px 14px;margin-bottom:6px;}
+  .calhead{display:flex;align-items:center;gap:8px;margin-bottom:10px;}
+  .calhead .vt{font-size:13px;font-weight:600;color:var(--accent);}
+  .calnav{margin-left:auto;display:flex;align-items:center;gap:6px;}
+  .calnav button{font-family:inherit;font-size:16px;font-weight:600;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:10px;min-width:42px;min-height:42px;cursor:pointer;padding:0;}
+  .calnav button:active{border-color:var(--accent);color:var(--accent);}
+  .calweek{font-size:12px;font-weight:600;color:var(--muted);text-align:center;min-width:104px;white-space:nowrap;}
+  /* phones: 2–3 day columns visible, swipe right for the rest */
+  .caldays{display:flex;gap:8px;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;padding-bottom:2px;}
+  .calday{flex:0 0 40vw;max-width:190px;min-height:96px;scroll-snap-align:start;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:8px;}
+  /* desktop: the full week side by side */
+  @media(min-width:760px){.caldays{overflow-x:visible;}.calday{flex:1 1 0;max-width:none;min-width:0;}}
+  .calday .dh{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;white-space:nowrap;}
+  .calday.today{border-color:var(--accent);}
+  .calday.today .dh{color:var(--accent);}
+  .calday.past{opacity:.55;}
+  .vcard{background:var(--bg-raised);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:8px;padding:7px 8px;margin-top:6px;font-size:12px;overflow-wrap:break-word;}
+  .vcard .vtime{font-weight:700;color:var(--accent);font-size:11px;}
+  .vcard .vloc{font-weight:700;font-size:13px;line-height:1.3;margin:1px 0 2px;}
+  .vcard .vmeta{color:var(--muted);line-height:1.5;}
+  .vcard .vmeta a{color:var(--accent);text-decoration:none;}
   h2.sect{font-size:15px;margin:20px 2px 10px;font-weight:600;display:flex;align-items:center;gap:8px;}
   .count{color:var(--muted);font-weight:400;font-size:12px;}
   .grid{display:grid;gap:12px;grid-template-columns:1fr;}
@@ -365,15 +381,71 @@ function fmtVisit(s){try{
   var t=s.length>10?s.slice(11,16):""; // wall-clock as typed; no TZ math on the time
   return t?day+" "+t:day;
 }catch(e){return s;}}
-function visitsStrip(rows){
-  var vis=rows.filter(function(r){return r.visit_date&&r.visit_date>=(DATA.today||"");})
+// ---- weekly visits calendar ----
+// all date math on YYYY-MM-DD strings anchored at UTC midnight, so the wall-clock dates
+// stored in visit_date never shift with the browser's timezone
+var WEEK_START=null; // Monday shown on screen; first render picks the week of the next visit
+function parseDay(s){return new Date(s.slice(0,10)+"T00:00:00Z");}
+function dayStr(d){return d.toISOString().slice(0,10);}
+function addDays(s,n){var d=parseDay(s);d.setUTCDate(d.getUTCDate()+n);return dayStr(d);}
+function mondayOf(s){var d=parseDay(s);d.setUTCDate(d.getUTCDate()-((d.getUTCDay()+6)%7));return dayStr(d);}
+function fmtDayHead(s){try{return parseDay(s).toLocaleDateString("es-CO",{timeZone:"UTC",weekday:"short",day:"numeric"});}catch(e){return s;}}
+function weekLabel(a,b){try{
+  var da=parseDay(a),db=parseDay(b);
+  var oa={timeZone:"UTC",day:"numeric"},ob={timeZone:"UTC",day:"numeric",month:"short"};
+  if(da.getUTCMonth()!==db.getUTCMonth())oa.month="short";
+  if(da.getUTCFullYear()!==db.getUTCFullYear()){oa.year="numeric";ob.year="numeric";}
+  return da.toLocaleDateString("es-CO",oa)+" – "+db.toLocaleDateString("es-CO",ob);
+}catch(e){return a+" – "+b;}}
+function visitCalendar(rows){
+  var vis=rows.filter(function(r){return r.visit_date;})
     .sort(function(a,b){return a.visit_date<b.visit_date?-1:1;});
   if(!vis.length)return "";
-  var h="<div class=\"visits\"><div class=\"vt\">📅 Próximas visitas</div>";
-  for(var i=0;i<vis.length;i++){var r=vis[i];
-    h+="<div class=\"vrow\"><span class=\"vd2\">"+fmtVisit(r.visit_date)+"</span><span class=\"vwho\">"+esc(aptName(r))+"</span></div>";
+  var td=(DATA.today||"").slice(0,10);
+  if(!WEEK_START){
+    var next=null;
+    for(var i=0;i<vis.length;i++)if(vis[i].visit_date.slice(0,10)>=td){next=vis[i].visit_date;break;}
+    WEEK_START=mondayOf(next?next.slice(0,10):(td||vis[vis.length-1].visit_date.slice(0,10)));
   }
-  h+="</div>";return h;
+  var byDay={};
+  for(var j=0;j<vis.length;j++){var k=vis[j].visit_date.slice(0,10);(byDay[k]=byDay[k]||[]).push(vis[j]);}
+  var end=addDays(WEEK_START,6);
+  // day the phone view scrolls to: today if on screen, else the week's first day with a visit
+  var focus=null;
+  if(td>=WEEK_START&&td<=end)focus=td;
+  else for(var f=0;f<7;f++){var fd=addDays(WEEK_START,f);if(byDay[fd]){focus=fd;break;}}
+  var h="<div class=\"cal\"><div class=\"calhead\"><span class=\"vt\">📅 Próximas visitas</span>";
+  h+="<div class=\"calnav\"><button class=\"cal-prev\" aria-label=\"Semana anterior\">‹</button>";
+  h+="<span class=\"calweek\">"+esc(weekLabel(WEEK_START,end))+"</span>";
+  h+="<button class=\"cal-next\" aria-label=\"Semana siguiente\">›</button></div></div>";
+  h+="<div class=\"caldays\" id=\"caldays\">";
+  for(var d=0;d<7;d++){
+    var ds=addDays(WEEK_START,d);
+    var cls="calday"+(ds===td?" today":(td&&ds<td?" past":""))+(ds===focus?" focus":"");
+    h+="<div class=\""+cls+"\"><div class=\"dh\">"+esc(fmtDayHead(ds))+"</div>";
+    var list=byDay[ds]||[];
+    for(var v=0;v<list.length;v++){var r=list[v];
+      var t=r.visit_date.length>10?r.visit_date.slice(11,16):"";
+      h+="<div class=\"vcard\">";
+      if(t)h+="<div class=\"vtime\">"+esc(t)+"</div>";
+      h+="<div class=\"vloc\">"+esc(aptName(r))+"</div>";
+      var m=[];
+      if(r.address)m.push("📍 "+esc(r.address));
+      if(r.agent_name)m.push("👤 "+esc(r.agent_name));
+      if(r.agent_phone)m.push("📞 <a href=\"tel:"+esc(r.agent_phone)+"\">"+esc(r.agent_phone)+"</a>");
+      if(m.length)h+="<div class=\"vmeta\">"+m.join("<br>")+"</div>";
+      h+="</div>";
+    }
+    h+="</div>";
+  }
+  h+="</div></div>";
+  return h;
+}
+function snapCalendar(){ // phones: bring the focus day into view after each render
+  var wrap=document.getElementById("caldays");
+  if(!wrap||wrap.scrollWidth<=wrap.clientWidth)return;
+  var cell=wrap.querySelector(".calday.focus");
+  if(cell)wrap.scrollLeft+=cell.getBoundingClientRect().left-wrap.getBoundingClientRect().left;
 }
 function ruledDate(s){if(!s)return "";try{return new Date(s).toLocaleDateString("es-CO",{day:"2-digit",month:"short"});}catch(e){return "";}}
 function ruledSection(list){
@@ -400,7 +472,8 @@ function render(){
   // toLocaleDateString returns the string "Invalid Date" (never throws) on bad input, so guard explicitly
   var niceDay="";if(DATA.today){var nd=new Date(DATA.today+"T00:00:00Z");niceDay=isNaN(nd)?DATA.today:nd.toLocaleDateString("es-CO",{timeZone:"UTC",weekday:"long",day:"numeric",month:"long"});}
   document.getElementById("sub").textContent=parts.join(" · ")+" · "+niceDay;
-  document.getElementById("visits").innerHTML=visitsStrip(rows);
+  document.getElementById("visits").innerHTML=visitCalendar(rows);
+  snapCalendar();
   // reflect the active view on the toggle (only visible on desktop)
   var vt=document.getElementById("viewtoggle").getElementsByTagName("button");
   for(var t=0;t<vt.length;t++)vt[t].className="vt-btn"+(vt[t].getAttribute("data-view")===VIEW?" on":"");
@@ -432,6 +505,8 @@ document.addEventListener("change",function(e){
 document.addEventListener("click",function(e){
   var el=e.target;if(!el.classList)return;
   if(el.classList.contains("vt-btn")){VIEW=el.getAttribute("data-view");localStorage.setItem("aptView",VIEW);render();return;}
+  if(el.classList.contains("cal-prev")){WEEK_START=addDays(WEEK_START,-7);render();return;}
+  if(el.classList.contains("cal-next")){WEEK_START=addDays(WEEK_START,7);render();return;}
   if(el.classList.contains("sortable")){var k=el.getAttribute("data-sort");if(SORT.key===k)SORT.dir=-SORT.dir;else{SORT.key=k;SORT.dir=1;}render();return;}
   var ecCell=el.classList.contains("ec")?el:(el.closest?el.closest(".ec"):null);
   if(ecCell){beginEdit(ecCell);return;}
