@@ -183,6 +183,15 @@
   .arow .atime.tbd{color:var(--muted);font-weight:400;font-style:italic;font-size:11px;min-width:0;}
   .arow .aname{font-weight:600;font-size:14px;color:var(--fg);text-decoration:none;flex:1;min-width:0;overflow-wrap:break-word;}
   .arow .aloc a{color:var(--accent);text-decoration:none;font-size:15px;}
+  /* post-visit follow-up block */
+  .fublock{display:flex;flex-direction:column;gap:8px;}
+  .furow{background:var(--bg-raised);border:1px solid var(--border);border-radius:12px;padding:12px;}
+  .furow .fuinfo{display:flex;align-items:baseline;gap:8px;justify-content:space-between;flex-wrap:wrap;margin-bottom:10px;}
+  .furow .funame{font-weight:700;font-size:14px;color:var(--fg);text-decoration:none;}
+  .furow .fuwhen{color:var(--muted);font-size:12px;}
+  .furow .fuact{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+  .furow .fuact .act{min-height:42px;}
+  @media(min-width:760px){.furow .fuact{display:flex;}.furow .fuact .act{flex:0 0 auto;}}
 </style></head><body>
 <div class="wrap">
   <nav><a href="/">⌂</a><a href="/dashboard.html">🏠 Hogar</a><a class="on" href="/apartments.html">🏢 Apartamentos</a></nav>
@@ -192,6 +201,7 @@
     <button class="vt-btn" data-view="table">▤ Tabla</button>
   </div></div>
   <div id="visits"></div>
+  <div id="followup"></div>
   <div id="root"></div>
   <div id="ruledRoot"></div>
   <div class="foot">Fija la fecha y hora de visita, vuelve a leer un link, o descarta un apartamento aquí.<br>También puedes responder al mensaje del apto en Telegram: "visita el martes a las 10am".<br>Al agendar o mover una visita, la invitación de calendario llega al correo de ambos.</div>
@@ -650,6 +660,41 @@ function agendaMobile(rows){
   var clash=allOverlaps(up); // same double-booking flag as the desktop strip
   return heroCard(up[0],now,todayStr,clash[up[0].id])+agendaList(up.slice(1),now,todayStr,clash);
 }
+// ---- post-visit follow-up: «Visitadas — ¿cómo les fue?» ----
+// active apartments whose visit is in the past (within 7 days) and still without feedback.
+// only actives are passed in, so ruled-out ones are excluded automatically; a note stamped
+// on/after the visit day (from web or Telegram) also counts as feedback and hides the row.
+function followupBlock(rows){
+  var now=nowBogota(),todayStr=(DATA.today||now.slice(0,10)).slice(0,10),weekAgo=addDays(todayStr,-7);
+  var due=rows.filter(function(r){
+    if(!r.visit_date)return false;
+    var vd=r.visit_date,day=vd.slice(0,10);
+    var past=vd.length>10?(vd<now):(day<todayStr);
+    if(!past||day<weekAgo)return false; // future, or older than 7 days (no eternal nag)
+    if(r.notes){
+      var lines=String(r.notes).split("\n");
+      for(var i=0;i<lines.length;i++){
+        var m=lines[i].match(NOTE_RE),stamp=m?m[1]:lines[i].slice(0,10);
+        if(/^\d{4}-\d{2}-\d{2}$/.test(stamp)&&stamp>=day)return false; // already noted since the visit
+      }
+    }
+    return true;
+  }).sort(function(a,b){return a.visit_date<b.visit_date?1:-1;}); // most recent visit first
+  if(!due.length)return "";
+  var h="<h2 class=\"sect\">🗣 Visitadas — ¿cómo les fue? <span class=\"count\">"+due.length+"</span></h2><div class=\"fublock\">";
+  for(var j=0;j<due.length;j++){var r=due[j];
+    h+="<div class=\"furow\"><div class=\"fuinfo\">";
+    h+="<a class=\"funame\" href=\"#apt-"+r.id+"\">"+esc(aptName(r))+"</a>";
+    h+="<span class=\"fuwhen\">"+esc(fmtVisit(r.visit_date))+"</span></div>";
+    h+="<div class=\"fuact\">";
+    h+="<button class=\"act sm fbup\" data-id=\""+r.id+"\">👍 Nos gustó</button>";
+    h+="<button class=\"act sm fbdn\" data-id=\""+r.id+"\">👎 No</button>";
+    h+="<button class=\"act sm nt\" data-id=\""+r.id+"\">📝 Nota</button>";
+    h+="<button class=\"act sm danger ro\" data-id=\""+r.id+"\">🚫 Descartar</button>";
+    h+="</div></div>";
+  }
+  return h+"</div>";
+}
 function ruledDate(s){if(!s)return "";try{return new Date(s).toLocaleDateString("es-CO",{day:"2-digit",month:"short"});}catch(e){return "";}}
 function ruledSection(list){
   if(!list.length)return "";
@@ -694,6 +739,8 @@ function render(){
   // desktop keeps the weekly strip; phones get the "next visit" hero + day list
   document.getElementById("visits").innerHTML=isDesktop()?visitCalendar(rows):agendaMobile(rows);
   if(isDesktop())snapCalendar();
+  // post-visit follow-up sits between the agenda and the cards/table, in both views
+  document.getElementById("followup").innerHTML=followupBlock(rows);
   // reflect the active view on the toggle (only visible on desktop)
   var vt=document.getElementById("viewtoggle").getElementsByTagName("button");
   for(var t=0;t<vt.length;t++)vt[t].className="vt-btn"+(vt[t].getAttribute("data-view")===VIEW?" on":"");
@@ -752,6 +799,17 @@ document.addEventListener("click",function(e){
     inp.addEventListener("input",function(){dirty=true;});
     inp.addEventListener("keydown",function(e){if(e.key==="Escape"){dirty=false;render();}});
     inp.addEventListener("blur",function(){setTimeout(function(){if(!dirty)render();},150);});
+    return;
+  }
+  if(el.classList.contains("fbup")||el.classList.contains("fbdn")){
+    // one-tap post-visit verdict: a canned, stamped note (echoes to Telegram); the reload hides the row
+    var id=Number(el.getAttribute("data-id"));
+    var note=el.classList.contains("fbup")?"👍 nos gustó":"👎 no nos gustó";
+    el.disabled=true;
+    action({action:"apt_note",id:id,note:note}).then(function(res){
+      if(res&&res.ok){toast("Guardado ✓");}else{toast("Error al guardar");}
+      return load();
+    }).catch(function(){toast("Error de red");render();});
     return;
   }
   if(el.classList.contains("sortable")){var k=el.getAttribute("data-sort");if(SORT.key===k)SORT.dir=-SORT.dir;else{SORT.key=k;SORT.dir=1;}render();return;}
