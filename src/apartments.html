@@ -136,6 +136,12 @@
   .sheet input{display:block;width:100%;margin-top:4px;font-family:inherit;font-size:16px;min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:10px;padding:6px 10px;}
   .mctrl{display:flex;gap:8px;margin-top:4px;}
   .mctrl .act{flex:1;}
+  /* date-only visit: the time isn't agreed yet */
+  .visit .k .tbd{display:block;font-size:10px;font-weight:400;font-style:italic;color:var(--muted);}
+  .vcard .vtime.tbd{color:var(--muted);font-weight:400;font-style:italic;}
+  /* deep-link target flash (#apt-<id> from Telegram acks) */
+  .hilite{animation:hilite 1.8s ease-out;}
+  @keyframes hilite{from{outline:3px solid var(--accent);outline-offset:2px;}to{outline:3px solid transparent;outline-offset:2px;}}
 </style></head><body>
 <div class="wrap">
   <nav><a href="/">⌂</a><a href="/dashboard.html">🏠 Hogar</a><a class="on" href="/apartments.html">🏢 Apartamentos</a></nav>
@@ -165,6 +171,7 @@ function aptName(r){return r.location||r.title||r.source_site||("apto "+r.id);}
 // WhatsApp deep link: wa.me needs a full international number, digits only.
 // Bare 10-digit Colombian mobiles (start with 3) get the +57 country code.
 function waLink(phone){var d=String(phone||"").replace(/\D/g,"");if(d.length===10&&d.charAt(0)==="3")d="57"+d;return "https://wa.me/"+d;}
+function mapsLink(addr){return "https://maps.google.com/?q="+encodeURIComponent(addr);}
 function mny(n){return (n==null||isNaN(Number(n)))?"—":"$"+Number(n).toLocaleString("es-CO");}
 function toast(t){var el=document.getElementById("toast");el.textContent=t;el.classList.add("show");setTimeout(function(){el.classList.remove("show");},1800);}
 function num(v){return v==null?"—":v;}
@@ -190,7 +197,7 @@ function card(r,best,isRent){
   var vd=r.visit_date?esc(r.visit_date):"";
   // datetime-local needs YYYY-MM-DDTHH:MM; pad legacy date-only visits with an editable 09:00 default
   var vdInput=(vd&&vd.indexOf("T")<0)?vd+"T09:00":vd;
-  var h="<div class=\"apt\">";
+  var h="<div class=\"apt\" id=\"apt-"+r.id+"\">";
   if(r.image_url)h+="<img class=\"photo\" src=\""+esc(r.image_url)+"\" loading=\"lazy\" alt=\"\" onerror=\"this.remove()\">";
   h+="<div class=\"head\"><div class=\"loc\">"+esc(aptName(r))+flag+(r.tag?tagChip(r.tag):"")+sub+"</div>";
   if(isRent&&r.price!=null){
@@ -216,11 +223,13 @@ function card(r,best,isRent){
   if(rn)h+="<div class=\"note\">“"+esc(rn)+"”</div>";
   if(r.notes)h+="<div class=\"note\">📝 "+esc(r.notes)+"</div>";
   var contact=[];
-  if(r.address)contact.push("📍 "+esc(r.address));
+  if(r.address)contact.push("📍 <a class=\"tel\" href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\">"+esc(r.address)+"</a>");
   if(r.agent_name)contact.push("👤 "+esc(r.agent_name));
   if(r.agent_phone)contact.push("📞 <a class=\"tel\" href=\"tel:"+esc(r.agent_phone)+"\">"+esc(r.agent_phone)+"</a>");
   if(contact.length)h+="<div class=\"contact\">"+contact.join("<br>")+"</div>";
-  h+="<div class=\"visit\"><span class=\"k\">Visita</span><input type=\"datetime-local\" data-id=\""+r.id+"\" class=\"vd\" value=\""+vdInput+"\"></div>";
+  // a stored date without T means the time isn't agreed yet — say so instead of showing the padded 09:00 as fact
+  var tbd=(vd&&vd.indexOf("T")<0)?"<span class=\"tbd\">hora por definir</span>":"";
+  h+="<div class=\"visit\"><span class=\"k\">Visita"+tbd+"</span><input type=\"datetime-local\" data-id=\""+r.id+"\" class=\"vd\" value=\""+vdInput+"\"></div>";
   h+="<div class=\"ctrl\"><button class=\"act ed\" data-id=\""+r.id+"\">Editar</button>";
   h+="<button class=\"act nt\" data-id=\""+r.id+"\">Nota</button>";
   h+="<button class=\"act rs\" data-id=\""+r.id+"\">Releer</button>";
@@ -291,6 +300,8 @@ function cellDisplay(r,c){
   if(c.k==="price")return r.price==null?"":mny(r.price)+(isRent?"/mes":"");
   if(c.k==="admin_fee")return r.admin_fee==null?"":mny(r.admin_fee);
   if(c.k==="ppm")return mny(ppmOf(r,isRent));
+  // the cell stays click-to-edit; the small 🗺 anchor rides along (the click handler lets anchors through)
+  if(c.k==="address")return r.address?esc(r.address)+" <a href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\" aria-label=\"Cómo llegar\">🗺</a>":"";
   if(c.k==="visit_date")return r.visit_date?esc(fmtVisit(r.visit_date)):"";
   if(c.k==="actions"){
     var a="<div class=\"rowact\">";
@@ -302,7 +313,7 @@ function cellDisplay(r,c){
   return r[c.k]==null?"":esc(r[c.k]);
 }
 function tableRow(r){
-  var h="<tr>";
+  var h="<tr id=\"apt-"+r.id+"\">";
   for(var i=0;i<COLS.length;i++){var c=COLS[i];
     var disp=cellDisplay(r,c);
     if(c.edit){
@@ -385,7 +396,7 @@ function closeEdit(){EDIT_ID=null;document.getElementById("editModal").classList
 function fmtVisit(s){try{
   var day=new Date(s.slice(0,10)+"T00:00:00Z").toLocaleDateString("es-CO",{timeZone:"UTC",weekday:"short",day:"numeric",month:"short"});
   var t=s.length>10?s.slice(11,16):""; // wall-clock as typed; no TZ math on the time
-  return t?day+" "+t:day;
+  return t?day+" "+t:day+" · hora por definir";
 }catch(e){return s;}}
 // ---- weekly visits calendar ----
 // all date math on YYYY-MM-DD strings anchored at UTC midnight, so the wall-clock dates
@@ -434,12 +445,13 @@ function visitCalendar(rows){
       var t=r.visit_date.length>10?r.visit_date.slice(11,16):"";
       h+="<div class=\"vcard\">";
       if(t)h+="<div class=\"vtime\">"+esc(t)+"</div>";
+      else h+="<div class=\"vtime tbd\">hora por definir</div>";
       h+="<div class=\"vloc\">";
       if(r.url)h+="<a href=\""+esc(r.url)+"\" target=\"_blank\" rel=\"noopener\">"+esc(aptName(r))+"<span class=\"ext\">↗</span></a>";
       else h+=esc(aptName(r));
       h+="</div>";
       var m=[];
-      if(r.address)m.push("📍 "+esc(r.address));
+      if(r.address)m.push("📍 <a href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\">"+esc(r.address)+"</a>");
       if(r.agent_name)m.push("👤 "+esc(r.agent_name));
       if(r.agent_phone)m.push("💬 <a href=\""+esc(waLink(r.agent_phone))+"\" target=\"_blank\" rel=\"noopener\">"+esc(r.agent_phone)+"</a>");
       if(m.length)h+="<div class=\"vmeta\">"+m.join("<br>")+"</div>";
@@ -467,13 +479,29 @@ function ruledSection(list){
     var bits=[deal,pr!=="—"?pr:"",r.area_m2?(r.area_m2+" m²"):"",r.price_per_m2?("≈"+mny(r.price_per_m2)+"/m²"):""].filter(Boolean).join(" · ");
     var reason=r.ruled_out_reason?"<span class=\"reason\">"+esc(r.ruled_out_reason)+"</span>":"";
     var when=ruledDate(r.ruled_out_at)?("descartado "+ruledDate(r.ruled_out_at)):"";
-    h+="<div class=\"rrow\"><span class=\"rloc\">"+esc(aptName(r))+"</span>"+reason;
+    h+="<div class=\"rrow\" id=\"apt-"+r.id+"\"><span class=\"rloc\">"+esc(aptName(r))+"</span>"+reason;
     h+="<span class=\"rmeta\">"+esc(bits)+"</span><span class=\"grow\"></span>";
     h+="<span class=\"rmeta\">"+when+"</span>";
     if(r.url)h+="<a class=\"link\" href=\""+esc(r.url)+"\" target=\"_blank\">link</a>";
     h+="<button class=\"act re\" data-id=\""+r.id+"\">Reconsiderar</button></div>";
   }
   h+="</div></details>";return h;
+}
+// deep link from Telegram acks: #apt-<id> scrolls to and briefly highlights that card/row.
+// one-shot (HASH_DONE) so week-nav / resize re-renders don't re-trigger the jump
+var HASH_DONE=false;
+function jumpToHash(){
+  if(HASH_DONE)return;
+  var m=(location.hash||"").match(/^#apt-(\d+)$/);
+  if(!m)return;
+  var el=document.getElementById("apt-"+m[1]);
+  if(!el)return;
+  HASH_DONE=true;
+  var det=el.closest?el.closest("details.ruled"):null;
+  if(det)det.open=true;
+  el.scrollIntoView({block:"start"});
+  el.classList.add("hilite");
+  setTimeout(function(){el.classList.remove("hilite");},2000);
 }
 function render(){
   var rows=DATA.apartments||[];var ruled=DATA.ruledOut||[];
@@ -499,6 +527,7 @@ function render(){
     document.getElementById("root").innerHTML=section("🛒 Compra",buy,false)+section("🔑 Arriendo",rent,true)+section("❔ Sin clasificar",unk,false);
   }
   document.getElementById("ruledRoot").innerHTML=ruledSection(ruled);
+  jumpToHash();
 }
 function load(){return fetch("apartments-data.json").then(function(r){if(!r.ok)throw 0;return r.json();}).then(function(d){DATA=d;render();});}
 // a full-page reload (href="") lets Cloudflare Access run its login redirect, which fetch cannot follow
@@ -514,6 +543,8 @@ document.addEventListener("change",function(e){
 });
 document.addEventListener("click",function(e){
   var el=e.target;if(!el.classList)return;
+  // links inside editable cells (e.g. the 🗺 maps anchor) must navigate, not begin an edit
+  if(el.closest&&el.closest("a"))return;
   if(el.classList.contains("vt-btn")){VIEW=el.getAttribute("data-view");localStorage.setItem("aptView",VIEW);render();return;}
   if(el.classList.contains("cal-prev")){WEEK_START=addDays(WEEK_START,-7);render();return;}
   if(el.classList.contains("cal-next")){WEEK_START=addDays(WEEK_START,7);render();return;}

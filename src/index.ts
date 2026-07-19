@@ -420,6 +420,9 @@ async function retryBlockedScrapes(env: Env): Promise<{ updated: any[], still: a
   return { updated, still };
 }
 
+// deep link straight to the card in the web app (apartments.html scrolls to and highlights #apt-<id>)
+const aptLink = (id: number | string) => 'https://turikumwe.cc/apartments.html#apt-' + id;
+
 function apartmentAck(rec: any): string {
   const f = rec.f, dt = rec.deal;
   const label = dt === 'rent' ? 'arriendo' : dt === 'buy' ? 'compra' : 'sin especificar (dime si es compra o arriendo)';
@@ -442,7 +445,7 @@ function apartmentAck(rec: any): string {
   if (!rec.scr.ok) {
     lines.push('_No pude leer la página automáticamente (' + rec.scr.blocked + '). Guardé lo que escribiste; escribe "reintenta" para volver a probar._');
   }
-  lines.push('Míralo en la app → pantalla *Apartamentos*.');
+  lines.push(aptLink(rec.id));
   return lines.join('\n');
 }
 
@@ -537,11 +540,11 @@ async function handleUpdate(env: Env, update: any) {
         const rec = await ingestApartment(env, u, text, who);
         if (rec.reread) {
           acks.push(rec.ok
-            ? '🔄 Ya lo tenías (#' + rec.id + ') y no se había podido leer — lo releí ahora. Míralo en la app.'
-            : '🔁 Ya lo tenías guardado: *' + rec.name + '* #' + rec.id + '. Sigo sin poder leer la página (' + (rec.blocked || 'error') + ').');
+            ? '🔄 Ya lo tenías (#' + rec.id + ') y no se había podido leer — lo releí ahora.\n' + aptLink(rec.id)
+            : '🔁 Ya lo tenías guardado: *' + rec.name + '* #' + rec.id + '. Sigo sin poder leer la página (' + (rec.blocked || 'error') + ').\n' + aptLink(rec.id));
         } else if (rec.dup) {
           const st = rec.status === 'ruled_out' ? ' — estaba *descartado*' + (rec.reason ? ' (' + rec.reason + ')' : '') : '';
-          acks.push('🔁 Ya lo tenías guardado: *' + rec.name + '* #' + rec.id + st + '.');
+          acks.push('🔁 Ya lo tenías guardado: *' + rec.name + '* #' + rec.id + st + '.\n' + aptLink(rec.id));
         } else if (rec.skipped) {
           acks.push('🔗 Ese link no parece un anuncio de apartamento — no lo guardé. Si sí lo es, reenvíalo diciendo que es un apto.');
         } else {
