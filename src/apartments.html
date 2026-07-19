@@ -44,7 +44,12 @@
   .vcard .vloc a .ext{color:var(--accent);font-size:11px;font-weight:600;margin-left:3px;vertical-align:baseline;}
   .vcard .vmeta{color:var(--muted);line-height:1.5;}
   .vcard .vmeta a{color:var(--accent);text-decoration:none;}
-  .vcard .iv{margin-top:6px;width:100%;}
+  .vcard .vclash{margin:2px 0 1px;}
+  .vcard .vclash .flag{margin-left:0;}
+  .vcard .vctrls{margin-top:6px;}
+  .vcard .vctrls .iv{width:100%;}
+  .vcard .vact{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:4px;}
+  .vcard .vact .act{padding:5px 0;}
   h2.sect{font-size:15px;margin:20px 2px 10px;font-weight:600;display:flex;align-items:center;gap:8px;}
   .count{color:var(--muted);font-weight:400;font-size:12px;}
   .grid{display:grid;gap:12px;grid-template-columns:1fr;}
@@ -159,6 +164,34 @@
   /* deep-link target flash (#apt-<id> from Telegram acks) */
   .hilite{animation:hilite 1.8s ease-out;}
   @keyframes hilite{from{outline:3px solid var(--accent);outline-offset:2px;}to{outline:3px solid transparent;outline-offset:2px;}}
+  /* mobile agenda: next-visit hero + day-grouped list of the rest */
+  .hero{background:var(--bg-raised);border:1px solid var(--accent);border-radius:14px;padding:14px;margin-bottom:6px;}
+  .hero.empty2{border-color:var(--border);color:var(--muted);font-size:13px;text-align:center;padding:22px 14px;}
+  .hero .hlabel{font-size:12px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.04em;line-height:1.5;}
+  .hero .hname{font-size:19px;font-weight:700;line-height:1.25;margin:5px 0 2px;}
+  .hero .hname a{color:var(--fg);text-decoration:none;}
+  .hero .hmeta{color:var(--muted);font-size:13px;line-height:1.8;margin-top:5px;}
+  .hero .hmeta a{color:var(--accent);text-decoration:none;}
+  .hero .hresch{display:flex;align-items:center;gap:10px;margin-top:12px;}
+  .hero .hresch .k{color:var(--muted);font-size:12px;white-space:nowrap;}
+  .hero .hact{display:flex;gap:8px;margin-top:10px;}
+  .hero .hact .act{flex:1;}
+  .agrp{margin-top:14px;}
+  .agrp .gh{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin:0 2px 6px;}
+  .arow{display:flex;align-items:baseline;gap:10px;padding:9px 11px;background:var(--bg-raised);border:1px solid var(--border);border-radius:10px;margin-bottom:6px;}
+  .arow .atime{font-weight:700;color:var(--accent);font-size:12px;white-space:nowrap;min-width:44px;}
+  .arow .atime.tbd{color:var(--muted);font-weight:400;font-style:italic;font-size:11px;min-width:0;}
+  .arow .aname{font-weight:600;font-size:14px;color:var(--fg);text-decoration:none;flex:1;min-width:0;overflow-wrap:break-word;}
+  .arow .aloc a{color:var(--accent);text-decoration:none;font-size:15px;}
+  /* post-visit follow-up block */
+  .fublock{display:flex;flex-direction:column;gap:8px;}
+  .furow{background:var(--bg-raised);border:1px solid var(--border);border-radius:12px;padding:12px;}
+  .furow .fuinfo{display:flex;align-items:baseline;gap:8px;justify-content:space-between;flex-wrap:wrap;margin-bottom:10px;}
+  .furow .funame{font-weight:700;font-size:14px;color:var(--fg);text-decoration:none;}
+  .furow .fuwhen{color:var(--muted);font-size:12px;}
+  .furow .fuact{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+  .furow .fuact .act{min-height:42px;}
+  @media(min-width:760px){.furow .fuact{display:flex;}.furow .fuact .act{flex:0 0 auto;}}
 </style></head><body>
 <div class="wrap">
   <nav><a href="/">⌂</a><a href="/dashboard.html">🏠 Hogar</a><a class="on" href="/apartments.html">🏢 Apartamentos</a></nav>
@@ -168,6 +201,7 @@
     <button class="vt-btn" data-view="table">▤ Tabla</button>
   </div></div>
   <div id="visits"></div>
+  <div id="followup"></div>
   <div id="root"></div>
   <div id="ruledRoot"></div>
   <div class="foot">Fija la fecha y hora de visita, vuelve a leer un link, o descarta un apartamento aquí.<br>También puedes responder al mensaje del apto en Telegram: "visita el martes a las 10am".<br>Al agendar o mover una visita, la invitación de calendario llega al correo de ambos.</div>
@@ -482,6 +516,23 @@ function weekLabel(a,b){try{
   if(da.getUTCFullYear()!==db.getUTCFullYear()){oa.year="numeric";ob.year="numeric";}
   return da.toLocaleDateString("es-CO",oa)+" – "+db.toLocaleDateString("es-CO",ob);
 }catch(e){return a+" – "+b;}}
+// double-booking: same-day timed visits whose starts are <60 min apart both get flagged.
+// date-only visits have no comparable time, so they never clash.
+function markOverlaps(list){
+  var timed=list.filter(function(r){return r.visit_date&&r.visit_date.length>10;})
+    .sort(function(a,b){return a.visit_date<b.visit_date?-1:1;});
+  var ids={};
+  for(var i=1;i<timed.length;i++){
+    if(wallMs(timed[i].visit_date)-wallMs(timed[i-1].visit_date)<60*60000){ids[timed[i-1].id]=1;ids[timed[i].id]=1;}
+  }
+  return ids;
+}
+// group all upcoming visits by day, flag clashes within each day, merge to one id set
+function allOverlaps(list){
+  var byDay={};for(var i=0;i<list.length;i++){var k=list[i].visit_date.slice(0,10);(byDay[k]=byDay[k]||[]).push(list[i]);}
+  var out={};for(var d in byDay){if(!byDay.hasOwnProperty(d))continue;var m=markOverlaps(byDay[d]);for(var id in m)if(m.hasOwnProperty(id))out[id]=1;}
+  return out;
+}
 function visitCalendar(rows){
   var vis=rows.filter(function(r){return r.visit_date;})
     .sort(function(a,b){return a.visit_date<b.visit_date?-1:1;});
@@ -509,11 +560,13 @@ function visitCalendar(rows){
     var cls="calday"+(ds===td?" today":(td&&ds<td?" past":""))+(ds===focus?" focus":"");
     h+="<div class=\""+cls+"\"><div class=\"dh\">"+esc(fmtDayHead(ds))+"</div>";
     var list=byDay[ds]||[];
+    var clash=markOverlaps(list); // ids clashing on this day
     for(var v=0;v<list.length;v++){var r=list[v];
       var t=r.visit_date.length>10?r.visit_date.slice(11,16):"";
       h+="<div class=\"vcard\">";
       if(t)h+="<div class=\"vtime\">"+esc(t)+"</div>";
       else h+="<div class=\"vtime tbd\">hora por definir</div>";
+      if(clash[r.id])h+="<div class=\"vclash\"><span class=\"flag\">⚠️ choque de horario</span></div>";
       h+="<div class=\"vloc\">";
       if(r.url)h+="<a href=\""+esc(r.url)+"\" target=\"_blank\" rel=\"noopener\">"+esc(aptName(r))+"<span class=\"ext\">↗</span></a>";
       else h+=esc(aptName(r));
@@ -523,7 +576,13 @@ function visitCalendar(rows){
       if(r.agent_name)m.push("👤 "+esc(r.agent_name));
       if(r.agent_phone)m.push("💬 <a href=\""+esc(waLink(r.agent_phone))+"\" target=\"_blank\" rel=\"noopener\">"+esc(r.agent_phone)+"</a>");
       if(m.length)h+="<div class=\"vmeta\">"+m.join("<br>")+"</div>";
-      h+="<button class=\"act sm iv\" data-id=\""+r.id+"\">📧 Invitar</button>";
+      // self-sufficient card: Invitar as-is, plus a compact Reagendar / Nota / Descartar row
+      h+="<div class=\"vctrls\"><button class=\"act sm iv\" data-id=\""+r.id+"\">📧 Invitar</button>";
+      h+="<div class=\"vact\">";
+      h+="<button class=\"act sm rvd\" data-id=\""+r.id+"\" title=\"Reagendar\">📅</button>";
+      h+="<button class=\"act sm nt\" data-id=\""+r.id+"\" title=\"Nota\">📝</button>";
+      h+="<button class=\"act sm danger ro\" data-id=\""+r.id+"\" title=\"Descartar\">🚫</button>";
+      h+="</div></div>";
       h+="</div>";
     }
     h+="</div>";
@@ -536,6 +595,105 @@ function snapCalendar(){ // phones: bring the focus day into view after each ren
   if(!wrap||wrap.scrollWidth<=wrap.clientWidth)return;
   var cell=wrap.querySelector(".calday.focus");
   if(cell)wrap.scrollLeft+=cell.getBoundingClientRect().left-wrap.getBoundingClientRect().left;
+}
+// ---- mobile agenda: "where do I go next" ----
+// desktop keeps visitCalendar()'s weekly strip; phones get this hero + vertical list.
+// "now" as a comparable Bogota wall-clock string, same YYYY-MM-DDTHH:MM shape as visit_date
+function nowBogota(){return new Date().toLocaleString("sv-SE",{timeZone:"America/Bogota"}).slice(0,16).replace(" ","T");}
+// a date-only visit stays "upcoming" until the end of its day, so pad it for the string compare
+function visitCmp(vd){return vd.length>10?vd:vd.slice(0,10)+"T23:59";}
+// wall-clock string -> epoch ms, parsed at UTC so only the delta (not the absolute) matters
+function wallMs(s){return Date.parse(s.slice(0,16)+":00Z");}
+function heroLabel(r,now,todayStr){
+  var day=r.visit_date.slice(0,10),timed=r.visit_date.length>10,t=timed?r.visit_date.slice(11,16):"";
+  var word;
+  if(day===todayStr)word="HOY";
+  else if(day===addDays(todayStr,1))word="MAÑANA";
+  else word=parseDay(day).toLocaleDateString("es-CO",{timeZone:"UTC",weekday:"short",day:"numeric",month:"short"});
+  var parts=[word,t||"hora por definir"];
+  // countdown only for today's timed visits (computed once per render; the page reloads on visibilitychange)
+  if(day===todayStr&&timed){
+    var diff=Math.round((wallMs(r.visit_date)-wallMs(now))/60000);
+    if(diff>=0)parts.push(diff<60?("en "+diff+" min"):("en "+Math.round(diff/60)+" h"));
+  }
+  return parts.join(" · ");
+}
+function heroCard(r,now,todayStr,clash){
+  var h="<div class=\"hero\"><div class=\"hlabel\">"+esc(heroLabel(r,now,todayStr))+(clash?" <span class=\"flag\">⚠️ choque de horario</span>":"")+"</div>";
+  h+="<div class=\"hname\"><a href=\"#apt-"+r.id+"\">"+esc(aptName(r))+"</a></div>";
+  var m=[];
+  if(r.address)m.push("📍 <a href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\">"+esc(r.address)+"</a>");
+  if(r.agent_name)m.push("👤 "+esc(r.agent_name));
+  if(r.agent_phone)m.push("📞 <a class=\"tel\" href=\"tel:"+esc(r.agent_phone)+"\">"+esc(r.agent_phone)+"</a> · 💬 <a href=\""+esc(waLink(r.agent_phone))+"\" target=\"_blank\" rel=\"noopener\">WhatsApp</a>");
+  if(m.length)h+="<div class=\"hmeta\">"+m.join("<br>")+"</div>";
+  // Reagendar: a prefilled datetime-local with class vd — the delegated change handler saves it and the server re-sends the invite
+  var v=r.visit_date?String(r.visit_date):"";if(v&&v.indexOf("T")<0)v+="T09:00";
+  h+="<div class=\"hresch\"><span class=\"k\">📅 Reagendar</span><input type=\"datetime-local\" class=\"vd\" data-id=\""+r.id+"\" value=\""+esc(v)+"\"></div>";
+  h+="<div class=\"hact\"><button class=\"act nt\" data-id=\""+r.id+"\">📝 Nota</button><button class=\"act danger ro\" data-id=\""+r.id+"\">🚫 Descartar</button></div>";
+  return h+"</div>";
+}
+function agendaList(list,now,todayStr,clash){
+  var manana=addDays(todayStr,1),weekEnd=addDays(mondayOf(todayStr),6);
+  var groups=[["Hoy",[]],["Mañana",[]],["Esta semana",[]],["Después",[]]];
+  for(var i=0;i<list.length;i++){var r=list[i],day=r.visit_date.slice(0,10),gi;
+    if(day===todayStr)gi=0;else if(day===manana)gi=1;else if(day<=weekEnd)gi=2;else gi=3;
+    groups[gi][1].push(r);
+  }
+  var h="";
+  for(var g=0;g<groups.length;g++){var gl=groups[g][1];if(!gl.length)continue;
+    h+="<div class=\"agrp\"><div class=\"gh\">"+groups[g][0]+"</div>";
+    for(var j=0;j<gl.length;j++){var r=gl[j],timed=r.visit_date.length>10,t=timed?r.visit_date.slice(11,16):"";
+      h+="<div class=\"arow\">"+(t?"<span class=\"atime\">"+esc(t)+"</span>":"<span class=\"atime tbd\">hora por definir</span>");
+      h+="<a class=\"aname\" href=\"#apt-"+r.id+"\">"+esc(aptName(r))+(clash&&clash[r.id]?" <span class=\"flag\">⚠️</span>":"")+"</a>";
+      if(r.address)h+="<span class=\"aloc\"><a href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\" aria-label=\"Cómo llegar\">🗺</a></span>";
+      h+="</div>";
+    }
+    h+="</div>";
+  }
+  return h;
+}
+function agendaMobile(rows){
+  var now=nowBogota(),todayStr=(DATA.today||now.slice(0,10)).slice(0,10);
+  var up=rows.filter(function(r){return r.visit_date&&visitCmp(r.visit_date)>=now;})
+    .sort(function(a,b){return visitCmp(a.visit_date)<visitCmp(b.visit_date)?-1:1;});
+  if(!up.length)return "<div class=\"hero empty2\">Sin visitas programadas — agenda una desde la tarjeta del apartamento.</div>";
+  var clash=allOverlaps(up); // same double-booking flag as the desktop strip
+  return heroCard(up[0],now,todayStr,clash[up[0].id])+agendaList(up.slice(1),now,todayStr,clash);
+}
+// ---- post-visit follow-up: «Visitadas — ¿cómo les fue?» ----
+// active apartments whose visit is in the past (within 7 days) and still without feedback.
+// only actives are passed in, so ruled-out ones are excluded automatically; a note stamped
+// on/after the visit day (from web or Telegram) also counts as feedback and hides the row.
+function followupBlock(rows){
+  var now=nowBogota(),todayStr=(DATA.today||now.slice(0,10)).slice(0,10),weekAgo=addDays(todayStr,-7);
+  var due=rows.filter(function(r){
+    if(!r.visit_date)return false;
+    var vd=r.visit_date,day=vd.slice(0,10);
+    var past=vd.length>10?(vd<now):(day<todayStr);
+    if(!past||day<weekAgo)return false; // future, or older than 7 days (no eternal nag)
+    if(r.notes){
+      var lines=String(r.notes).split("\n");
+      for(var i=0;i<lines.length;i++){
+        var m=lines[i].match(NOTE_RE),stamp=m?m[1]:lines[i].slice(0,10);
+        if(/^\d{4}-\d{2}-\d{2}$/.test(stamp)&&stamp>=day)return false; // already noted since the visit
+      }
+    }
+    return true;
+  }).sort(function(a,b){return a.visit_date<b.visit_date?1:-1;}); // most recent visit first
+  if(!due.length)return "";
+  var h="<h2 class=\"sect\">🗣 Visitadas — ¿cómo les fue? <span class=\"count\">"+due.length+"</span></h2><div class=\"fublock\">";
+  for(var j=0;j<due.length;j++){var r=due[j];
+    h+="<div class=\"furow\"><div class=\"fuinfo\">";
+    h+="<a class=\"funame\" href=\"#apt-"+r.id+"\">"+esc(aptName(r))+"</a>";
+    h+="<span class=\"fuwhen\">"+esc(fmtVisit(r.visit_date))+"</span></div>";
+    h+="<div class=\"fuact\">";
+    h+="<button class=\"act sm fbup\" data-id=\""+r.id+"\">👍 Nos gustó</button>";
+    h+="<button class=\"act sm fbdn\" data-id=\""+r.id+"\">👎 No</button>";
+    h+="<button class=\"act sm nt\" data-id=\""+r.id+"\">📝 Nota</button>";
+    h+="<button class=\"act sm danger ro\" data-id=\""+r.id+"\">🚫 Descartar</button>";
+    h+="</div></div>";
+  }
+  return h+"</div>";
 }
 function ruledDate(s){if(!s)return "";try{return new Date(s).toLocaleDateString("es-CO",{day:"2-digit",month:"short"});}catch(e){return "";}}
 function ruledSection(list){
@@ -578,8 +736,11 @@ function render(){
   // toLocaleDateString returns the string "Invalid Date" (never throws) on bad input, so guard explicitly
   var niceDay="";if(DATA.today){var nd=new Date(DATA.today+"T00:00:00Z");niceDay=isNaN(nd)?DATA.today:nd.toLocaleDateString("es-CO",{timeZone:"UTC",weekday:"long",day:"numeric",month:"long"});}
   document.getElementById("sub").textContent=parts.join(" · ")+" · "+niceDay;
-  document.getElementById("visits").innerHTML=visitCalendar(rows);
-  snapCalendar();
+  // desktop keeps the weekly strip; phones get the "next visit" hero + day list
+  document.getElementById("visits").innerHTML=isDesktop()?visitCalendar(rows):agendaMobile(rows);
+  if(isDesktop())snapCalendar();
+  // post-visit follow-up sits between the agenda and the cards/table, in both views
+  document.getElementById("followup").innerHTML=followupBlock(rows);
   // reflect the active view on the toggle (only visible on desktop)
   var vt=document.getElementById("viewtoggle").getElementsByTagName("button");
   for(var t=0;t<vt.length;t++)vt[t].className="vt-btn"+(vt[t].getAttribute("data-view")===VIEW?" on":"");
@@ -614,8 +775,9 @@ document.addEventListener("click",function(e){
   // links inside editable cells (e.g. the 🗺 maps anchor) must navigate, not begin an edit
   if(el.closest&&el.closest("a"))return;
   if(el.classList.contains("vt-btn")){VIEW=el.getAttribute("data-view");localStorage.setItem("aptView",VIEW);render();return;}
-  if(el.classList.contains("cal-prev")){WEEK_START=addDays(WEEK_START,-7);render();return;}
-  if(el.classList.contains("cal-next")){WEEK_START=addDays(WEEK_START,7);render();return;}
+  // week nav is desktop-only (buttons don't render on mobile); no-op if WEEK_START isn't set yet
+  if(el.classList.contains("cal-prev")){if(!WEEK_START)return;WEEK_START=addDays(WEEK_START,-7);render();return;}
+  if(el.classList.contains("cal-next")){if(!WEEK_START)return;WEEK_START=addDays(WEEK_START,7);render();return;}
   if(el.classList.contains("iv")){
     var id=Number(el.getAttribute("data-id"));
     el.disabled=true;var old=el.textContent;el.textContent="Enviando…";
@@ -623,6 +785,31 @@ document.addEventListener("click",function(e){
       if(res&&res.ok){toast("Invitación enviada 📧");}
       else{toast(res&&res.error?("No se envió: "+res.error):"Error al enviar");}
     }).catch(function(){toast("Error de red");}).then(function(){el.disabled=false;el.textContent=old;});
+    return;
+  }
+  if(el.classList.contains("rvd")){
+    // swap the agenda card's button row for an inline datetime-local; the delegated
+    // vd change handler saves it and reloads. Escape / unchanged blur restores the buttons.
+    var id=Number(el.getAttribute("data-id"));var r=findApt(id);if(!r)return;
+    var box=el.closest(".vctrls");if(!box)return;
+    var v=r.visit_date?String(r.visit_date):"";if(v&&v.indexOf("T")<0)v+="T09:00";
+    var inp=document.createElement("input");inp.type="datetime-local";inp.className="vd";inp.setAttribute("data-id",String(id));inp.value=v;inp.style.width="100%";
+    box.innerHTML="";box.appendChild(inp);inp.focus();
+    var dirty=false;
+    inp.addEventListener("input",function(){dirty=true;});
+    inp.addEventListener("keydown",function(e){if(e.key==="Escape"){dirty=false;render();}});
+    inp.addEventListener("blur",function(){setTimeout(function(){if(!dirty)render();},150);});
+    return;
+  }
+  if(el.classList.contains("fbup")||el.classList.contains("fbdn")){
+    // one-tap post-visit verdict: a canned, stamped note (echoes to Telegram); the reload hides the row
+    var id=Number(el.getAttribute("data-id"));
+    var note=el.classList.contains("fbup")?"👍 nos gustó":"👎 no nos gustó";
+    el.disabled=true;
+    action({action:"apt_note",id:id,note:note}).then(function(res){
+      if(res&&res.ok){toast("Guardado ✓");}else{toast("Error al guardar");}
+      return load();
+    }).catch(function(){toast("Error de red");render();});
     return;
   }
   if(el.classList.contains("sortable")){var k=el.getAttribute("data-sort");if(SORT.key===k)SORT.dir=-SORT.dir;else{SORT.key=k;SORT.dir=1;}render();return;}
