@@ -136,6 +136,23 @@
   .sheet input{display:block;width:100%;margin-top:4px;font-family:inherit;font-size:16px;min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:10px;padding:6px 10px;}
   .mctrl{display:flex;gap:8px;margin-top:4px;}
   .mctrl .act{flex:1;}
+  .sheet textarea{display:block;width:100%;margin-top:4px;font-family:inherit;font-size:16px;min-height:88px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:10px;padding:8px 10px;resize:vertical;}
+  .msub{color:var(--muted);font-size:12px;margin:-8px 0 14px;}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;}
+  .chip{font-family:inherit;font-size:13px;min-height:38px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:999px;padding:6px 13px;cursor:pointer;}
+  .chip.on{border-color:var(--accent);color:var(--accent);}
+  .act.dgr{border-color:var(--err);color:var(--err);}
+  /* phones: modals become bottom sheets */
+  @media(max-width:759px){
+    .modal{align-items:flex-end;padding:0;}
+    .modal .sheet{max-width:none;border-radius:16px 16px 0 0;padding-bottom:calc(18px + env(safe-area-inset-bottom));animation:sheetup .18s ease-out;}
+  }
+  @keyframes sheetup{from{transform:translateY(28px);opacity:.6;}to{transform:none;opacity:1;}}
+  /* per-line notes with delete */
+  .ntline{display:flex;align-items:baseline;gap:6px;}
+  .ntline .nmeta{color:var(--muted);font-size:11px;white-space:nowrap;}
+  .ntline .ntxt{flex:1;min-width:0;color:var(--fg);}
+  .ntline .ntdel{background:none;border:none;color:var(--muted);font-size:12px;cursor:pointer;padding:2px 6px;flex:0 0 auto;}
   /* date-only visit: the time isn't agreed yet */
   .visit .k .tbd{display:block;font-size:10px;font-weight:400;font-style:italic;color:var(--muted);}
   .vcard .vtime.tbd{color:var(--muted);font-weight:400;font-style:italic;}
@@ -164,6 +181,20 @@
   <label>Etiqueta<input id="e_tag" type="text" autocomplete="off" placeholder="p.ej. Chicó, Favorito"></label>
   <div class="mctrl"><button class="act" id="e_cancel">Cancelar</button><button class="act prim" id="e_save">Guardar</button></div>
 </div></div>
+<div class="modal" id="noteModal"><div class="sheet">
+  <div class="mh" id="n_title">Nota</div>
+  <label>Nota (se agrega a las anteriores, con fecha y autor)<textarea id="n_text"></textarea></label>
+  <div class="mctrl"><button class="act" id="n_cancel">Cancelar</button><button class="act prim" id="n_save">Guardar</button></div>
+</div></div>
+<div class="modal" id="roModal"><div class="sheet">
+  <div class="mh" id="r_title">¿Descartar?</div>
+  <div class="msub">Va a Descartados (reversible).</div>
+  <div class="chips" id="r_chips">
+    <button class="chip">muy caro</button><button class="chip">muy lejos</button><button class="chip">oscuro</button><button class="chip">sin parqueadero</button><button class="chip">ya no disponible</button>
+  </div>
+  <label>Motivo (opcional)<input id="r_reason" type="text" autocomplete="off"></label>
+  <div class="mctrl"><button class="act" id="r_cancel">Cancelar</button><button class="act dgr" id="r_save">Descartar</button></div>
+</div></div>
 <script>
 var DATA=null;
 function esc(s){s=(s==null?"":String(s));return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;");}
@@ -186,6 +217,23 @@ function ppmOf(r,isRent){
     return null;
   }
   return (r.price_per_m2&&r.price_per_m2>0)?r.price_per_m2:null;
+}
+// note lines: "YYYY-MM-DD [Autor]: text"; older lines lack the [Autor] part
+var NOTE_RE=/^(\d{4}-\d{2}-\d{2})(?: \[([^\]]+)\])?: (.*)$/;
+// unicode-safe base64 so the exact raw line survives quotes/colons inside an HTML attribute
+function b64u(s){return btoa(unescape(encodeURIComponent(s)));}
+function unb64u(s){return decodeURIComponent(escape(atob(s)));}
+function noteDate(s){try{return parseDay(s).toLocaleDateString("es-CO",{timeZone:"UTC",day:"numeric",month:"short"});}catch(e){return s;}}
+function noteLines(r){
+  var lines=String(r.notes).split("\n"),h="";
+  for(var i=0;i<lines.length;i++){var ln=lines[i];if(!ln.trim())continue;
+    var m=ln.match(NOTE_RE);
+    var meta=m?(noteDate(m[1])+(m[2]?" · "+m[2]:"")):"📝";
+    var text=m?m[3]:ln;
+    h+="<div class=\"ntline\"><span class=\"nmeta\">"+esc(meta)+"</span><span class=\"ntxt\">"+esc(text)+"</span>";
+    h+="<button class=\"ntdel\" data-id=\""+r.id+"\" data-line=\""+b64u(ln)+"\" aria-label=\"Borrar nota\">✕</button></div>";
+  }
+  return h;
 }
 function card(r,best,isRent){
   var ppm=ppmOf(r,isRent);
@@ -221,7 +269,7 @@ function card(r,best,isRent){
   // what the user typed when sharing, minus the URL itself
   var rn=(r.raw_note||"").replace(/https?:\/\/\S+/g,"").trim();
   if(rn)h+="<div class=\"note\">“"+esc(rn)+"”</div>";
-  if(r.notes)h+="<div class=\"note\">📝 "+esc(r.notes)+"</div>";
+  if(r.notes)h+="<div class=\"note\">"+noteLines(r)+"</div>";
   var contact=[];
   if(r.address)contact.push("📍 <a class=\"tel\" href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\">"+esc(r.address)+"</a>");
   if(r.agent_name)contact.push("👤 "+esc(r.agent_name));
@@ -233,7 +281,7 @@ function card(r,best,isRent){
   h+="<div class=\"ctrl\"><button class=\"act ed\" data-id=\""+r.id+"\">Editar</button>";
   h+="<button class=\"act nt\" data-id=\""+r.id+"\">Nota</button>";
   h+="<button class=\"act rs\" data-id=\""+r.id+"\">Releer</button>";
-  h+="<button class=\"act danger ro\" data-id=\""+r.id+"\" data-name=\""+esc(aptName(r))+"\">Descartar</button>";
+  h+="<button class=\"act danger ro\" data-id=\""+r.id+"\">Descartar</button>";
   if(r.url)h+="<a class=\"link\" href=\""+esc(r.url)+"\" target=\"_blank\">link</a>";
   h+="</div></div>";
   return h;
@@ -307,7 +355,7 @@ function cellDisplay(r,c){
     var a="<div class=\"rowact\">";
     if(r.url)a+="<a class=\"link sm\" href=\""+esc(r.url)+"\" target=\"_blank\">link</a>";
     a+="<button class=\"act sm rs\" data-id=\""+r.id+"\">Releer</button>";
-    a+="<button class=\"act sm danger ro\" data-id=\""+r.id+"\" data-name=\""+esc(aptName(r))+"\">Descartar</button>";
+    a+="<button class=\"act sm danger ro\" data-id=\""+r.id+"\">Descartar</button>";
     return a+"</div>";
   }
   return r[c.k]==null?"":esc(r[c.k]);
@@ -393,6 +441,26 @@ function openEdit(id){
   document.getElementById("editModal").classList.add("show");
 }
 function closeEdit(){EDIT_ID=null;document.getElementById("editModal").classList.remove("show");}
+// ---- nota / descartar bottom sheets (phones slide up from the bottom; desktop keeps the centered dialog) ----
+var NOTE_ID=null,RO_ID=null;
+function openNote(id){
+  var r=findApt(id);if(!r)return;NOTE_ID=id;
+  document.getElementById("n_title").textContent="Nota — "+aptName(r);
+  document.getElementById("n_text").value="";
+  document.getElementById("noteModal").classList.add("show");
+  document.getElementById("n_text").focus();
+}
+function closeNote(){NOTE_ID=null;document.getElementById("noteModal").classList.remove("show");}
+function openRo(id){
+  var r=findApt(id);if(!r)return;RO_ID=id;
+  document.getElementById("r_title").textContent="¿Descartar "+aptName(r)+"?";
+  document.getElementById("r_reason").value="";
+  var ch=document.getElementById("r_chips").getElementsByTagName("button");
+  for(var i=0;i<ch.length;i++)ch[i].className="chip";
+  document.getElementById("roModal").classList.add("show");
+  document.getElementById("r_reason").focus();
+}
+function closeRo(){RO_ID=null;document.getElementById("roModal").classList.remove("show");}
 function fmtVisit(s){try{
   var day=new Date(s.slice(0,10)+"T00:00:00Z").toLocaleDateString("es-CO",{timeZone:"UTC",weekday:"short",day:"numeric",month:"short"});
   var t=s.length>10?s.slice(11,16):""; // wall-clock as typed; no TZ math on the time
@@ -561,15 +629,25 @@ document.addEventListener("click",function(e){
   var ecCell=el.classList.contains("ec")?el:(el.closest?el.closest(".ec"):null);
   if(ecCell){beginEdit(ecCell);return;}
   if(el.classList.contains("ed")){openEdit(Number(el.getAttribute("data-id")));return;}
-  if(el.classList.contains("nt")){
-    var id=Number(el.getAttribute("data-id"));
-    var note=prompt("Nota (se agrega a las anteriores, con la fecha):","");
-    if(note===null)return;note=note.trim();if(!note){toast("Nota vacía");return;}
+  if(el.classList.contains("nt")){openNote(Number(el.getAttribute("data-id")));return;}
+  if(el.classList.contains("ntdel")){
+    var raw;try{raw=unb64u(el.getAttribute("data-line")||"");}catch(err){return;}
     el.disabled=true;
-    action({action:"apt_note",id:id,note:note}).then(function(res){
-      if(res&&res.ok){toast("Nota guardada 📝");}else{toast("Error al guardar");}
+    action({action:"apt_note_del",id:Number(el.getAttribute("data-id")),line:raw}).then(function(res){
+      if(res&&res.ok){toast("Nota borrada");}else{toast("Error al borrar");}
       return load();
     }).catch(function(){toast("Error de red");render();});
+    return;
+  }
+  if(el.classList.contains("chip")){
+    // fill/toggle the rule-out reason; one chip active at a time, second tap clears
+    var inp=document.getElementById("r_reason");
+    if(el.classList.contains("on")){el.classList.remove("on");inp.value="";}
+    else{
+      var ch=document.getElementById("r_chips").getElementsByTagName("button");
+      for(var ci=0;ci<ch.length;ci++)ch[ci].classList.remove("on");
+      el.classList.add("on");inp.value=el.textContent;
+    }
     return;
   }
   if(el.classList.contains("rs")){
@@ -582,18 +660,7 @@ document.addEventListener("click",function(e){
     }).catch(function(){toast("Error de red");}).then(function(){el.disabled=false;el.textContent=old;});
     return;
   }
-  if(el.classList.contains("ro")){
-    var id=Number(el.getAttribute("data-id"));var name=el.getAttribute("data-name")||"este apartamento";
-    // one dialog: Cancel aborts, empty OK descarta sin motivo
-    var reason=prompt("¿Descartar "+name+"? Va a Descartados (reversible). Motivo opcional:","");
-    if(reason===null)return;
-    el.disabled=true;el.textContent="…";
-    action({action:"rule_out",id:id,reason:reason||null}).then(function(res){
-      if(res&&res.ok){toast("Descartado 🚫");}else{toast("Error al descartar");}
-      return load();
-    }).catch(function(){toast("Error de red");render();});
-    return;
-  }
+  if(el.classList.contains("ro")){openRo(Number(el.getAttribute("data-id")));return;}
   if(el.classList.contains("re")){
     var id=Number(el.getAttribute("data-id"));
     el.disabled=true;el.textContent="…";
@@ -617,6 +684,31 @@ document.getElementById("e_save").onclick=function(){
   }).then(function(res){
     if(res&&res.ok){toast("Guardado ✓");}else{toast("Error al guardar");}
     closeEdit();return load();
+  }).catch(function(){toast("Error de red");}).then(function(){btn.disabled=false;});
+};
+// nota sheet
+document.getElementById("n_cancel").onclick=closeNote;
+document.getElementById("noteModal").addEventListener("click",function(e){if(e.target.id==="noteModal")closeNote();});
+document.getElementById("n_save").onclick=function(){
+  if(NOTE_ID==null)return;
+  var note=document.getElementById("n_text").value.trim();
+  if(!note){toast("Nota vacía");return;}
+  var btn=this;btn.disabled=true;
+  action({action:"apt_note",id:NOTE_ID,note:note}).then(function(res){
+    if(res&&res.ok){toast("Nota guardada 📝");}else{toast("Error al guardar");}
+    closeNote();return load();
+  }).catch(function(){toast("Error de red");}).then(function(){btn.disabled=false;});
+};
+// descartar sheet
+document.getElementById("r_cancel").onclick=closeRo;
+document.getElementById("roModal").addEventListener("click",function(e){if(e.target.id==="roModal")closeRo();});
+document.getElementById("r_save").onclick=function(){
+  if(RO_ID==null)return;
+  var reason=document.getElementById("r_reason").value.trim();
+  var btn=this;btn.disabled=true;
+  action({action:"rule_out",id:RO_ID,reason:reason||null}).then(function(res){
+    if(res&&res.ok){toast("Descartado 🚫");}else{toast("Error al descartar");}
+    closeRo();return load();
   }).catch(function(){toast("Error de red");}).then(function(){btn.disabled=false;});
 };
 load().catch(showRetry);

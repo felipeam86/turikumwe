@@ -752,7 +752,8 @@ async function handleUpdate(env: Env, update: any) {
       // any status — recording why a ruled-out apartment was rejected is legit; a miss must not be silent
       const arow = await get(env, "SELECT * FROM apartments WHERE id=?", op.apt_id);
       if (arow) {
-        const note = td + ': ' + String(op.note).trim().slice(0, 300);
+        // attributed line ("YYYY-MM-DD [Autor]: text") — first name of whoever sent the Telegram message
+        const note = td + ' [' + who.split(' ')[0] + ']: ' + String(op.note).trim().slice(0, 300);
         await run(env, "UPDATE apartments SET notes=COALESCE(notes||char(10),'')||?, updated_at=? WHERE id=?", note, new Date().toISOString(), op.apt_id);
         noted.push(aptName(arow) + ' — ' + String(op.note).trim());
       } else notFound.push('apto #' + op.apt_id);
@@ -859,6 +860,17 @@ async function homePage(env: Env): Promise<Response> {
 // Cloudflare Access injects the logged-in user's email on every request
 function webUser(req: Request): string {
   return (req.headers.get('cf-access-authenticated-user-email') || '').split('@')[0];
+}
+// pretty note-author name for a web user: known email local-parts → first names, else the raw local-part
+const WEB_ALIAS: Record<string, string> = { felipeam86: 'Felipe' };
+function webAuthor(req: Request): string {
+  const lp = webUser(req);
+  if (!lp) return '';
+  const s = lp.toLowerCase();
+  if (WEB_ALIAS[s]) return WEB_ALIAS[s];
+  if (s.includes('felipe')) return 'Felipe';
+  if (s.includes('lucia')) return 'Lucía';
+  return lp;
 }
 
 function manifestResponse(): Response {
@@ -993,11 +1005,26 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
   if (b.action === 'apt_note') {
     const note = (b.note && String(b.note).trim()) ? String(b.note).trim().slice(0, 300) : null;
     if (!note) return json({ ok: false, error: 'empty note' }, 400);
-    const stamped = today() + ': ' + note;
+    const author = webAuthor(req);
+    const stamped = today() + (author ? ' [' + author + ']' : '') + ': ' + note;
     await run(env, "UPDATE apartments SET notes=COALESCE(notes||char(10),'')||?, updated_at=? WHERE id=?", stamped, new Date().toISOString(), id);
     const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
     if (row) echo(`📝 Nota en *${aptName(row)}*: ${note}${via}`);
     return json({ ok: true, row });
+  }
+  if (b.action === 'apt_note_del') {
+    // remove one exact note line (mis-parsed notes shouldn't live forever); quiet cleanup, no Telegram echo
+    const line = String(b.line || '');
+    if (!line) return json({ ok: false, error: 'missing line' }, 400);
+    const row = await get(env, 'SELECT notes FROM apartments WHERE id=?', id);
+    if (!row) return json({ ok: false, error: 'not-found' }, 404);
+    const noteLines = String(row.notes || '').split('\n');
+    const idx = noteLines.indexOf(line);
+    if (idx < 0) return json({ ok: false, error: 'note line not found' }, 404);
+    noteLines.splice(idx, 1);
+    const rest = noteLines.join('\n');
+    await run(env, 'UPDATE apartments SET notes=?, updated_at=? WHERE id=?', rest.trim() ? rest : null, new Date().toISOString(), id);
+    return json({ ok: true, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
   }
   return json({ ok: false, error: 'unknown action' }, 400);
 }
