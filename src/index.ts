@@ -262,6 +262,7 @@ const HELP = [
   '• Pregunta: "¿qué hay pendiente?"',
   '• Pega el link de un apartamento y lo guardo con precio y detalles.',
   '• Apartamentos: responde al mensaje del apto y di "visita el martes a las 10am" y agendo la visita con hora; también "agenda visita al apto 2 el sábado 3pm", "descarta el de Cedritos", "reactiva el apto 1", "el de Chicó nos gustó" (queda como nota), "reintenta" (relee links bloqueados).',
+  '• "resumen de aptos" te muestra cómo va la búsqueda.',
   '📱 App: https://turikumwe.cc',
 ].join('\n');
 
@@ -420,6 +421,9 @@ async function retryBlockedScrapes(env: Env): Promise<{ updated: any[], still: a
   return { updated, still };
 }
 
+// deep link straight to the card in the web app (apartments.html scrolls to and highlights #apt-<id>)
+const aptLink = (id: number | string) => 'https://turikumwe.cc/apartments.html#apt-' + id;
+
 function apartmentAck(rec: any): string {
   const f = rec.f, dt = rec.deal;
   const label = dt === 'rent' ? 'arriendo' : dt === 'buy' ? 'compra' : 'sin especificar (dime si es compra o arriendo)';
@@ -442,8 +446,71 @@ function apartmentAck(rec: any): string {
   if (!rec.scr.ok) {
     lines.push('_No pude leer la página automáticamente (' + rec.scr.blocked + '). Guardé lo que escribiste; escribe "reintenta" para volver a probar._');
   }
-  lines.push('Míralo en la app → pantalla *Apartamentos*.');
+  lines.push(aptLink(rec.id));
   return lines.join('\n');
+}
+
+// ================= APARTMENT SUMMARY =================
+// effective $/m²: rent compares (price+admin)/m² — mirror of ppmOf in apartments.html — buy uses the stored sale $/m²
+function aptPpm(r: any): number | null {
+  if (r.deal_type === 'rent') {
+    return (r.price != null && r.area_m2 > 0) ? Math.round((Number(r.price) + Number(r.admin_fee || 0)) / Number(r.area_m2)) : null;
+  }
+  return (r.price_per_m2 && r.price_per_m2 > 0) ? r.price_per_m2 : null;
+}
+// "mar" for a YYYY-MM-DD(THH:MM) wall-clock date — UTC-anchored so the date never shifts
+const wdShort = (iso: string) => new Intl.DateTimeFormat('es-CO', { timeZone: 'UTC', weekday: 'short' }).format(new Date(iso.slice(0, 10) + 'T00:00:00Z'));
+// note lines are "YYYY-MM-DD: text" or "YYYY-MM-DD [Autor]: text"
+const NOTE_LINE_RE = /^(\d{4}-\d{2}-\d{2})(?: \[([^\]]+)\])?: (.*)$/;
+
+async function buildAptSummary(env: Env): Promise<string> {
+  const rows = await all(env, 'SELECT * FROM apartments');
+  const active = rows.filter((r: any) => r.status === 'active');
+  const ruled = rows.filter((r: any) => r.status === 'ruled_out');
+  const td = today();
+  const out: string[] = [`🏢 *Búsqueda de apto* — ${active.length} activo${active.length === 1 ? '' : 's'} · ${ruled.length} descartado${ruled.length === 1 ? '' : 's'}`];
+  const visits = active.filter((r: any) => r.visit_date && String(r.visit_date).slice(0, 10) >= td)
+    .sort((a: any, b: any) => String(a.visit_date) < String(b.visit_date) ? -1 : 1).slice(0, 5);
+  if (visits.length) {
+    out.push('📅 *Próximas visitas:*\n' + visits.map((v: any) =>
+      `• ${aptName(v)} #${v.id} — ${wdShort(v.visit_date)} ${fmtDate(v.visit_date)}${hhmm(v.visit_date)}`).join('\n'));
+  }
+  const toSchedule = active.filter((r: any) => !r.visit_date);
+  if (toSchedule.length) {
+    const shown = toSchedule.slice(0, 8).map((r: any) => {
+      let pr = money(r.price);
+      if (r.deal_type === 'rent' && pr) pr += '/mes';
+      return `• ${aptName(r)} #${r.id}${pr ? ' — ' + pr : ''}`;
+    });
+    if (toSchedule.length > 8) shown.push(`… y ${toSchedule.length - 8} más`);
+    out.push('⏳ *Por agendar visita:*\n' + shown.join('\n'));
+  }
+  for (const [dt, label] of [['rent', 'arriendo'], ['buy', 'compra']] as const) {
+    const ranked = active.filter((r: any) => r.deal_type === dt)
+      .map((r: any) => ({ r, ppm: aptPpm(r) }))
+      .filter((x: any) => x.ppm && x.ppm > 0)
+      .sort((a: any, b: any) => a.ppm - b.ppm).slice(0, 3);
+    if (!ranked.length) continue;
+    out.push(`🏆 *Mejor $/m² (${label}):*\n` + ranked.map(({ r, ppm }: any) => {
+      // rent shows the all-in monthly (price+admin) so the price matches the ranked $/m²
+      const total = dt === 'rent' ? Number(r.price) + Number(r.admin_fee || 0) : r.price;
+      const bits = [money(ppm) + '/m²', money(total) + (dt === 'rent' ? '/mes' : ''), r.area_m2 ? r.area_m2 + ' m²' : ''].filter(Boolean).join(' · ');
+      return `• ${aptName(r)} #${r.id} — ${bits}`;
+    }).join('\n'));
+  }
+  const notes: { d: string; line: string }[] = [];
+  for (const r of rows) {
+    for (const ln of String(r.notes || '').split('\n')) {
+      const m = ln.match(NOTE_LINE_RE);
+      if (m) notes.push({ d: m[1], line: `• ${aptName(r)}${m[2] ? ' (' + m[2] + ')' : ''}: ${m[3]}` });
+    }
+  }
+  if (notes.length) {
+    notes.sort((a, b) => a.d < b.d ? -1 : a.d > b.d ? 1 : 0);
+    out.push('📝 *Últimas notas:*\n' + notes.slice(-3).map((n) => n.line).join('\n'));
+  }
+  out.push('📱 https://turikumwe.cc/apartments.html');
+  return out.join('\n\n');
 }
 
 // ================= DIGEST =================
@@ -537,11 +604,11 @@ async function handleUpdate(env: Env, update: any) {
         const rec = await ingestApartment(env, u, text, who);
         if (rec.reread) {
           acks.push(rec.ok
-            ? '🔄 Ya lo tenías (#' + rec.id + ') y no se había podido leer — lo releí ahora. Míralo en la app.'
-            : '🔁 Ya lo tenías guardado: *' + rec.name + '* #' + rec.id + '. Sigo sin poder leer la página (' + (rec.blocked || 'error') + ').');
+            ? '🔄 Ya lo tenías (#' + rec.id + ') y no se había podido leer — lo releí ahora.\n' + aptLink(rec.id)
+            : '🔁 Ya lo tenías guardado: *' + rec.name + '* #' + rec.id + '. Sigo sin poder leer la página (' + (rec.blocked || 'error') + ').\n' + aptLink(rec.id));
         } else if (rec.dup) {
           const st = rec.status === 'ruled_out' ? ' — estaba *descartado*' + (rec.reason ? ' (' + rec.reason + ')' : '') : '';
-          acks.push('🔁 Ya lo tenías guardado: *' + rec.name + '* #' + rec.id + st + '.');
+          acks.push('🔁 Ya lo tenías guardado: *' + rec.name + '* #' + rec.id + st + '.\n' + aptLink(rec.id));
         } else if (rec.skipped) {
           acks.push('🔗 Ese link no parece un anuncio de apartamento — no lo guardé. Si sí lo es, reenvíalo diciendo que es un apto.');
         } else {
@@ -584,6 +651,7 @@ async function handleUpdate(env: Env, update: any) {
     '  {"action":"rule_out","apt_id":<id from APARTMENTS>,"reason":"<short reason>"|null} (user wants to discard / stop considering an apartment: "descarta el apto 2", "ya no me interesa el de Chico Norte", "quita el más caro", "bájalo de la lista", "rule out the Cedritos one"; if they say why, capture a short reason like "muy caro", "muy lejos", "sin parqueadero")',
     '  {"action":"reactivate","apt_id":<id from RULED OUT>} (user wants to reconsider a previously discarded apartment: "vuelve a considerar el apto 2", "reactiva el de Chico Norte", "devuelve el descartado a la lista")',
     '  {"action":"apt_note","apt_id":<id from APARTMENTS>,"note":"<short note>"} (user records an opinion or fact about an apartment, often after a visit: "el de Chico Norte nos encantó", "apto 2: cocina pequeña pero buena luz", "el de Cedritos tiene mala vista")',
+    '  {"action":"apt_summary"} (user asks for an overview of the apartment hunt: "resumen de aptos", "cómo va la búsqueda", "qué apartamentos tenemos", "cuáles nos faltan por ver")',
     'Rules:',
     '- One message may produce several ops (e.g. "low on diapers and formula" => two grocery adds).',
     '- Bills that recur (rent, mortgage, utilities, subscriptions, internet, phone): recurrence="monthly", recur_day=the day-of-month it is due, due_date=the NEXT upcoming occurrence (YYYY-MM-DD). One-off bills: recurrence="none", set due_date.',
@@ -624,6 +692,7 @@ async function handleUpdate(env: Env, update: any) {
   const noted: string[] = [];
   let wantQuery = false;
   let wantRescrape = false;
+  let wantAptSummary = false;
   for (const op of ops) {
     if (op.action === 'add' && op.title) {
       // ponytail: coerce an unknown/missing category to general so a mis-parse never drops the item
@@ -653,6 +722,8 @@ async function handleUpdate(env: Env, update: any) {
       wantQuery = true;
     } else if (op.action === 'rescrape') {
       wantRescrape = true;
+    } else if (op.action === 'apt_summary') {
+      wantAptSummary = true;
     } else if (op.action === 'set_visit' && op.apt_id != null) {
       const vd = (op.visit_date == null || op.visit_date === '') ? null : String(op.visit_date);
       const arow = await get(env, "SELECT * FROM apartments WHERE id=? AND status='active'", op.apt_id);
@@ -681,7 +752,8 @@ async function handleUpdate(env: Env, update: any) {
       // any status — recording why a ruled-out apartment was rejected is legit; a miss must not be silent
       const arow = await get(env, "SELECT * FROM apartments WHERE id=?", op.apt_id);
       if (arow) {
-        const note = td + ': ' + String(op.note).trim().slice(0, 300);
+        // attributed line ("YYYY-MM-DD [Autor]: text") — first name of whoever sent the Telegram message
+        const note = td + ' [' + who.split(' ')[0] + ']: ' + String(op.note).trim().slice(0, 300);
         await run(env, "UPDATE apartments SET notes=COALESCE(notes||char(10),'')||?, updated_at=? WHERE id=?", note, new Date().toISOString(), op.apt_id);
         noted.push(aptName(arow) + ' — ' + String(op.note).trim());
       } else notFound.push('apto #' + op.apt_id);
@@ -700,6 +772,9 @@ async function handleUpdate(env: Env, update: any) {
   if (noted.length) lines.push('📝 *Nota guardada:*\n' + noted.map(n => '• ' + n).join('\n'));
   if (wantQuery) {
     lines.push(await buildDigestBody(env, td, 'Esto es lo pendiente:'));
+  }
+  if (wantAptSummary) {
+    lines.push(await buildAptSummary(env));
   }
   if (wantRescrape) {
     const rr = await retryBlockedScrapes(env);
@@ -785,6 +860,17 @@ async function homePage(env: Env): Promise<Response> {
 // Cloudflare Access injects the logged-in user's email on every request
 function webUser(req: Request): string {
   return (req.headers.get('cf-access-authenticated-user-email') || '').split('@')[0];
+}
+// pretty note-author name for a web user: known email local-parts → first names, else the raw local-part
+const WEB_ALIAS: Record<string, string> = { felipeam86: 'Felipe' };
+function webAuthor(req: Request): string {
+  const lp = webUser(req);
+  if (!lp) return '';
+  const s = lp.toLowerCase();
+  if (WEB_ALIAS[s]) return WEB_ALIAS[s];
+  if (s.includes('felipe')) return 'Felipe';
+  if (s.includes('lucia')) return 'Lucía';
+  return lp;
 }
 
 function manifestResponse(): Response {
@@ -919,11 +1005,26 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
   if (b.action === 'apt_note') {
     const note = (b.note && String(b.note).trim()) ? String(b.note).trim().slice(0, 300) : null;
     if (!note) return json({ ok: false, error: 'empty note' }, 400);
-    const stamped = today() + ': ' + note;
+    const author = webAuthor(req);
+    const stamped = today() + (author ? ' [' + author + ']' : '') + ': ' + note;
     await run(env, "UPDATE apartments SET notes=COALESCE(notes||char(10),'')||?, updated_at=? WHERE id=?", stamped, new Date().toISOString(), id);
     const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
     if (row) echo(`📝 Nota en *${aptName(row)}*: ${note}${via}`);
     return json({ ok: true, row });
+  }
+  if (b.action === 'apt_note_del') {
+    // remove one exact note line (mis-parsed notes shouldn't live forever); quiet cleanup, no Telegram echo
+    const line = String(b.line || '');
+    if (!line) return json({ ok: false, error: 'missing line' }, 400);
+    const row = await get(env, 'SELECT notes FROM apartments WHERE id=?', id);
+    if (!row) return json({ ok: false, error: 'not-found' }, 404);
+    const noteLines = String(row.notes || '').split('\n');
+    const idx = noteLines.indexOf(line);
+    if (idx < 0) return json({ ok: false, error: 'note line not found' }, 404);
+    noteLines.splice(idx, 1);
+    const rest = noteLines.join('\n');
+    await run(env, 'UPDATE apartments SET notes=?, updated_at=? WHERE id=?', rest.trim() ? rest : null, new Date().toISOString(), id);
+    return json({ ok: true, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
   }
   return json({ ok: false, error: 'unknown action' }, 400);
 }
