@@ -45,5 +45,6 @@ CREATE TABLE IF NOT EXISTS apartments (
   updated_at TEXT NOT NULL,
   visit_date TEXT,
   ruled_out_reason TEXT,
-  ruled_out_at TEXT
+  ruled_out_at TEXT,
+  visit_reminder_sent TEXT
 );

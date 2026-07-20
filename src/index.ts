@@ -31,6 +31,14 @@ function today(): string {
   // en-CA gives YYYY-MM-DD
   return new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 }
+// Bogota wall-clock "YYYY-MM-DDTHH:MM" — string-comparable with visit_date (sv-SE formats as ISO)
+function nowBogota(): string {
+  return new Date().toLocaleString('sv-SE', { timeZone: TZ }).slice(0, 16).replace(' ', 'T');
+}
+// wall-clock string + N minutes; parsed Z-anchored so only the delta matters (Bogota has no DST)
+function plusMinutes(wallClock: string, min: number): string {
+  return new Date(Date.parse(wallClock.slice(0, 16) + ':00Z') + min * 60000).toISOString().slice(0, 16);
+}
 function weekday(): string {
   return new Intl.DateTimeFormat('es-CO', { timeZone: TZ, weekday: 'long' }).format(new Date());
 }
@@ -75,6 +83,28 @@ const aptName = (r: any) => r.location || r.title || r.source_site || ('apto ' +
 // decode the handful of HTML entities that appear in scraped attribute URLs (&amp; splits query params)
 function decodeHtml(s: string): string {
   return s.replace(/&amp;/g, '&').replace(/&#0*38;/g, '&').replace(/&quot;/g, '"').replace(/&#0*39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+}
+// server-side twins of mapsLink/waLink in apartments.html — keep both pairs in sync.
+// Maps: anchor the query to Bogotá so a bare street address doesn't resolve elsewhere.
+function mapsLink(addr: string): string {
+  let a = String(addr || '').trim();
+  if (a && !/bogot[aá]/i.test(a)) a += ', Bogotá';
+  return 'https://maps.google.com/?q=' + encodeURIComponent(a);
+}
+// WhatsApp: wa.me needs a full international number; bare 10-digit Colombian mobiles (start with 3) get +57
+function waLink(phone: string): string {
+  let d = String(phone || '').replace(/\D/g, '');
+  if (d.length === 10 && d.charAt(0) === '3') d = '57' + d;
+  return 'https://wa.me/' + d;
+}
+// legacy-Markdown safety for interpolated free text (addresses, agent/apartment names, scraped
+// URLs). Escape the four characters the legacy parser treats as markup openers…
+const mdEscape = (s: unknown) => String(s ?? '').replace(/([_*`\[])/g, '\\$1');
+// …and build links whose label/url can't break out of the entity: brackets stripped from the
+// label, parens percent-encoded in the url (the legacy parser ends the url at the first ')').
+// Raw URLs must never go in message text bare: mid-word `_` pairs silently corrupt them.
+function mdLink(label: string, url: string): string {
+  return '[' + String(label).replace(/[\[\]]/g, '') + '](' + String(url).replace(/\(/g, '%28').replace(/\)/g, '%29') + ')';
 }
 
 // ---- calendar invites (iCalendar over the Email Routing send_email binding) ----
@@ -537,10 +567,14 @@ async function buildDigestBody(env: Env, td: string, header: string): Promise<st
     out.push(`${CAT_EMOJI[cat]} *${CAT_LABEL[cat]}:*\n` + rows.join('\n'));
   }
   // upcoming apartment visits live in the apartments table, not items
-  const visits = await all(env, "SELECT location, title, source_site, id, visit_date FROM apartments WHERE status='active' AND visit_date>=? ORDER BY visit_date", td);
+  const visits = await all(env, "SELECT location, title, source_site, id, visit_date, address, agent_name, agent_phone FROM apartments WHERE status='active' AND visit_date>=? ORDER BY visit_date", td);
   if (visits.length) {
-    out.push('🏢 *Visitas de apartamentos:*\n' + visits.map((v: any) =>
-      `• ${aptName(v)} — ${stripWarn(dueLabel(v.visit_date, td))}${hhmm(v.visit_date)}`).join('\n'));
+    out.push('🏢 *Visitas de apartamentos:*\n' + visits.map((v: any) => {
+      let s = `• ${mdEscape(aptName(v))} #${v.id} — ${stripWarn(dueLabel(v.visit_date, td))}${hhmm(v.visit_date)}`;
+      if (v.address) s += ` · 📍 ${mdLink(v.address, mapsLink(v.address))}`;
+      if (v.agent_phone) s += ` · 💬 ${mdLink(v.agent_name || v.agent_phone, waLink(v.agent_phone))}`;
+      return s;
+    }).join('\n'));
   }
   if (out.length === 1) out.push('_Todo al día — nada pendiente. 🎉_');
   return out.join('\n\n');
@@ -560,6 +594,39 @@ async function sendEveningReminder(env: Env) {
   if (!due.length) return;
   await tgSend(env, '⚠️ *Sigue pendiente hoy:*\n' + due.map((i: any) =>
     `• ${CAT_EMOJI[i.category]} ${i.title} — ${stripWarn(dueLabel(i.due_date, td))}`).join('\n'));
+}
+
+// ~1 h before each timed visit. Hourly cron + 90-min lookahead guarantees every visit lands in
+// exactly one window; visit_reminder_sent stores the covered datetime (not a boolean), so
+// rescheduling automatically re-arms the reminder. Date-only visits are the digest's job.
+async function sendVisitReminders(env: Env) {
+  const now = nowBogota();
+  const rows = await all(env,
+    "SELECT * FROM apartments WHERE status='active' AND visit_date IS NOT NULL AND length(visit_date)>10 AND visit_date>? AND visit_date<=? AND (visit_reminder_sent IS NULL OR visit_reminder_sent!=visit_date)",
+    now, plusMinutes(now, 90));
+  for (const r of rows) {
+    const lines = [`🔔 *Visita en ~1h — ${String(r.visit_date).slice(11, 16)}* · *${mdEscape(aptName(r))}* #${r.id}`];
+    if (r.address) lines.push(`📍 ${mdLink(r.address, mapsLink(r.address))}`);
+    if (r.agent_name) lines.push(`👤 ${mdEscape(r.agent_name)}`);
+    if (r.agent_phone) lines.push(`💬 ${waLink(r.agent_phone)}`);
+    if (r.url) lines.push(`🔗 ${mdLink(siteOf(r.url) || 'anuncio', r.url)}`);
+    lines.push(aptLink(r.id));
+    await tgSend(env, lines.join('\n'));
+    await run(env, 'UPDATE apartments SET visit_reminder_sent=? WHERE id=?', r.visit_date, r.id);
+  }
+}
+
+// evening of a visit day: ask how it went. One message per apartment, each carrying the #id, so a
+// plain reply resolves via replyAptFromMsg and the ops parser stores it as an apt_note — no new
+// plumbing. visit_date<=now skips tonight's still-pending visits (a date-only visit sorts before
+// any "T…" timestamp of its day, so it counts as done by evening).
+async function sendPostVisitFollowup(env: Env) {
+  const rows = await all(env,
+    "SELECT * FROM apartments WHERE status='active' AND visit_date IS NOT NULL AND substr(visit_date,1,10)=? AND visit_date<=?",
+    today(), nowBogota());
+  for (const r of rows) {
+    await tgSend(env, `🗣 ¿Cómo les fue en *${mdEscape(aptName(r))}* #${r.id}? Respondan a este mensaje con su opinión y la guardo como nota.`);
+  }
 }
 
 // When the user replies to the message that shared a listing (or the bot's ack for it) and asks to
@@ -1056,9 +1123,16 @@ export default {
   },
 
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
-    // '0 0 * * *' = the 19:00-Bogota evening cron in wrangler.toml; keep both strings in sync.
-    // Any other trigger (the 07:30 morning cron) sends the full digest.
-    if (controller.cron === '0 0 * * *') { await sendEveningReminder(env); return; }
-    await sendDigest(env);
+    // Explicit dispatch per cron — keep the strings in sync with [triggers] in wrangler.toml:
+    //   '30 12 * * *' = 07:30 Bogota morning digest
+    //   '0 0 * * *'   = 19:00 Bogota evening: still-due nudge + post-visit follow-up
+    //   '0 * * * *'   = hourly visit reminders (~1 h before each timed visit)
+    // At 00:00 UTC the evening and hourly crons both fire, as two separate invocations — fine.
+    switch (controller.cron) {
+      case '30 12 * * *': await sendDigest(env); return;
+      case '0 0 * * *': await sendEveningReminder(env); await sendPostVisitFollowup(env); return;
+      case '0 * * * *': await sendVisitReminders(env); return;
+      default: console.log('unknown cron:', controller.cron); // never guess — a wrong guess spams the group
+    }
   },
 } satisfies ExportedHandler<Env>;

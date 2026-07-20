@@ -37,6 +37,14 @@ Same reasoning — run **before** `wrangler deploy`, or the `set_fields` action 
 npx wrangler d1 execute household --remote --command "ALTER TABLE apartments ADD COLUMN address TEXT; ALTER TABLE apartments ADD COLUMN agent_name TEXT; ALTER TABLE apartments ADD COLUMN agent_phone TEXT; ALTER TABLE apartments ADD COLUMN tag TEXT"
 ```
 
+**Migrating a database created before the visit-reminder column:**
+
+Same reasoning — run **before** `wrangler deploy`, or the hourly visit-reminder cron will fail:
+
+```sh
+npx wrangler d1 execute household --remote --command "ALTER TABLE apartments ADD COLUMN visit_reminder_sent TEXT"
+```
+
 ### 2. Config
 
 In `wrangler.toml`, set `GROUP_CHAT_ID` to the Telegram group's chat id (usually negative, e.g. `-100123456789`). Then set the three secrets:
