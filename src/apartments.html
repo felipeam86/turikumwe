@@ -112,10 +112,19 @@
   .tel{color:var(--accent);text-decoration:none;}
   .ctrl{flex-wrap:wrap;}
   .act.prim{border-color:var(--accent);color:var(--accent);}
-  /* toolbar: view toggle (desktop-only until the list view lands) + cards grouping toggle */
+  /* toolbar: view toggle (Tarjetas/Tabla on desktop, Tarjetas/Lista on phones) + grouping toggle */
   .toolbar{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-bottom:10px;}
-  @media(max-width:759px){#viewtoggle{display:none;}}
   .tlabel{font-size:11px;font-weight:600;color:var(--muted);display:inline-flex;align-items:center;padding-left:12px;}
+  /* compact list mode (phones): one ~64px row per apartment, tap to expand the full card below */
+  .grid.listmode{gap:6px;}
+  .lrow{display:flex;align-items:center;gap:10px;background:var(--bg-raised);border:1px solid var(--border);border-radius:12px;padding:9px 10px;cursor:pointer;}
+  .lrow .lmid{flex:1;min-width:0;}
+  .lrow .lname{font-weight:700;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .lrow .lsub{color:var(--muted);font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .lrow .lright{display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex:0 0 auto;}
+  .lrow .lright .flag{margin-left:0;}
+  .lrow .chev{color:var(--muted);font-size:18px;flex:0 0 auto;}
+  .lexp{margin:-2px 0 4px;}
   .viewtoggle{display:inline-flex;border:1px solid var(--border);border-radius:999px;overflow:hidden;}
   .viewtoggle button{font-family:inherit;font-size:13px;font-weight:600;background:transparent;color:var(--muted);border:none;padding:9px 15px;cursor:pointer;}
   .viewtoggle button.on{background:rgba(122,162,255,.14);color:var(--fg);}
@@ -220,10 +229,8 @@
       <button class="gr-btn" data-group="tipo">Tipo</button>
       <button class="gr-btn" data-group="estado">Estado</button>
     </div>
-    <div class="viewtoggle" id="viewtoggle">
-      <button class="vt-btn" data-view="cards">▦ Tarjetas</button>
-      <button class="vt-btn" data-view="table">▤ Tabla</button>
-    </div>
+    <div class="viewtoggle" id="viewtoggle"></div><!-- buttons rendered per viewport -->
+
   </div>
   <div id="visits"></div>
   <div id="followup"></div>
@@ -448,6 +455,39 @@ function card(r,best,isRent,withDeal){
   h+="</div></div>";
   return h;
 }
+// one condensed, whole-row-tappable line per apartment (phones' list mode)
+function listRow(r,isRent,open,withDeal){
+  var total=(isRent&&r.price!=null)?Number(r.price)+Number(r.admin_fee||0):r.price;
+  var l2=[];
+  if(total!=null)l2.push(mny(total)+(isRent?"/mes":""));
+  if(r.bedrooms!=null)l2.push(r.bedrooms+" hab");
+  if(r.area_m2!=null)l2.push(r.area_m2+" m²");
+  var pills="";
+  if(r.scrape_status&&r.scrape_status!=="ok")pills+="<span class=\"flag\">sin leer</span>";
+  if(r.created_at&&Date.now()-Date.parse(r.created_at)<48*3600*1000)pills+="<span class=\"flag new\">nuevo</span>";
+  pills+=stageChip(r); // scheduled chips carry the visit date, so no separate date pill needed
+  if(withDeal&&(r.deal_type==="rent"||r.deal_type==="buy"))pills+="<span class=\"flag mut\">"+(r.deal_type==="rent"?"arriendo":"compra")+"</span>";
+  var th=r.image_url?"<img class=\"thumb\" src=\""+esc(r.image_url)+"\" loading=\"lazy\" alt=\"\" onerror=\"this.className='thumb noimg';this.removeAttribute('src')\">":"<span class=\"thumb noimg\"></span>";
+  // collapsed rows own the #apt- anchor; expanded ones cede it to the full card below
+  var h="<div class=\"lrow\""+(open?"":" id=\"apt-"+r.id+"\"")+" data-id=\""+r.id+"\">"+th;
+  h+="<div class=\"lmid\"><div class=\"lname\">"+esc(aptName(r))+(r.tag?tagChip(r.tag):"")+"</div>";
+  h+="<div class=\"lsub\">"+esc(l2.join(" · ")||"—")+"</div></div>";
+  h+="<div class=\"lright\">"+pills+"</div>";
+  h+="<span class=\"chev\">"+(open?"⌄":"›")+"</span></div>";
+  return h;
+}
+// list mode swaps each card for a row, expanding the full card in place for the open one.
+// All card actions keep working there — every handler is delegated on class + data-id.
+function cardOrRow(r,best,isRent,withDeal){
+  if(effView()==="list"){
+    var open=OPEN_ROW===r.id;
+    var h=listRow(r,isRent,open,withDeal);
+    if(open)h+="<div class=\"lexp\">"+card(r,best,isRent,withDeal)+"</div>";
+    return h;
+  }
+  return card(r,best,isRent,withDeal);
+}
+function gridOpen(){return "<div class=\"grid"+(effView()==="list"?" listmode":"")+"\">";}
 function section(title,list,isRent){
   if(!list.length)return "";
   // default: best value first, cards without enough data last; a chosen Orden overrides it
@@ -459,8 +499,8 @@ function section(title,list,isRent){
   var ppm=sorted.map(function(r){return ppmOf(r,isRent);}).filter(function(v){return v&&v>0;});
   // "best value" only means something when there is something to compare against
   var best=ppm.length>1?Math.min.apply(null,ppm):null;
-  var h="<h2 class=\"sect\">"+title+" <span class=\"count\">"+sorted.length+"</span></h2><div class=\"grid\">";
-  for(var i=0;i<sorted.length;i++)h+=card(sorted[i],best,isRent);
+  var h="<h2 class=\"sect\">"+title+" <span class=\"count\">"+sorted.length+"</span></h2>"+gridOpen();
+  for(var i=0;i<sorted.length;i++)h+=cardOrRow(sorted[i],best,isRent);
   h+="</div>";return h;
 }
 // Estado grouping: sections are pipeline stages (mixed deal types), each with its own sort.
@@ -468,8 +508,8 @@ function section(title,list,isRent){
 function stageSection(title,list,cmp){
   if(!list.length)return "";
   var sorted=list.slice().sort(activeSorter()||cmp);
-  var h="<h2 class=\"sect\">"+title+" <span class=\"count\">"+sorted.length+"</span></h2><div class=\"grid\">";
-  for(var i=0;i<sorted.length;i++){var r=sorted[i];h+=card(r,null,r.deal_type==="rent",true);}
+  var h="<h2 class=\"sect\">"+title+" <span class=\"count\">"+sorted.length+"</span></h2>"+gridOpen();
+  for(var i=0;i<sorted.length;i++){var r=sorted[i];h+=cardOrRow(r,null,r.deal_type==="rent",true);}
   h+="</div>";return h;
 }
 // $/m² ascending with per-row deal type (Estado sections mix rent and buy), nulls last
@@ -609,12 +649,16 @@ function tableView(rows){
   for(var j=0;j<sorted.length;j++)h+=tableRow(sorted[j]);
   return h+"</tbody></table></div>";
 }
-// table is a desktop-only affordance; phones always get the cards
+// two independent view prefs: desktop picks cards|table, phones pick cards|list —
+// so a phone never gets the table and a desktop never gets the compact list
 var VIEW=localStorage.getItem("aptView")||"table";
+var VIEWM=localStorage.getItem("aptViewM")||"cards";
 // cards grouping: by deal type (historic default) or by pipeline stage; opt-in, persisted
 var GROUP=localStorage.getItem("aptGroup")||"tipo";
+// list mode: id of the row currently expanded in place (survives re-renders after saves)
+var OPEN_ROW=null;
 function isDesktop(){return window.innerWidth>=760;}
-function effView(){return isDesktop()?VIEW:"cards";}
+function effView(){return isDesktop()?VIEW:VIEWM;}
 // ---- edit sheet (address / agent / phone / tag), shared by cards + table ----
 var EDIT_ID=null;
 function findApt(id){var all=(DATA.apartments||[]).concat(DATA.ruledOut||[]);for(var i=0;i<all.length;i++)if(all[i].id===id)return all[i];return null;}
@@ -887,6 +931,13 @@ function jumpToHash(){
   if(HASH_DONE)return;
   var m=(location.hash||"").match(/^#apt-(\d+)$/);
   if(!m)return;
+  // list mode: expand the target row first so the full card is the scroll target
+  // (render() re-runs jumpToHash; second pass falls through with OPEN_ROW already set)
+  var hid=Number(m[1]);
+  if(effView()==="list"&&OPEN_ROW!==hid){
+    var act=(DATA&&DATA.apartments)||[];
+    for(var i=0;i<act.length;i++)if(act[i].id===hid){OPEN_ROW=hid;render();return;}
+  }
   var el=document.getElementById("apt-"+m[1]);
   if(!el)return;
   HASH_DONE=true;
@@ -912,9 +963,12 @@ function render(){
   if(isDesktop())snapCalendar();
   // post-visit follow-up sits between the agenda and the cards/table, in both views
   document.getElementById("followup").innerHTML=followupBlock(rows);
-  // reflect the active view on the toggle (only visible on desktop)
-  var vt=document.getElementById("viewtoggle").getElementsByTagName("button");
-  for(var t=0;t<vt.length;t++)vt[t].className="vt-btn"+(vt[t].getAttribute("data-view")===VIEW?" on":"");
+  // the view toggle offers Tabla on desktop and Lista on phones — rebuild it per viewport
+  var vopts=isDesktop()?[["cards","▦ Tarjetas"],["table","▤ Tabla"]]:[["cards","▦ Tarjetas"],["list","☰ Lista"]];
+  var vcur=isDesktop()?VIEW:VIEWM;
+  document.getElementById("viewtoggle").innerHTML=vopts.map(function(o){
+    return "<button class=\"vt-btn"+(o[0]===vcur?" on":"")+"\" data-view=\""+o[0]+"\">"+o[1]+"</button>";
+  }).join("");
   // grouping toggle only makes sense over cards; hide it while the table is showing
   var gt=document.getElementById("grouptoggle");
   gt.style.display=effView()==="table"?"none":"";
@@ -958,9 +1012,31 @@ document.addEventListener("change",function(e){
 });
 document.addEventListener("click",function(e){
   var el=e.target;if(!el.classList)return;
-  // links inside editable cells (e.g. the 🗺 maps anchor) must navigate, not begin an edit
-  if(el.closest&&el.closest("a"))return;
-  if(el.classList.contains("vt-btn")){VIEW=el.getAttribute("data-view");localStorage.setItem("aptView",VIEW);render();return;}
+  // links inside editable cells (e.g. the 🗺 maps anchor) must navigate, not begin an edit.
+  // Exception: in list mode an in-page #apt- link (hero/agenda) expands its row before scrolling.
+  var an=el.closest?el.closest("a"):null;
+  if(an){
+    var hm=(an.getAttribute("href")||"").match(/^#apt-(\d+)$/);
+    if(hm&&effView()==="list"){
+      var hid=Number(hm[1]),act=(DATA&&DATA.apartments)||[];
+      for(var ha=0;ha<act.length;ha++)if(act[ha].id===hid){
+        e.preventDefault();OPEN_ROW=hid;render();
+        var ht=document.getElementById("apt-"+hid);
+        if(ht){ht.scrollIntoView({block:"start"});ht.classList.add("hilite");setTimeout(function(){ht.classList.remove("hilite");},2000);}
+        return;
+      }
+    }
+    return;
+  }
+  // list mode: tapping a row toggles its full card in place (one open at a time)
+  var lr=el.closest?el.closest(".lrow"):null;
+  if(lr){var lid=Number(lr.getAttribute("data-id"));OPEN_ROW=OPEN_ROW===lid?null:lid;render();return;}
+  if(el.classList.contains("vt-btn")){
+    var nv=el.getAttribute("data-view");
+    if(isDesktop()){VIEW=nv;localStorage.setItem("aptView",VIEW);}
+    else{VIEWM=nv;localStorage.setItem("aptViewM",VIEWM);}
+    render();return;
+  }
   if(el.classList.contains("gr-btn")){GROUP=el.getAttribute("data-group");localStorage.setItem("aptGroup",GROUP);render();return;}
   if(el.classList.contains("fchip")||el.classList.contains("fclearlink")){
     var ff=el.getAttribute("data-f");
