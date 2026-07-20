@@ -52,6 +52,17 @@ CREATE TABLE IF NOT EXISTS apartments (
 -- photos taken during visits, sent to the Telegram group. Only permanent Telegram
 -- file_ids are stored (full size + a mid-size rendition for the web thumb strip);
 -- the short-lived file_path is resolved on demand.
+-- one structured 👍/👎 per person per apartment. voter is canonical ('felipe' | 'lucia' —
+-- unknown identities fall back to their normalized name), vote is 'up' | 'down'; clearing
+-- a verdict deletes the row.
+CREATE TABLE IF NOT EXISTS apartment_votes (
+  apartment_id INTEGER NOT NULL,
+  voter TEXT NOT NULL,
+  vote TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (apartment_id, voter)
+);
+
 CREATE TABLE IF NOT EXISTS apartment_photos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   apartment_id INTEGER NOT NULL,

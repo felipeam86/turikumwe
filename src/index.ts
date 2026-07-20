@@ -80,6 +80,25 @@ const byDue = (a: any, b: any) => {
 const stripWarn = (s: string) => s.replace(/^⚠️ /, '');
 // human name for an apartment row, with source_site as a last resort before the numeric id
 const aptName = (r: any) => r.location || r.title || r.source_site || ('apto ' + r.id);
+// ---- per-person verdicts ----
+// canonical voter id from any identity we see: Access email local-parts ('felipeam86',
+// 'lucia.p.villar') and Telegram first names ('Felipe', 'Lucía') all map to the same person.
+// Unknown identities fall back to their normalized first token so nothing breaks.
+const VOTER_ALIAS: Record<string, string> = { felipeam86: 'felipe', 'lucia.p.villar': 'lucia' };
+function canonVoter(raw: string): string {
+  const s = String(raw || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+  if (!s) return '';
+  if (VOTER_ALIAS[s]) return VOTER_ALIAS[s];
+  const first = s.split(/[^a-z0-9]+/)[0] || s;
+  return VOTER_ALIAS[first] || first;
+}
+const VOTER_NAME: Record<string, string> = { felipe: 'Felipe', lucia: 'Lucía' };
+const voterName = (v: string) => VOTER_NAME[v] || (v ? v.charAt(0).toUpperCase() + v.slice(1) : v);
+async function upsertVote(env: Env, aptId: number, voter: string, vote: 'up' | 'down') {
+  await run(env,
+    'INSERT INTO apartment_votes (apartment_id, voter, vote, updated_at) VALUES (?,?,?,?) ON CONFLICT(apartment_id, voter) DO UPDATE SET vote=excluded.vote, updated_at=excluded.updated_at',
+    aptId, voter, vote, new Date().toISOString());
+}
 // decode the handful of HTML entities that appear in scraped attribute URLs (&amp; splits query params)
 function decodeHtml(s: string): string {
   return s.replace(/&amp;/g, '&').replace(/&#0*38;/g, '&').replace(/&quot;/g, '"').replace(/&#0*39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
@@ -309,7 +328,7 @@ const HELP = [
   '• Quita un error: "borra lo de la farmacia".',
   '• Pregunta: "¿qué hay pendiente?"',
   '• Pega el link de un apartamento y lo guardo con precio y detalles.',
-  '• Apartamentos: responde al mensaje del apto y di "visita el martes a las 10am" y agendo la visita con hora; también "agenda visita al apto 2 el sábado 3pm", "descarta el de Cedritos", "reactiva el apto 1", "el de Chicó nos gustó" (queda como nota), "reintenta" (relee links bloqueados).',
+  '• Apartamentos: responde al mensaje del apto y di "visita el martes a las 10am" y agendo la visita con hora; también "agenda visita al apto 2 el sábado 3pm", "descarta el de Cedritos", "reactiva el apto 1", "el de Chicó nos gustó" (queda como nota), "me encantó el apto 3" (queda tu 👍), "reintenta" (relee links bloqueados).',
   '• Fotos de visitas: responde al mensaje del apto con la foto (o pon "#id" en el pie) y la guardo en su tarjeta.',
   '• "resumen de aptos" te muestra cómo va la búsqueda.',
   '📱 App: https://turikumwe.cc',
@@ -754,6 +773,8 @@ async function handleCallback(env: Env, cq: any) {
     return;
   }
   await appendAptNote(env, id, who, note);
+  // the tap is also a structured per-person verdict, not just prose
+  await upsertVote(env, id, canonVoter(who), verb === 'up' ? 'up' : 'down');
   await tgAnswerCallback(env, cq.id, 'Nota guardada 📝');
   await tgSend(env, `📝 Nota en *${mdEscape(aptName(row))}* #${id}: ${note} — ${who}, vía botón`);
 }
@@ -891,6 +912,7 @@ async function handleUpdate(env: Env, update: any) {
     '  {"action":"rule_out","apt_id":<id from APARTMENTS>,"reason":"<short reason>"|null} (user wants to discard / stop considering an apartment: "descarta el apto 2", "ya no me interesa el de Chico Norte", "quita el más caro", "bájalo de la lista", "rule out the Cedritos one"; if they say why, capture a short reason like "muy caro", "muy lejos", "sin parqueadero")',
     '  {"action":"reactivate","apt_id":<id from RULED OUT>} (user wants to reconsider a previously discarded apartment: "vuelve a considerar el apto 2", "reactiva el de Chico Norte", "devuelve el descartado a la lista")',
     '  {"action":"apt_note","apt_id":<id from APARTMENTS>,"note":"<short note>"} (user records an opinion or fact about an apartment, often after a visit: "el de Chico Norte nos encantó", "apto 2: cocina pequeña pero buena luz", "el de Cedritos tiene mala vista")',
+    '  {"action":"apt_vote","apt_id":<id from APARTMENTS or RULED OUT>,"vote":"up"|"down"} (the SENDER gives their own verdict on an apartment: "me encantó el apto 3", "el de Chicó me gustó", "a mí no me convenció el 2". When the phrasing speaks for both ("nos gustó", "nos encantó a los dos"), emit the sender\'s apt_vote AND the apt_note as before — never emit a vote for someone who did not send the message.)',
     '  {"action":"apt_summary"} (user asks for an overview of the apartment hunt: "resumen de aptos", "cómo va la búsqueda", "qué apartamentos tenemos", "cuáles nos faltan por ver")',
     'Rules:',
     '- One message may produce several ops (e.g. "low on diapers and formula" => two grocery adds).',
@@ -930,6 +952,7 @@ async function handleUpdate(env: Env, update: any) {
   const ruledOut: string[] = [];
   const reactivated: string[] = [];
   const noted: string[] = [];
+  const voted: string[] = [];
   let wantQuery = false;
   let wantRescrape = false;
   let wantAptSummary = false;
@@ -978,6 +1001,14 @@ async function handleUpdate(env: Env, update: any) {
     } else if (op.action === 'reactivate' && op.apt_id != null) {
       const res = await reactivateApt(env, Number(op.apt_id));
       if (res) reactivated.push(aptName(res.row) + res.mail);
+    } else if (op.action === 'apt_vote' && op.apt_id != null && (op.vote === 'up' || op.vote === 'down')) {
+      // any status — a verdict on a ruled-out apartment is context for reconsidering it
+      const arow = await get(env, 'SELECT * FROM apartments WHERE id=?', op.apt_id);
+      if (arow) {
+        const voter = canonVoter(who.split(' ')[0]); // Telegram first name → canonical person
+        await upsertVote(env, Number(op.apt_id), voter, op.vote);
+        voted.push((op.vote === 'up' ? '👍 ' : '👎 ') + aptName(arow) + ' — ' + voterName(voter));
+      } else notFound.push('apto #' + op.apt_id);
     } else if (op.action === 'apt_note' && op.apt_id != null && op.note) {
       // any status — recording why a ruled-out apartment was rejected is legit; a miss must not be silent
       const arow = await get(env, "SELECT * FROM apartments WHERE id=?", op.apt_id);
@@ -999,6 +1030,7 @@ async function handleUpdate(env: Env, update: any) {
   if (ruledOut.length) lines.push('🚫 *Descartado(s)* (siguen guardados en la app, sección Descartados):\n' + ruledOut.map(v => '• ' + v).join('\n'));
   if (reactivated.length) lines.push('↩️ *De vuelta en la lista:*\n' + reactivated.map(v => '• ' + v).join('\n'));
   if (noted.length) lines.push('📝 *Nota guardada:*\n' + noted.map(n => '• ' + n).join('\n'));
+  if (voted.length) lines.push('*Veredicto guardado:*\n' + voted.map(v => '• ' + v).join('\n'));
   if (wantQuery) {
     lines.push(await buildDigestBody(env, td, 'Esto es lo pendiente:'));
   }
@@ -1137,7 +1169,7 @@ async function itemsAction(env: Env, req: Request, ctx: ExecutionContext): Promi
   return json({ ok: true, next: r.next ? fmtDate(r.next) : null });
 }
 
-async function apartmentsData(env: Env): Promise<Response> {
+async function apartmentsData(env: Env, req: Request): Promise<Response> {
   const rows = await all(env, "SELECT * FROM apartments WHERE status='active' ORDER BY created_at DESC");
   const ruledOut = await all(env, "SELECT * FROM apartments WHERE status='ruled_out' ORDER BY ruled_out_at DESC, updated_at DESC");
   // visit photos, grouped per apartment (active and ruled-out alike); file ids stay server-side
@@ -1145,7 +1177,13 @@ async function apartmentsData(env: Env): Promise<Response> {
   const byApt: Record<number, any[]> = {};
   for (const p of photos) (byApt[p.apartment_id] = byApt[p.apartment_id] || []).push({ id: p.id, caption: p.caption, created_at: p.created_at });
   for (const r of [...rows, ...ruledOut]) r.photos = byApt[r.id] || [];
-  return json({ apartments: rows, ruledOut, today: today() });
+  // per-person verdicts, e.g. {felipe:'up', lucia:'down'} — ruled-out rows keep theirs as
+  // context for "reconsiderar". `me` tells the frontend whose control is tappable.
+  const votes = await all(env, 'SELECT apartment_id, voter, vote FROM apartment_votes');
+  const vByApt: Record<number, Record<string, string>> = {};
+  for (const v of votes) (vByApt[v.apartment_id] = vByApt[v.apartment_id] || {})[v.voter] = v.vote;
+  for (const r of [...rows, ...ruledOut]) r.votes = vByApt[r.id] || {};
+  return json({ apartments: rows, ruledOut, today: today(), me: canonVoter(webUser(req)) });
 }
 
 // serve a stored visit photo: permanent file_id → short-lived file_path (getFile, expires ~1 h,
@@ -1256,6 +1294,24 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
     }
     return json({ ok: true, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
   }
+  if (b.action === 'vote') {
+    // the voter is ALWAYS the logged-in Access user — never trusted from the body
+    const voter = canonVoter(webUser(req));
+    if (!voter) return json({ ok: false, error: 'sin usuario' }, 403);
+    const vote = b.vote === 'up' || b.vote === 'down' ? b.vote : null;
+    const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
+    if (!row) return json({ ok: false, error: 'no encontrado' }, 404);
+    if (vote === null) {
+      await run(env, 'DELETE FROM apartment_votes WHERE apartment_id=? AND voter=?', id, voter); // quiet on clear
+    } else {
+      await upsertVote(env, id, voter, vote);
+      // b.quiet: the post-visit follow-up buttons pair this with an apt_note that already echoes
+      if (!b.quiet) echo(vote === 'up'
+        ? `👍 A ${voterName(voter)} le gustó *${mdEscape(aptName(row))}*`
+        : `👎 A ${voterName(voter)} no le convenció *${mdEscape(aptName(row))}*`);
+    }
+    return json({ ok: true });
+  }
   if (b.action === 'apt_note') {
     const note = (b.note && String(b.note).trim()) ? String(b.note).trim().slice(0, 300) : null;
     if (!note) return json({ ok: false, error: 'empty note' }, 400);
@@ -1299,7 +1355,7 @@ export default {
     if (req.method === 'GET' && path === '/') return homePage(env);
     if (req.method === 'GET' && path === '/dashboard.html') return dashboardPage(env);
     if (req.method === 'GET' && path === '/apartments.html') return html(apartmentsHtml);
-    if (req.method === 'GET' && path === '/apartments-data.json') return apartmentsData(env);
+    if (req.method === 'GET' && path === '/apartments-data.json') return apartmentsData(env, req);
     const photoM = path.match(/^\/apt-photo\/(\d+)$/);
     if (req.method === 'GET' && photoM) return photoResponse(env, Number(photoM[1]), url.searchParams.get('s') === 't');
     if (req.method === 'GET' && path === '/manifest.json') return manifestResponse();

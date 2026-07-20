@@ -74,6 +74,16 @@
   /* pipeline-stage chips: scheduled = accent, visited / deal-type = muted */
   .flag.sched{color:var(--accent);border-color:var(--accent);}
   .flag.mut{color:var(--muted);border-color:var(--border);}
+  /* per-person verdict: agreement = green, split = warn */
+  .flag.both{color:var(--ok);border-color:var(--ok);}
+  .flag.split{color:var(--warn);border-color:var(--warn);}
+  .votes{display:flex;align-items:center;gap:8px;margin-top:12px;flex-wrap:wrap;font-size:12px;color:var(--muted);}
+  .votes .vo{font-family:inherit;font-size:12px;font-weight:600;min-height:36px;background:var(--bg);color:var(--fg);border:1px solid var(--accent);border-radius:999px;padding:4px 12px;cursor:pointer;}
+  .votes .vo:disabled{opacity:.5;}
+  .votes .vopill{display:inline-flex;align-items:center;font-size:12px;color:var(--muted);border:1px solid var(--border);border-radius:999px;padding:5px 12px;}
+  .apttable .votes{margin-top:0;flex-wrap:nowrap;gap:5px;}
+  .apttable .votes .vo{min-height:0;padding:3px 8px;}
+  .apttable .votes .vopill{padding:3px 8px;}
   .specs{display:grid;grid-template-columns:repeat(3,1fr);gap:10px 8px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);}
   .spec .k{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:1px;}
   .xtra{color:var(--muted);font-size:12px;margin-top:10px;line-height:1.45;}
@@ -356,6 +366,45 @@ function buildFilterBar(rows){
   if(filtersActive())h+="<button class=\"fchip\" data-f=\"clear\">✕ limpiar</button>";
   return h;
 }
+// ---- per-person verdicts (r.votes = {felipe:"up", lucia:"down", ...}; DATA.me = logged-in voter) ----
+function voterName(p){return p==="felipe"?"Felipe":p==="lucia"?"Lucía":p?(p.charAt(0).toUpperCase()+p.slice(1)):"";}
+function shortVoter(p){return p==="felipe"?"FL":p==="lucia"?"LU":String(p).slice(0,2).toUpperCase();}
+// "both" = the two of them 👍, "split" = one up one down; "" otherwise
+function voteState(r){
+  var v=r.votes||{},ups=0,downs=0;
+  for(var k in v){if(!v.hasOwnProperty(k))continue;if(v[k]==="up")ups++;else if(v[k]==="down")downs++;}
+  if(ups>=2)return "both";
+  if(ups&&downs)return "split";
+  return "";
+}
+// funnel rank for the table's Voto column: both-up < one-up < none < any-down
+function voteRank(r){
+  var v=r.votes||{},ups=0,downs=0;
+  for(var k in v){if(!v.hasOwnProperty(k))continue;if(v[k]==="up")ups++;else if(v[k]==="down")downs++;}
+  return downs?3:ups>=2?0:ups?1:2;
+}
+// the verdict row: my control cycles — → 👍 → 👎 → — on tap, the other person's is read-only
+function voteRow(r,compact){
+  var v=r.votes||{},me=DATA&&DATA.me||"";
+  var people=["felipe","lucia"];
+  for(var k in v)if(v.hasOwnProperty(k)&&people.indexOf(k)<0)people.push(k);
+  if(me&&people.indexOf(me)<0)people.push(me);
+  var parts=[];
+  for(var i=0;i<people.length;i++){var p=people[i];
+    var glyph=v[p]==="up"?"👍":v[p]==="down"?"👎":"—";
+    var name=compact?shortVoter(p):voterName(p);
+    if(p===me)parts.push("<button class=\"vo\" data-id=\""+r.id+"\" data-cur=\""+(v[p]||"")+"\" title=\"Toca para cambiar tu veredicto\">"+esc(name)+" "+glyph+"</button>");
+    else parts.push("<span class=\"vopill\">"+esc(name)+" "+glyph+"</span>");
+  }
+  return "<div class=\"votes\">"+parts.join("")+"</div>";
+}
+// head badge: agreement gets the green 💚, a split gets a subtle 👍/👎 indicator
+function voteFlag(r){
+  var st=voteState(r);
+  if(st==="both")return "<span class=\"flag both\">💚 les gustó a los dos</span>";
+  if(st==="split")return "<span class=\"flag split\">👍/👎</span>";
+  return "";
+}
 // hunt-pipeline stage of an active apartment: no visit set => still to schedule; a set visit is
 // upcoming or already passed (visitCmp pads date-only visits to end-of-day; wall-clock compare)
 function stageOf(r){
@@ -398,6 +447,7 @@ function card(r,best,isRent,withDeal){
   // "nuevo" pill for 48h so a freshly shared listing is findable despite the $/m² sort
   if(r.created_at&&Date.now()-Date.parse(r.created_at)<48*3600*1000)flag+="<span class=\"flag new\">nuevo</span>";
   flag+=stageChip(r);
+  flag+=voteFlag(r);
   // Estado grouping mixes rent and buy in one section — say which is which on the card itself
   if(withDeal&&(r.deal_type==="rent"||r.deal_type==="buy"))flag+="<span class=\"flag mut\">"+(r.deal_type==="rent"?"arriendo":"compra")+"</span>";
   var sub=(r.title&&r.location)?"<div class=\"sub2\">"+esc(r.title)+"</div>":"";
@@ -444,6 +494,7 @@ function card(r,best,isRent,withDeal){
   if(r.agent_name)contact.push("👤 "+esc(r.agent_name));
   if(r.agent_phone)contact.push("📞 <a class=\"tel\" href=\"tel:"+esc(r.agent_phone)+"\">"+esc(r.agent_phone)+"</a>");
   if(contact.length)h+="<div class=\"contact\">"+contact.join("<br>")+"</div>";
+  h+=voteRow(r);
   // a stored date without T means the time isn't agreed yet — say so instead of showing the padded 09:00 as fact
   var tbd=(vd&&vd.indexOf("T")<0)?"<span class=\"tbd\">hora por definir</span>":"";
   h+="<div class=\"visit\"><span class=\"k\">Visita"+tbd+"</span><input type=\"datetime-local\" data-id=\""+r.id+"\" class=\"vd\" value=\""+vdInput+"\"></div>";
@@ -466,6 +517,9 @@ function listRow(r,isRent,open,withDeal){
   if(r.scrape_status&&r.scrape_status!=="ok")pills+="<span class=\"flag\">sin leer</span>";
   if(r.created_at&&Date.now()-Date.parse(r.created_at)<48*3600*1000)pills+="<span class=\"flag new\">nuevo</span>";
   pills+=stageChip(r); // scheduled chips carry the visit date, so no separate date pill needed
+  var vst=voteState(r);
+  if(vst==="both")pills+="<span class=\"flag both\">💚</span>";
+  else if(vst==="split")pills+="<span class=\"flag split\">👍/👎</span>";
   if(withDeal&&(r.deal_type==="rent"||r.deal_type==="buy"))pills+="<span class=\"flag mut\">"+(r.deal_type==="rent"?"arriendo":"compra")+"</span>";
   var th=r.image_url?"<img class=\"thumb\" src=\""+esc(r.image_url)+"\" loading=\"lazy\" alt=\"\" onerror=\"this.className='thumb noimg';this.removeAttribute('src')\">":"<span class=\"thumb noimg\"></span>";
   // collapsed rows own the #apt- anchor; expanded ones cede it to the full card below
@@ -490,12 +544,16 @@ function cardOrRow(r,best,isRent,withDeal){
 function gridOpen(){return "<div class=\"grid"+(effView()==="list"?" listmode":"")+"\">";}
 function section(title,list,isRent){
   if(!list.length)return "";
-  // default: best value first, cards without enough data last; a chosen Orden overrides it
+  // default: best value first, cards without enough data last; a chosen Orden overrides it.
+  // Mutual favorites (💚) float to the top of the section either way.
   var cmp=activeSorter()||function(a,b){
     var pa=ppmOf(a,isRent),pb=ppmOf(b,isRent);
     return (pa==null?Infinity:pa)-(pb==null?Infinity:pb);
   };
-  var sorted=list.slice().sort(cmp);
+  var sorted=list.slice().sort(function(a,b){
+    var ba=voteState(a)==="both"?0:1,bb=voteState(b)==="both"?0:1;
+    return (ba-bb)||cmp(a,b);
+  });
   var ppm=sorted.map(function(r){return ppmOf(r,isRent);}).filter(function(v){return v&&v>0;});
   // "best value" only means something when there is something to compare against
   var best=ppm.length>1?Math.min.apply(null,ppm):null;
@@ -507,7 +565,11 @@ function section(title,list,isRent){
 // No "best $/m²" highlight — comparing rent vs buy $/m² in one section is meaningless.
 function stageSection(title,list,cmp){
   if(!list.length)return "";
-  var sorted=list.slice().sort(activeSorter()||cmp);
+  var inner=activeSorter()||cmp;
+  var sorted=list.slice().sort(function(a,b){
+    var ba=voteState(a)==="both"?0:1,bb=voteState(b)==="both"?0:1;
+    return (ba-bb)||inner(a,b);
+  });
   var h="<h2 class=\"sect\">"+title+" <span class=\"count\">"+sorted.length+"</span></h2>"+gridOpen();
   for(var i=0;i<sorted.length;i++){var r=sorted[i];h+=cardOrRow(r,null,r.deal_type==="rent",true);}
   h+="</div>";return h;
@@ -537,6 +599,7 @@ var COLS=[
   {k:"agent_name",label:"Agente",type:"s",field:"agent_name",edit:"text"},
   {k:"agent_phone",label:"Teléfono",type:"s",field:"agent_phone",edit:"text"},
   {k:"stage",label:"Estado",type:"n"},
+  {k:"voto",label:"Voto",type:"n"},
   {k:"visit_date",label:"Visita",type:"s",field:"visit_date",edit:"visit"},
   {k:"actions",label:""}
 ];
@@ -545,6 +608,7 @@ function cellVal(r,k){
   if(k==="type")return r.deal_type||"";
   if(k==="ppm")return ppmOf(r,r.deal_type==="rent");
   if(k==="stage"){var st=stageOf(r);return st==="pending"?0:st==="scheduled"?1:2;} // funnel order
+  if(k==="voto")return voteRank(r); // both-up first
   return r[k];
 }
 function sortRows(rows){
@@ -574,6 +638,7 @@ function cellDisplay(r,c){
   // the cell stays click-to-edit; the small 🗺 anchor rides along (the click handler lets anchors through)
   if(c.k==="address")return r.address?esc(r.address)+" <a href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\" aria-label=\"Cómo llegar\">🗺</a>":"";
   if(c.k==="stage")return stageChip(r);
+  if(c.k==="voto")return voteRow(r,true); // compact FL/LU labels; my control stays tappable
   if(c.k==="visit_date")return r.visit_date?esc(fmtVisit(r.visit_date)):"";
   if(c.k==="actions"){
     var a="<div class=\"rowact\">";
@@ -916,8 +981,13 @@ function ruledSection(list){
     var bits=[deal,pr!=="—"?pr:"",r.area_m2?(r.area_m2+" m²"):"",r.price_per_m2?("≈"+mny(r.price_per_m2)+"/m²"):""].filter(Boolean).join(" · ");
     var reason=r.ruled_out_reason?"<span class=\"reason\">"+esc(r.ruled_out_reason)+"</span>":"";
     var when=ruledDate(r.ruled_out_at)?("descartado "+ruledDate(r.ruled_out_at)):"";
+    // verdicts survive the rule-out — context for "reconsiderar"
+    var vv=r.votes||{},vb=[];
+    for(var vk in vv)if(vv.hasOwnProperty(vk))vb.push(voterName(vk)+" "+(vv[vk]==="up"?"👍":"👎"));
     h+="<div class=\"rrow\" id=\"apt-"+r.id+"\"><span class=\"rloc\">"+esc(aptName(r))+"</span>"+reason;
-    h+="<span class=\"rmeta\">"+esc(bits)+"</span><span class=\"grow\"></span>";
+    h+="<span class=\"rmeta\">"+esc(bits)+"</span>";
+    if(vb.length)h+="<span class=\"rmeta\">"+esc(vb.join(" · "))+"</span>";
+    h+="<span class=\"grow\"></span>";
     h+="<span class=\"rmeta\">"+when+"</span>";
     if(r.url)h+="<a class=\"link\" href=\""+esc(r.url)+"\" target=\"_blank\">link</a>";
     h+="<button class=\"act re\" data-id=\""+r.id+"\">Reconsiderar</button></div>";
@@ -1083,12 +1153,29 @@ document.addEventListener("click",function(e){
     return;
   }
   if(el.classList.contains("fbup")||el.classList.contains("fbdn")){
-    // one-tap post-visit verdict: a canned, stamped note (echoes to Telegram); the reload hides the row
+    // one-tap post-visit verdict: a canned, stamped note (echoes to Telegram); the reload hides
+    // the row. The tap also records the tapper's structured vote — quiet, the note already echoes.
     var id=Number(el.getAttribute("data-id"));
-    var note=el.classList.contains("fbup")?"👍 nos gustó":"👎 no nos gustó";
+    var up=el.classList.contains("fbup");
+    var note=up?"👍 nos gustó":"👎 no nos gustó";
     el.disabled=true;
-    action({action:"apt_note",id:id,note:note}).then(function(res){
+    action({action:"vote",id:id,vote:up?"up":"down",quiet:true}).catch(function(){}).then(function(){
+      return action({action:"apt_note",id:id,note:note});
+    }).then(function(res){
       if(res&&res.ok){toast("Guardado ✓");}else{toast("Error al guardar");}
+      return load();
+    }).catch(function(){toast("Error de red");render();});
+    return;
+  }
+  if(el.classList.contains("vo")){
+    // my own verdict cycles — → 👍 → 👎 → — ; the server derives the voter from the login
+    var id=Number(el.getAttribute("data-id"));
+    var cur=el.getAttribute("data-cur")||"";
+    var next=cur===""?"up":cur==="up"?"down":null;
+    el.disabled=true;
+    action({action:"vote",id:id,vote:next}).then(function(res){
+      if(res&&res.ok){toast(next==="up"?"👍 Guardado":next==="down"?"👎 Guardado":"Veredicto borrado");}
+      else{toast(res&&res.error?("Error: "+res.error):"Error al guardar");}
       return load();
     }).catch(function(){toast("Error de red");render();});
     return;
