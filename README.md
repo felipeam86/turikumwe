@@ -57,6 +57,14 @@ npx wrangler d1 execute household --remote --file schema.sql
 npx wrangler d1 execute household --remote --file schema.sql
 ```
 
+**Migrating a database created before rescrape price tracking:**
+
+Same reasoning as the other `ALTER` migrations — run **before** `wrangler deploy`, or every rescrape's `UPDATE` will fail:
+
+```sh
+npx wrangler d1 execute household --remote --command "ALTER TABLE apartments ADD COLUMN prev_price INTEGER; ALTER TABLE apartments ADD COLUMN price_changed_at TEXT"
+```
+
 ### 2. Config
 
 In `wrangler.toml`, set `GROUP_CHAT_ID` to the Telegram group's chat id (usually negative, e.g. `-100123456789`). Then set the three secrets:

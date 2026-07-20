@@ -46,7 +46,11 @@ CREATE TABLE IF NOT EXISTS apartments (
   visit_date TEXT,
   ruled_out_reason TEXT,
   ruled_out_at TEXT,
-  visit_reminder_sent TEXT
+  visit_reminder_sent TEXT,
+  -- previous price + when it changed, written only when a rescrape sees a different price
+  -- (manual edits are corrections, not market signals); one prior value is enough
+  prev_price INTEGER,
+  price_changed_at TEXT
 );
 
 -- photos taken during visits, sent to the Telegram group. Only permanent Telegram

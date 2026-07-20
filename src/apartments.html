@@ -77,6 +77,8 @@
   /* per-person verdict: agreement = green, split = warn */
   .flag.both{color:var(--ok);border-color:var(--ok);}
   .flag.split{color:var(--warn);border-color:var(--warn);}
+  /* price moved on a rescrape: a drop is good news (green); a rise keeps the warn default */
+  .flag.drop{color:var(--ok);border-color:var(--ok);}
   .votes{display:flex;align-items:center;gap:8px;margin-top:12px;flex-wrap:wrap;font-size:12px;color:var(--muted);}
   .votes .vo{font-family:inherit;font-size:12px;font-weight:600;min-height:36px;background:var(--bg);color:var(--fg);border:1px solid var(--accent);border-radius:999px;padding:4px 12px;cursor:pointer;}
   .votes .vo:disabled{opacity:.5;}
@@ -366,6 +368,19 @@ function buildFilterBar(rows){
   if(filtersActive())h+="<button class=\"fchip\" data-f=\"clear\">✕ limpiar</button>";
   return h;
 }
+// «⬇ bajó $X» / «⬆ subió $X» pill while a rescrape-detected price change is fresh (14 days);
+// prev_price/price_changed_at only ever come from rescrapes — manual edits clear them
+function priceFlag(r){
+  if(!r.price_changed_at||r.prev_price==null||r.price==null)return "";
+  var age=Date.now()-Date.parse(r.price_changed_at);
+  if(!(age>=0&&age<=14*86400000))return "";
+  var diff=Number(r.prev_price)-Number(r.price);
+  if(!diff)return "";
+  var tt="de "+mny(r.prev_price)+" a "+mny(r.price)+" ("+noteDate(r.price_changed_at.slice(0,10))+")";
+  return diff>0
+    ? "<span class=\"flag drop\" title=\""+esc(tt)+"\">⬇ bajó "+mny(diff)+"</span>"
+    : "<span class=\"flag\" title=\""+esc(tt)+"\">⬆ subió "+mny(-diff)+"</span>";
+}
 // ---- per-person verdicts (r.votes = {felipe:"up", lucia:"down", ...}; DATA.me = logged-in voter) ----
 function voterName(p){return p==="felipe"?"Felipe":p==="lucia"?"Lucía":p?(p.charAt(0).toUpperCase()+p.slice(1)):"";}
 function shortVoter(p){return p==="felipe"?"FL":p==="lucia"?"LU":String(p).slice(0,2).toUpperCase();}
@@ -447,6 +462,7 @@ function card(r,best,isRent,withDeal){
   // "nuevo" pill for 48h so a freshly shared listing is findable despite the $/m² sort
   if(r.created_at&&Date.now()-Date.parse(r.created_at)<48*3600*1000)flag+="<span class=\"flag new\">nuevo</span>";
   flag+=stageChip(r);
+  flag+=priceFlag(r);
   flag+=voteFlag(r);
   // Estado grouping mixes rent and buy in one section — say which is which on the card itself
   if(withDeal&&(r.deal_type==="rent"||r.deal_type==="buy"))flag+="<span class=\"flag mut\">"+(r.deal_type==="rent"?"arriendo":"compra")+"</span>";
@@ -517,6 +533,7 @@ function listRow(r,isRent,open,withDeal){
   if(r.scrape_status&&r.scrape_status!=="ok")pills+="<span class=\"flag\">sin leer</span>";
   if(r.created_at&&Date.now()-Date.parse(r.created_at)<48*3600*1000)pills+="<span class=\"flag new\">nuevo</span>";
   pills+=stageChip(r); // scheduled chips carry the visit date, so no separate date pill needed
+  pills+=priceFlag(r);
   var vst=voteState(r);
   if(vst==="both")pills+="<span class=\"flag both\">💚</span>";
   else if(vst==="split")pills+="<span class=\"flag split\">👍/👎</span>";
@@ -632,7 +649,7 @@ function cellDisplay(r,c){
   if(c.k==="tag")return r.tag?tagChip(r.tag):"";
   if(c.k==="name")return esc(aptName(r));
   if(c.k==="type")return isRent?"Arriendo":r.deal_type==="buy"?"Compra":"";
-  if(c.k==="price")return r.price==null?"":mny(r.price)+(isRent?"/mes":"");
+  if(c.k==="price")return r.price==null?"":mny(r.price)+(isRent?"/mes":"")+priceFlag(r);
   if(c.k==="admin_fee")return r.admin_fee==null?"":mny(r.admin_fee);
   if(c.k==="ppm")return mny(ppmOf(r,isRent));
   // the cell stays click-to-edit; the small 🗺 anchor rides along (the click handler lets anchors through)
@@ -1209,7 +1226,10 @@ document.addEventListener("click",function(e){
     var id=Number(el.getAttribute("data-id"));
     el.disabled=true;var old=el.textContent;el.textContent="Leyendo…";
     action({action:"rescrape",id:id}).then(function(res){
-      if(res&&res.ok){toast("Releído ✓");}
+      if(res&&res.ok){
+        var pc=res.priceChange;
+        toast("Releído ✓"+(pc?(" · "+(pc.to<pc.from?"⬇ bajó a ":"⬆ subió a ")+mny(pc.to)):""));
+      }
       else{toast("No se pudo leer"+(res&&res.blocked?(" ("+(res.blocked==="bot"?"el sitio bloquea robots":res.blocked)+")"):""));}
       return load();
     }).catch(function(){toast("Error de red");}).then(function(){el.disabled=false;el.textContent=old;});

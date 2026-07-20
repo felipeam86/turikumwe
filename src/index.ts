@@ -433,7 +433,7 @@ async function ingestApartment(env: Env, url: string, msgText: string, who: stri
     // a re-sent link whose first read was blocked is a retry, not a dup — re-read it now
     if (existing.scrape_status && existing.scrape_status !== 'ok') {
       const rr = await rescrapeOne(env, existing.id);
-      return { reread: true, id: existing.id, ok: rr.ok, blocked: rr.blocked, name: aptName(existing) };
+      return { reread: true, id: existing.id, ok: rr.ok, blocked: rr.blocked, name: aptName(existing), priceChange: rr.priceChange };
     }
     return { dup: true, id: existing.id, status: existing.status, reason: existing.ruled_out_reason, name: aptName(existing) };
   }
@@ -452,16 +452,25 @@ async function ingestApartment(env: Env, url: string, msgText: string, who: stri
   return { id: res.meta.last_row_id, deal: dt, f, ppm, scr };
 }
 
-async function applyScrapedFields(env: Env, row: any, scr: any): Promise<{ f: any, dt: string, ppm: number | null }> {
+type PriceChange = { from: number; to: number } | null;
+// "· ⬇️ bajó de $X a $Y" (or ⬆️ subió) suffix for rescrape acks; '' when the price held
+const priceChangeNote = (pc: PriceChange) =>
+  pc ? ` · ${pc.to < pc.from ? '⬇️ bajó' : '⬆️ subió'} de ${money(pc.from)} a ${money(pc.to)}` : '';
+async function applyScrapedFields(env: Env, row: any, scr: any): Promise<{ f: any, dt: string, ppm: number | null, priceChange: PriceChange }> {
   const input = 'USER MESSAGE:\n' + (row.raw_note || '') + '\n\nSCRAPED EVIDENCE (ok from ' + scr.host + '):\n' + scr.evidence;
   const f = await extractFields(env, input);
   const dt = (f.deal_type === 'buy' || f.deal_type === 'rent') ? f.deal_type : (row.deal_type || 'unknown');
   const ppm = (f.price && f.area_m2 && f.area_m2 > 0) ? Math.round(Number(f.price) / Number(f.area_m2)) : row.price_per_m2;
   const now = new Date().toISOString();
+  // a re-read that moves the price is a market signal (negotiation lever) — remember the old
+  // value and when. First scrapes and unchanged prices keep whatever change record exists.
+  const priceChange: PriceChange = (f.price != null && row.price != null && Number(f.price) !== Number(row.price))
+    ? { from: Number(row.price), to: Number(f.price) } : null;
   await run(env,
-    "UPDATE apartments SET deal_type=?,title=?,price=?,admin_fee=?,bedrooms=?,bathrooms=?,area_m2=?,price_per_m2=?,parking=?,stratum=?,location=?,year_built=?,amenities=?,image_url=?,scrape_status='ok',updated_at=? WHERE id=?",
-    dt, f.title || row.title, f.price ?? row.price, f.admin_fee ?? row.admin_fee, f.bedrooms ?? row.bedrooms, f.bathrooms ?? row.bathrooms, f.area_m2 ?? row.area_m2, ppm, f.parking ?? row.parking, f.stratum ?? row.stratum, f.location || row.location, f.year_built ?? row.year_built, f.amenities || row.amenities, scr.image || row.image_url, now, row.id);
-  return { f, dt, ppm };
+    "UPDATE apartments SET deal_type=?,title=?,price=?,admin_fee=?,bedrooms=?,bathrooms=?,area_m2=?,price_per_m2=?,parking=?,stratum=?,location=?,year_built=?,amenities=?,image_url=?,prev_price=?,price_changed_at=?,scrape_status='ok',updated_at=? WHERE id=?",
+    dt, f.title || row.title, f.price ?? row.price, f.admin_fee ?? row.admin_fee, f.bedrooms ?? row.bedrooms, f.bathrooms ?? row.bathrooms, f.area_m2 ?? row.area_m2, ppm, f.parking ?? row.parking, f.stratum ?? row.stratum, f.location || row.location, f.year_built ?? row.year_built, f.amenities || row.amenities, scr.image || row.image_url,
+    priceChange ? row.price : (row.prev_price ?? null), priceChange ? now : (row.price_changed_at ?? null), now, row.id);
+  return { f, dt, ppm, priceChange };
 }
 
 async function rescrapeOne(env: Env, id: number): Promise<any> {
@@ -472,8 +481,8 @@ async function rescrapeOne(env: Env, id: number): Promise<any> {
     await run(env, 'UPDATE apartments SET scrape_status=?, updated_at=? WHERE id=?', scr.blocked || 'error', new Date().toISOString(), id);
     return { ok: false, id, blocked: scr.blocked, host: scr.host };
   }
-  await applyScrapedFields(env, row, scr);
-  return { ok: true, id };
+  const { priceChange } = await applyScrapedFields(env, row, scr);
+  return { ok: true, id, priceChange };
 }
 
 async function retryBlockedScrapes(env: Env): Promise<{ updated: any[], still: any[] }> {
@@ -483,8 +492,8 @@ async function retryBlockedScrapes(env: Env): Promise<{ updated: any[], still: a
     tgTyping(env); // each scrape can take up to 15s; keep the indicator alive per row
     const scr = await scrapeListing(row.url);
     if (!scr.ok) { still.push({ host: scr.host, blocked: scr.blocked }); continue; }
-    const { f, dt, ppm } = await applyScrapedFields(env, row, scr);
-    updated.push({ id: row.id, f, ppm, dt });
+    const { f, dt, ppm, priceChange } = await applyScrapedFields(env, row, scr);
+    updated.push({ id: row.id, f, ppm, dt, priceChange });
   }
   return { updated, still };
 }
@@ -758,7 +767,7 @@ async function handleCallback(env: Env, cq: any) {
     await tgAnswerCallback(env, cq.id, 'Leyendo… 🔍');
     tgTyping(env);
     const rr = await rescrapeOne(env, id);
-    if (rr.ok) await tgSend(env, `🔄 Releí *${mdEscape(aptName(row))}* #${id} — ${who}, vía botón\n` + aptLink(id));
+    if (rr.ok) await tgSend(env, `🔄 Releí *${mdEscape(aptName(row))}* #${id} — ${who}, vía botón${priceChangeNote(rr.priceChange)}\n` + aptLink(id));
     else await tgSend(env, `⚠️ Sigo sin poder leer *${mdEscape(aptName(row))}* #${id} (${rr.blocked || 'error'}) — prueba más tarde.`,
       undefined, kb([[{ text: '🔁 Releer', callback_data: 'rs:' + id }]]));
     return;
@@ -857,7 +866,7 @@ async function handleUpdate(env: Env, update: any) {
         const rec = await ingestApartment(env, u, text, who);
         if (rec.reread) {
           acks.push(rec.ok
-            ? { text: '🔄 Ya lo tenías (#' + rec.id + ') y no se había podido leer — lo releí ahora.\n' + aptLink(rec.id) }
+            ? { text: '🔄 Ya lo tenías (#' + rec.id + ') y no se había podido leer — lo releí ahora' + priceChangeNote(rec.priceChange) + '.\n' + aptLink(rec.id) }
             : {
               text: '🔁 Ya lo tenías guardado: *' + rec.name + '* #' + rec.id + '. Sigo sin poder leer la página (' + (rec.blocked || 'error') + ').\n' + aptLink(rec.id),
               markup: kb([[{ text: '🔁 Releer', callback_data: 'rs:' + rec.id }]]),
@@ -1044,7 +1053,7 @@ async function handleUpdate(env: Env, update: any) {
         const loc = u.f.location || u.f.title || ('#' + u.id);
         let pr = money(u.f.price); if (u.dt === 'rent' && pr) pr += '/mes';
         const bits = [pr, u.ppm ? ('≈' + money(u.ppm) + '/m²') : '', u.f.area_m2 ? (u.f.area_m2 + ' m²') : ''].filter(Boolean).join(' · ');
-        return '• ' + loc + (bits ? (' — ' + bits) : '');
+        return '• ' + loc + (bits ? (' — ' + bits) : '') + priceChangeNote(u.priceChange);
       }).join('\n'));
     }
     if (rr.still.length) {
@@ -1259,6 +1268,13 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
   }
   if (b.action === 'rescrape') {
     const res = await rescrapeOne(env, id);
+    // a price move must reach the group no matter who pressed the button; the JSON carries
+    // priceChange too so the frontend can toast it
+    if (res.ok && res.priceChange) {
+      const prow = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
+      const pc = res.priceChange;
+      echo(`${pc.to < pc.from ? '⬇️' : '⬆️'} *${mdEscape(aptName(prow))}* ${pc.to < pc.from ? 'bajó' : 'subió'} de ${money(pc.from)} a ${money(pc.to)}${via}`);
+    }
     return json({ ...res, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
   }
   if (b.action === 'set_fields') {
@@ -1292,6 +1308,9 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
       const ppm = (row && row.price && row.area_m2 > 0) ? Math.round(Number(row.price) / Number(row.area_m2)) : null;
       await run(env, 'UPDATE apartments SET price_per_m2=? WHERE id=?', ppm, id);
     }
+    // a hand-typed price is a correction, not a market move — drop any «bajó/subió» record so
+    // the UI never flags a change the market didn't make
+    if (field === 'price') await run(env, 'UPDATE apartments SET prev_price=NULL, price_changed_at=NULL WHERE id=?', id);
     return json({ ok: true, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
   }
   if (b.action === 'vote') {
