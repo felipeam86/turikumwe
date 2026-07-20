@@ -45,5 +45,19 @@ CREATE TABLE IF NOT EXISTS apartments (
   updated_at TEXT NOT NULL,
   visit_date TEXT,
   ruled_out_reason TEXT,
-  ruled_out_at TEXT
+  ruled_out_at TEXT,
+  visit_reminder_sent TEXT
+);
+
+-- photos taken during visits, sent to the Telegram group. Only permanent Telegram
+-- file_ids are stored (full size + a mid-size rendition for the web thumb strip);
+-- the short-lived file_path is resolved on demand.
+CREATE TABLE IF NOT EXISTS apartment_photos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  apartment_id INTEGER NOT NULL,
+  tg_file_id TEXT NOT NULL,
+  tg_thumb_file_id TEXT,
+  caption TEXT,
+  created_by TEXT,
+  created_at TEXT NOT NULL
 );

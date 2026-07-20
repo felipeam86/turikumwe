@@ -31,6 +31,14 @@ function today(): string {
   // en-CA gives YYYY-MM-DD
   return new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 }
+// Bogota wall-clock "YYYY-MM-DDTHH:MM" — string-comparable with visit_date (sv-SE formats as ISO)
+function nowBogota(): string {
+  return new Date().toLocaleString('sv-SE', { timeZone: TZ }).slice(0, 16).replace(' ', 'T');
+}
+// wall-clock string + N minutes; parsed Z-anchored so only the delta matters (Bogota has no DST)
+function plusMinutes(wallClock: string, min: number): string {
+  return new Date(Date.parse(wallClock.slice(0, 16) + ':00Z') + min * 60000).toISOString().slice(0, 16);
+}
 function weekday(): string {
   return new Intl.DateTimeFormat('es-CO', { timeZone: TZ, weekday: 'long' }).format(new Date());
 }
@@ -75,6 +83,28 @@ const aptName = (r: any) => r.location || r.title || r.source_site || ('apto ' +
 // decode the handful of HTML entities that appear in scraped attribute URLs (&amp; splits query params)
 function decodeHtml(s: string): string {
   return s.replace(/&amp;/g, '&').replace(/&#0*38;/g, '&').replace(/&quot;/g, '"').replace(/&#0*39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+}
+// server-side twins of mapsLink/waLink in apartments.html — keep both pairs in sync.
+// Maps: anchor the query to Bogotá so a bare street address doesn't resolve elsewhere.
+function mapsLink(addr: string): string {
+  let a = String(addr || '').trim();
+  if (a && !/bogot[aá]/i.test(a)) a += ', Bogotá';
+  return 'https://maps.google.com/?q=' + encodeURIComponent(a);
+}
+// WhatsApp: wa.me needs a full international number; bare 10-digit Colombian mobiles (start with 3) get +57
+function waLink(phone: string): string {
+  let d = String(phone || '').replace(/\D/g, '');
+  if (d.length === 10 && d.charAt(0) === '3') d = '57' + d;
+  return 'https://wa.me/' + d;
+}
+// legacy-Markdown safety for interpolated free text (addresses, agent/apartment names, scraped
+// URLs). Escape the four characters the legacy parser treats as markup openers…
+const mdEscape = (s: unknown) => String(s ?? '').replace(/([_*`\[])/g, '\\$1');
+// …and build links whose label/url can't break out of the entity: brackets stripped from the
+// label, parens percent-encoded in the url (the legacy parser ends the url at the first ')').
+// Raw URLs must never go in message text bare: mid-word `_` pairs silently corrupt them.
+function mdLink(label: string, url: string): string {
+  return '[' + String(label).replace(/[\[\]]/g, '') + '](' + String(url).replace(/\(/g, '%28').replace(/\)/g, '%29') + ')';
 }
 
 // ---- calendar invites (iCalendar over the Email Routing send_email binding) ----
@@ -232,7 +262,11 @@ async function completeItem(env: Env, id: number): Promise<{ ok: boolean; title?
 }
 
 // ---- telegram ----
-async function tgSend(env: Env, text: string, replyTo?: number) {
+// inline-keyboard shorthand: kb([[btn, btn], [btn]]) — one inner array per button row
+type TgBtn = { text: string; url?: string; callback_data?: string };
+const kb = (rows: TgBtn[][]) => ({ inline_keyboard: rows });
+
+async function tgSend(env: Env, text: string, replyTo?: number, replyMarkup?: unknown) {
   const send = (payload: Record<string, unknown>) =>
     fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`, {
       method: 'POST',
@@ -240,9 +274,23 @@ async function tgSend(env: Env, text: string, replyTo?: number) {
       body: JSON.stringify(payload),
     });
   const reply = replyTo ? { reply_to_message_id: replyTo, allow_sending_without_reply: true } : {};
-  const r = await send({ chat_id: env.GROUP_CHAT_ID, text, parse_mode: 'Markdown', ...reply });
+  const markup = replyMarkup ? { reply_markup: replyMarkup } : {};
+  let r = await send({ chat_id: env.GROUP_CHAT_ID, text, parse_mode: 'Markdown', ...reply, ...markup });
   // ponytail: if legacy-Markdown parsing rejects the text, resend plain rather than dropping the ack
-  if (!r.ok) await send({ chat_id: env.GROUP_CHAT_ID, text, ...reply });
+  if (!r.ok) r = await send({ chat_id: env.GROUP_CHAT_ID, text, ...reply, ...markup });
+  // still failing with a keyboard attached (e.g. Telegram rejecting a pasted listing url as a
+  // button url) → the text matters more than the buttons
+  if (!r.ok && replyMarkup) r = await send({ chat_id: env.GROUP_CHAT_ID, text, ...reply });
+  if (!r.ok) console.log('tgSend failed:', r.status, (await r.text().catch(() => '')).slice(0, 200));
+}
+
+// answerCallbackQuery clears the client-side spinner on a tapped button; text shows as a toast
+async function tgAnswerCallback(env: Env, callbackQueryId: string, text?: string) {
+  await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/answerCallbackQuery`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ callback_query_id: callbackQueryId, ...(text ? { text } : {}) }),
+  }).catch(() => {});
 }
 
 // fire-and-forget "typing…" indicator (Telegram shows it ~5s) so slow scrape/Claude work isn't dead air
@@ -262,6 +310,7 @@ const HELP = [
   '• Pregunta: "¿qué hay pendiente?"',
   '• Pega el link de un apartamento y lo guardo con precio y detalles.',
   '• Apartamentos: responde al mensaje del apto y di "visita el martes a las 10am" y agendo la visita con hora; también "agenda visita al apto 2 el sábado 3pm", "descarta el de Cedritos", "reactiva el apto 1", "el de Chicó nos gustó" (queda como nota), "reintenta" (relee links bloqueados).',
+  '• Fotos de visitas: responde al mensaje del apto con la foto (o pon "#id" en el pie) y la guardo en su tarjeta.',
   '• "resumen de aptos" te muestra cómo va la búsqueda.',
   '📱 App: https://turikumwe.cc',
 ].join('\n');
@@ -424,6 +473,36 @@ async function retryBlockedScrapes(env: Env): Promise<{ updated: any[], still: a
 // deep link straight to the card in the web app (apartments.html scrolls to and highlights #apt-<id>)
 const aptLink = (id: number | string) => 'https://turikumwe.cc/apartments.html#apt-' + id;
 
+// ---- shared apartment mutations ----
+// One implementation for the Telegram ops loop, the web actions, and callback buttons — including
+// the calendar-invite side effects. Both return null when the row isn't in the required status,
+// which doubles as the idempotency check for stale button taps.
+async function ruleOutApt(env: Env, id: number, rawReason: unknown): Promise<{ row: any; reason: string | null; mail: string } | null> {
+  const row = await get(env, "SELECT * FROM apartments WHERE id=? AND status='active'", id);
+  if (!row) return null;
+  const reason = (rawReason && String(rawReason).trim()) ? String(rawReason).trim().slice(0, 120) : null;
+  const now = new Date().toISOString();
+  // status predicate + changes check: two concurrent taps can both pass the SELECT, but only the
+  // invocation whose UPDATE actually flips the row gets to send mail and announce
+  const res = await run(env, "UPDATE apartments SET status='ruled_out', ruled_out_reason=?, ruled_out_at=?, updated_at=? WHERE id=? AND status='active'", reason, now, now, id);
+  if (!res.meta.changes) return null;
+  const mail = await visitMail(env, row, null, row.visit_date); // pending visit? tell the calendars it's off
+  return { row, reason, mail };
+}
+async function reactivateApt(env: Env, id: number): Promise<{ row: any; mail: string } | null> {
+  const row = await get(env, "SELECT * FROM apartments WHERE id=? AND status='ruled_out'", id);
+  if (!row) return null;
+  const res = await run(env, "UPDATE apartments SET status='active', ruled_out_reason=NULL, ruled_out_at=NULL, updated_at=? WHERE id=? AND status='ruled_out'", new Date().toISOString(), id);
+  if (!res.meta.changes) return null;
+  const mail = await visitMail(env, row, row.visit_date, null); // pending visit comes back → re-invite
+  return { row, mail };
+}
+// append one attributed, stamped note line ("YYYY-MM-DD [Autor]: text") — the format every reader parses
+async function appendAptNote(env: Env, id: number, author: string, note: string) {
+  const stamped = today() + (author ? ' [' + author + ']' : '') + ': ' + String(note).trim().slice(0, 300);
+  await run(env, "UPDATE apartments SET notes=COALESCE(notes||char(10),'')||?, updated_at=? WHERE id=?", stamped, new Date().toISOString(), id);
+}
+
 function apartmentAck(rec: any): string {
   const f = rec.f, dt = rec.deal;
   const label = dt === 'rent' ? 'arriendo' : dt === 'buy' ? 'compra' : 'sin especificar (dime si es compra o arriendo)';
@@ -444,9 +523,9 @@ function apartmentAck(rec: any): string {
   if (f.parking != null) extra.push('🚗 ' + f.parking + ' parq.');
   if (extra.length) lines.push(extra.join(' · '));
   if (!rec.scr.ok) {
-    lines.push('_No pude leer la página automáticamente (' + rec.scr.blocked + '). Guardé lo que escribiste; escribe "reintenta" para volver a probar._');
+    lines.push('_No pude leer la página automáticamente (' + rec.scr.blocked + '). Guardé lo que escribiste; toca 🔁 Releer (o escribe "reintenta") para volver a probar._');
   }
-  lines.push(aptLink(rec.id));
+  // no trailing deep link: the 📱 button on this ack covers it, and the #id keeps replies resolvable
   return lines.join('\n');
 }
 
@@ -537,10 +616,14 @@ async function buildDigestBody(env: Env, td: string, header: string): Promise<st
     out.push(`${CAT_EMOJI[cat]} *${CAT_LABEL[cat]}:*\n` + rows.join('\n'));
   }
   // upcoming apartment visits live in the apartments table, not items
-  const visits = await all(env, "SELECT location, title, source_site, id, visit_date FROM apartments WHERE status='active' AND visit_date>=? ORDER BY visit_date", td);
+  const visits = await all(env, "SELECT location, title, source_site, id, visit_date, address, agent_name, agent_phone FROM apartments WHERE status='active' AND visit_date>=? ORDER BY visit_date", td);
   if (visits.length) {
-    out.push('🏢 *Visitas de apartamentos:*\n' + visits.map((v: any) =>
-      `• ${aptName(v)} — ${stripWarn(dueLabel(v.visit_date, td))}${hhmm(v.visit_date)}`).join('\n'));
+    out.push('🏢 *Visitas de apartamentos:*\n' + visits.map((v: any) => {
+      let s = `• ${mdEscape(aptName(v))} #${v.id} — ${stripWarn(dueLabel(v.visit_date, td))}${hhmm(v.visit_date)}`;
+      if (v.address) s += ` · 📍 ${mdLink(v.address, mapsLink(v.address))}`;
+      if (v.agent_phone) s += ` · 💬 ${mdLink(v.agent_name || v.agent_phone, waLink(v.agent_phone))}`;
+      return s;
+    }).join('\n'));
   }
   if (out.length === 1) out.push('_Todo al día — nada pendiente. 🎉_');
   return out.join('\n\n');
@@ -562,6 +645,47 @@ async function sendEveningReminder(env: Env) {
     `• ${CAT_EMOJI[i.category]} ${i.title} — ${stripWarn(dueLabel(i.due_date, td))}`).join('\n'));
 }
 
+// ~1 h before each timed visit. Hourly cron + 90-min lookahead guarantees every visit lands in
+// exactly one window; visit_reminder_sent stores the covered datetime (not a boolean), so
+// rescheduling automatically re-arms the reminder. Date-only visits are the digest's job.
+async function sendVisitReminders(env: Env) {
+  const now = nowBogota();
+  const rows = await all(env,
+    "SELECT * FROM apartments WHERE status='active' AND visit_date IS NOT NULL AND length(visit_date)>10 AND visit_date>? AND visit_date<=? AND (visit_reminder_sent IS NULL OR visit_reminder_sent!=visit_date)",
+    now, plusMinutes(now, 90));
+  for (const r of rows) {
+    const lines = [`🔔 *Visita en ~1h — ${String(r.visit_date).slice(11, 16)}* · *${mdEscape(aptName(r))}* #${r.id}`];
+    if (r.address) lines.push(`📍 ${mdLink(r.address, mapsLink(r.address))}`);
+    if (r.agent_name) lines.push(`👤 ${mdEscape(r.agent_name)}`);
+    // the links live in buttons (url buttons never touch the Markdown parser)
+    const row1: TgBtn[] = [];
+    if (r.address) row1.push({ text: '🗺 Cómo llegar', url: mapsLink(r.address) });
+    if (r.agent_phone) row1.push({ text: '💬 Agente', url: waLink(r.agent_phone) });
+    const row2: TgBtn[] = [];
+    if (r.url) row2.push({ text: '🔗 Anuncio', url: r.url });
+    row2.push({ text: '📱 Abrir en la app', url: aptLink(r.id) });
+    await tgSend(env, lines.join('\n'), undefined, kb(row1.length ? [row1, row2] : [row2]));
+    await run(env, 'UPDATE apartments SET visit_reminder_sent=? WHERE id=?', r.visit_date, r.id);
+  }
+}
+
+// evening of a visit day: ask how it went. One message per apartment, each carrying the #id, so a
+// plain reply resolves via replyAptFromMsg and the ops parser stores it as an apt_note — no new
+// plumbing. visit_date<=now skips tonight's still-pending visits (a date-only visit sorts before
+// any "T…" timestamp of its day, so it counts as done by evening).
+async function sendPostVisitFollowup(env: Env) {
+  const rows = await all(env,
+    "SELECT * FROM apartments WHERE status='active' AND visit_date IS NOT NULL AND substr(visit_date,1,10)=? AND visit_date<=?",
+    today(), nowBogota());
+  for (const r of rows) {
+    await tgSend(env, `🗣 ¿Cómo les fue en *${mdEscape(aptName(r))}* #${r.id}? Un toque para el veredicto, o respondan a este mensaje y lo guardo como nota.`,
+      undefined, kb([
+        [{ text: '👍 Nos gustó', callback_data: 'up:' + r.id }, { text: '👎 No', callback_data: 'dn:' + r.id }],
+        [{ text: '🚫 Descartar', callback_data: 'ro:' + r.id }],
+      ]));
+  }
+}
+
 // When the user replies to the message that shared a listing (or the bot's ack for it) and asks to
 // schedule a visit, resolve which apartment so no name is needed: match the shared URL, then the "#id" the ack prints.
 async function replyAptFromMsg(env: Env, msg: any): Promise<{ id: number; name: string } | null> {
@@ -581,11 +705,118 @@ async function replyAptFromMsg(env: Env, msg: any): Promise<{ id: number; name: 
 }
 
 // ================= TELEGRAM UPDATE PROCESSING =================
+// Inline-keyboard callbacks. data is a server-generated "verb:id" string; anything else
+// (wrong chat, malformed data, missing row) just clears the spinner and does nothing.
+// A stale tap — the action already done or undone elsewhere — answers "ya estaba hecho".
+async function handleCallback(env: Env, cq: any) {
+  const m = String(cq?.data || '').match(/^(ro|re|rs|up|dn):(\d+)$/);
+  if (!m || String(cq?.message?.chat?.id) !== String(env.GROUP_CHAT_ID)) { await tgAnswerCallback(env, cq.id); return; }
+  const verb = m[1];
+  const id = Number(m[2]);
+  const who = cq.from?.first_name || 'alguien';
+  const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
+  if (!row) { await tgAnswerCallback(env, cq.id, 'Ese apartamento ya no existe'); return; }
+
+  if (verb === 'ro') {
+    const res = await ruleOutApt(env, id, null);
+    if (!res) { await tgAnswerCallback(env, cq.id, 'Ya estaba hecho 👍'); return; }
+    await tgAnswerCallback(env, cq.id, 'Descartado 🚫');
+    await tgSend(env, `🚫 *${mdEscape(aptName(row))}* #${id} descartado — ${who}, vía botón${res.mail}`,
+      undefined, kb([[{ text: '↩️ Reactivar', callback_data: 're:' + id }]]));
+    return;
+  }
+  if (verb === 're') {
+    const res = await reactivateApt(env, id);
+    if (!res) { await tgAnswerCallback(env, cq.id, 'Ya estaba hecho 👍'); return; }
+    await tgAnswerCallback(env, cq.id, 'De vuelta ↩️');
+    await tgSend(env, `↩️ *${mdEscape(aptName(row))}* #${id} de vuelta en la lista — ${who}, vía botón${res.mail}`);
+    return;
+  }
+  if (verb === 'rs') {
+    if (row.scrape_status === 'ok') { await tgAnswerCallback(env, cq.id, 'Ya estaba leído 👍'); return; }
+    // answer BEFORE the scrape: it can run 15 s+, past the window in which Telegram still
+    // accepts the answer — a late answer is silently rejected and the button spins forever
+    await tgAnswerCallback(env, cq.id, 'Leyendo… 🔍');
+    tgTyping(env);
+    const rr = await rescrapeOne(env, id);
+    if (rr.ok) await tgSend(env, `🔄 Releí *${mdEscape(aptName(row))}* #${id} — ${who}, vía botón\n` + aptLink(id));
+    else await tgSend(env, `⚠️ Sigo sin poder leer *${mdEscape(aptName(row))}* #${id} (${rr.blocked || 'error'}) — prueba más tarde.`,
+      undefined, kb([[{ text: '🔁 Releer', callback_data: 'rs:' + id }]]));
+    return;
+  }
+  // up/dn: one-tap post-visit verdict — a canned note attributed to whoever tapped
+  if (row.status !== 'active') { await tgAnswerCallback(env, cq.id, 'Ese apartamento está descartado'); return; }
+  const note = verb === 'up' ? '👍 nos gustó' : '👎 no nos gustó';
+  // the keyboard stays on the message forever, so dedup a repeat tap: same person, same
+  // verdict, same day → already recorded
+  if (String(row.notes || '').split('\n').includes(today() + ' [' + who + ']: ' + note)) {
+    await tgAnswerCallback(env, cq.id, 'Ya registrado 👍');
+    return;
+  }
+  await appendAptNote(env, id, who, note);
+  await tgAnswerCallback(env, cq.id, 'Nota guardada 📝');
+  await tgSend(env, `📝 Nota en *${mdEscape(aptName(row))}* #${id}: ${note} — ${who}, vía botón`);
+}
+
+// a photo message: attach it to the apartment resolved from the replied-to message or a "#id"
+// in the caption. The caption, when present, is usually an impression — store it as a note too.
+//
+// Albums arrive as one update per photo, and the user's caption rides on only ONE of them.
+// Remember each album's resolved apartment (and whether we already nagged) in isolate memory so
+// caption-attributed albums save every photo. Best-effort: a cold isolate can still miss a
+// sibling, but the updates of one album virtually always land on the same isolate together.
+const ALBUM_APT = new Map<string, { id: number; name: string; at: number }>();
+const ALBUM_NAGGED = new Map<string, number>();
+function albumPrune() {
+  const cutoff = Date.now() - 10 * 60000;
+  for (const [k, v] of ALBUM_APT) if (v.at < cutoff) ALBUM_APT.delete(k);
+  for (const [k, at] of ALBUM_NAGGED) if (at < cutoff) ALBUM_NAGGED.delete(k);
+}
+async function handlePhoto(env: Env, msg: any) {
+  const sizes = msg.photo; // Telegram sends sizes ascending — the last is the full-resolution one
+  const fileId = String(sizes[sizes.length - 1].file_id);
+  // a mid-size rendition for the web thumb strip: the smallest ≥240px wide, else the largest
+  const thumbId = String((sizes.find((s: any) => Number(s.width) >= 240) || sizes[sizes.length - 1]).file_id);
+  const caption = String(msg.caption || '').trim();
+  const album = msg.media_group_id ? String(msg.media_group_id) : null;
+  albumPrune();
+  let apt = await replyAptFromMsg(env, msg); // reads only reply_to_message, so it works on photos
+  if (!apt) {
+    const m = caption.match(/#(\d+)/);
+    const row = m ? await get(env, 'SELECT * FROM apartments WHERE id=?', Number(m[1])) : null;
+    if (row) apt = { id: row.id, name: aptName(row) };
+  }
+  if (!apt && album) {
+    // caption-less album sibling — its captioned sibling may still be in flight; give it a
+    // moment, then adopt the album's resolution from memory
+    if (!ALBUM_APT.has(album)) await new Promise((res) => setTimeout(res, 4000));
+    apt = ALBUM_APT.get(album) || null;
+  }
+  if (!apt) {
+    if (album) { // nag once per album, not once per photo
+      if (ALBUM_NAGGED.has(album)) return;
+      ALBUM_NAGGED.set(album, Date.now());
+    }
+    await tgSend(env, '📸 ¿De cuál apto? Responde al mensaje del apartamento con la foto, o pon "#id" en el pie.', msg.message_id);
+    return;
+  }
+  if (album) ALBUM_APT.set(album, { id: apt.id, name: apt.name, at: Date.now() });
+  const who = msg.from?.first_name || null;
+  await run(env, 'INSERT INTO apartment_photos (apartment_id, tg_file_id, tg_thumb_file_id, caption, created_by, created_at) VALUES (?,?,?,?,?,?)',
+    apt.id, fileId, thumbId, caption || null, who, new Date().toISOString());
+  if (caption) await appendAptNote(env, apt.id, who || '', caption);
+  await tgSend(env, `📸 Foto guardada en *${mdEscape(apt.name)}* #${apt.id}`, msg.message_id);
+}
+
 async function handleUpdate(env: Env, update: any) {
+  if (update?.callback_query) { await handleCallback(env, update.callback_query); return; }
   const msg = update?.message;
-  const text = String(msg?.text || '').trim();
-  if (!msg || !text) return;
-  if (String(msg.chat?.id) !== String(env.GROUP_CHAT_ID)) return;
+  if (!msg || String(msg.chat?.id) !== String(env.GROUP_CHAT_ID)) return;
+  // photos first — they have no text, so they'd be dropped by the guard below.
+  // Albums arrive as one update per photo; each is saved and acked individually.
+  if (Array.isArray(msg.photo) && msg.photo.length) { await handlePhoto(env, msg); return; }
+  const text = String(msg.text || '').trim();
+  if (!text) return;
   const who = [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(' ') || 'group';
   const td = today();
 
@@ -595,33 +826,42 @@ async function handleUpdate(env: Env, update: any) {
     return;
   }
 
-  // URL message → apartment ingestion only
+  // URL message → apartment ingestion only. One ack message per URL, so each
+  // inline keyboard unambiguously belongs to its apartment.
   if (URL_RE.test(text)) {
-    const acks: string[] = [];
+    const acks: { text: string; markup?: unknown }[] = [];
     for (const u of extractUrls(text)) {
       tgTyping(env);
       try {
         const rec = await ingestApartment(env, u, text, who);
         if (rec.reread) {
           acks.push(rec.ok
-            ? '🔄 Ya lo tenías (#' + rec.id + ') y no se había podido leer — lo releí ahora.\n' + aptLink(rec.id)
-            : '🔁 Ya lo tenías guardado: *' + rec.name + '* #' + rec.id + '. Sigo sin poder leer la página (' + (rec.blocked || 'error') + ').\n' + aptLink(rec.id));
+            ? { text: '🔄 Ya lo tenías (#' + rec.id + ') y no se había podido leer — lo releí ahora.\n' + aptLink(rec.id) }
+            : {
+              text: '🔁 Ya lo tenías guardado: *' + rec.name + '* #' + rec.id + '. Sigo sin poder leer la página (' + (rec.blocked || 'error') + ').\n' + aptLink(rec.id),
+              markup: kb([[{ text: '🔁 Releer', callback_data: 'rs:' + rec.id }]]),
+            });
         } else if (rec.dup) {
           const st = rec.status === 'ruled_out' ? ' — estaba *descartado*' + (rec.reason ? ' (' + rec.reason + ')' : '') : '';
-          acks.push('🔁 Ya lo tenías guardado: *' + rec.name + '* #' + rec.id + st + '.\n' + aptLink(rec.id));
+          acks.push({ text: '🔁 Ya lo tenías guardado: *' + rec.name + '* #' + rec.id + st + '.\n' + aptLink(rec.id) });
         } else if (rec.skipped) {
-          acks.push('🔗 Ese link no parece un anuncio de apartamento — no lo guardé. Si sí lo es, reenvíalo diciendo que es un apto.');
+          acks.push({ text: '🔗 Ese link no parece un anuncio de apartamento — no lo guardé. Si sí lo es, reenvíalo diciendo que es un apto.' });
         } else {
-          acks.push(apartmentAck(rec));
+          const row2: TgBtn[] = [{ text: '🚫 Descartar', callback_data: 'ro:' + rec.id }];
+          if (!rec.scr.ok) row2.push({ text: '🔁 Releer', callback_data: 'rs:' + rec.id });
+          acks.push({
+            text: apartmentAck(rec),
+            markup: kb([[{ text: '📱 Abrir en la app', url: aptLink(rec.id) }, { text: '🔗 Anuncio', url: u }], row2]),
+          });
         }
       } catch (e: any) {
-        acks.push('No pude guardar un apartamento (' + String(e && e.message || e).slice(0, 80) + ').');
+        acks.push({ text: 'No pude guardar un apartamento (' + String(e && e.message || e).slice(0, 80) + ').' });
       }
     }
     // household text riding along with a URL is not parsed — say so instead of dropping it silently
     const rest = text.replace(new RegExp(URL_RE.source, 'gi'), '').trim();
-    if (rest.length > 30) acks.push('_Ojo: en mensajes con link solo guardo el apartamento — si había algo más que anotar, envíalo aparte._');
-    if (acks.length) await tgSend(env, acks.join('\n\n'), msg.message_id);
+    if (rest.length > 30) acks.push({ text: '_Ojo: en mensajes con link solo guardo el apartamento — si había algo más que anotar, envíalo aparte._' });
+    for (const a of acks) await tgSend(env, a.text, msg.message_id, a.markup);
     return;
   }
 
@@ -733,28 +973,17 @@ async function handleUpdate(env: Env, update: any) {
         visitsSet.push((arow.location || arow.title || ('apto ' + arow.id)) + (vd ? (' → ' + dueLabel(vd, td) + hhmm(vd)) : ' (visita cancelada)') + mail);
       }
     } else if (op.action === 'rule_out' && op.apt_id != null) {
-      const arow = await get(env, "SELECT * FROM apartments WHERE id=? AND status='active'", op.apt_id);
-      if (arow) {
-        const reason = (op.reason && String(op.reason).trim()) ? String(op.reason).trim().slice(0, 120) : null;
-        const rnow = new Date().toISOString();
-        await run(env, "UPDATE apartments SET status='ruled_out', ruled_out_reason=?, ruled_out_at=?, updated_at=? WHERE id=?", reason, rnow, rnow, op.apt_id);
-        const mail = await visitMail(env, arow, null, arow.visit_date); // pending visit? tell the calendars it's off
-        ruledOut.push((arow.location || arow.title || ('apto ' + arow.id)) + (reason ? (' — ' + reason) : '') + mail);
-      }
+      const res = await ruleOutApt(env, Number(op.apt_id), op.reason);
+      if (res) ruledOut.push(aptName(res.row) + (res.reason ? (' — ' + res.reason) : '') + res.mail);
     } else if (op.action === 'reactivate' && op.apt_id != null) {
-      const arow = await get(env, "SELECT * FROM apartments WHERE id=? AND status='ruled_out'", op.apt_id);
-      if (arow) {
-        await run(env, "UPDATE apartments SET status='active', ruled_out_reason=NULL, ruled_out_at=NULL, updated_at=? WHERE id=?", new Date().toISOString(), op.apt_id);
-        const mail = await visitMail(env, arow, arow.visit_date, null); // pending visit comes back → re-invite
-        reactivated.push((arow.location || arow.title || ('apto ' + arow.id)) + mail);
-      }
+      const res = await reactivateApt(env, Number(op.apt_id));
+      if (res) reactivated.push(aptName(res.row) + res.mail);
     } else if (op.action === 'apt_note' && op.apt_id != null && op.note) {
       // any status — recording why a ruled-out apartment was rejected is legit; a miss must not be silent
       const arow = await get(env, "SELECT * FROM apartments WHERE id=?", op.apt_id);
       if (arow) {
-        // attributed line ("YYYY-MM-DD [Autor]: text") — first name of whoever sent the Telegram message
-        const note = td + ' [' + who.split(' ')[0] + ']: ' + String(op.note).trim().slice(0, 300);
-        await run(env, "UPDATE apartments SET notes=COALESCE(notes||char(10),'')||?, updated_at=? WHERE id=?", note, new Date().toISOString(), op.apt_id);
+        // attributed to the first name of whoever sent the Telegram message
+        await appendAptNote(env, Number(op.apt_id), who.split(' ')[0], String(op.note));
         noted.push(aptName(arow) + ' — ' + String(op.note).trim());
       } else notFound.push('apto #' + op.apt_id);
     }
@@ -911,7 +1140,39 @@ async function itemsAction(env: Env, req: Request, ctx: ExecutionContext): Promi
 async function apartmentsData(env: Env): Promise<Response> {
   const rows = await all(env, "SELECT * FROM apartments WHERE status='active' ORDER BY created_at DESC");
   const ruledOut = await all(env, "SELECT * FROM apartments WHERE status='ruled_out' ORDER BY ruled_out_at DESC, updated_at DESC");
+  // visit photos, grouped per apartment (active and ruled-out alike); file ids stay server-side
+  const photos = await all(env, 'SELECT id, apartment_id, caption, created_at FROM apartment_photos ORDER BY id');
+  const byApt: Record<number, any[]> = {};
+  for (const p of photos) (byApt[p.apartment_id] = byApt[p.apartment_id] || []).push({ id: p.id, caption: p.caption, created_at: p.created_at });
+  for (const r of [...rows, ...ruledOut]) r.photos = byApt[r.id] || [];
   return json({ apartments: rows, ruledOut, today: today() });
+}
+
+// serve a stored visit photo: permanent file_id → short-lived file_path (getFile, expires ~1 h,
+// so it's resolved per request and never stored) → stream the bytes. Access guards the route.
+// thumb=true serves the mid-size rendition (the strip's 72px squares don't need full res).
+async function photoResponse(env: Env, photoId: number, thumb: boolean): Promise<Response> {
+  const row = await get(env, 'SELECT tg_file_id, tg_thumb_file_id FROM apartment_photos WHERE id=?', photoId);
+  if (!row) return new Response('not found', { status: 404 });
+  try {
+    const gf = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/getFile`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ file_id: (thumb && row.tg_thumb_file_id) || row.tg_file_id }),
+    });
+    const j: any = await gf.json();
+    if (!j.ok || !j.result?.file_path) return new Response('telegram getFile failed', { status: 502 });
+    const f = await fetch(`https://api.telegram.org/file/bot${env.BOT_TOKEN}/${j.result.file_path}`);
+    if (!f.ok || !f.body) return new Response('telegram file fetch failed', { status: 502 });
+    return new Response(f.body, {
+      headers: {
+        'content-type': f.headers.get('content-type') || 'image/jpeg',
+        'cache-control': 'private, max-age=86400',
+      },
+    });
+  } catch (e: any) {
+    return new Response('telegram error: ' + String(e && e.message || e).slice(0, 80), { status: 502 });
+  }
 }
 
 async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): Promise<Response> {
@@ -920,7 +1181,7 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
   if (!id) return json({ ok: false, error: 'missing id' }, 400);
   const who = webUser(req);
   const via = ` — vía web${who ? ' · ' + who : ''}`;
-  const echo = (msg: string) => ctx.waitUntil(tgSend(env, msg).catch(() => {}));
+  const echo = (msg: string, markup?: unknown) => ctx.waitUntil(tgSend(env, msg, undefined, markup).catch(() => {}));
   if (b.action === 'set_visit') {
     const vd = (b.visit_date == null || b.visit_date === '') ? null : String(b.visit_date);
     const oldVd = (await get(env, 'SELECT visit_date FROM apartments WHERE id=?', id))?.visit_date || null;
@@ -946,24 +1207,17 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
     return json({ ok: true });
   }
   if (b.action === 'rule_out') {
-    const reason = (b.reason && String(b.reason).trim()) ? String(b.reason).trim().slice(0, 120) : null;
-    const now = new Date().toISOString();
-    await run(env, "UPDATE apartments SET status='ruled_out', ruled_out_reason=?, ruled_out_at=?, updated_at=? WHERE id=?", reason, now, now, id);
-    const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
-    if (row) ctx.waitUntil((async () => {
-      const mail = await visitMail(env, row, null, row.visit_date); // pending visit? tell the calendars it's off
-      await tgSend(env, `🚫 *${aptName(row)}* descartado${reason ? ' — ' + reason : ''}${via}${mail}`);
-    })().catch(() => {}));
-    return json({ ok: true, row });
+    const res = await ruleOutApt(env, id, b.reason); // shared with Telegram ops + callback buttons
+    if (!res) return json({ ok: false, error: 'no encontrado' }, 404);
+    echo(`🚫 *${mdEscape(aptName(res.row))}* descartado${res.reason ? ' — ' + res.reason : ''}${via}${res.mail}`,
+      kb([[{ text: '↩️ Reactivar', callback_data: 're:' + id }]]));
+    return json({ ok: true, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
   }
   if (b.action === 'reactivate') {
-    await run(env, "UPDATE apartments SET status='active', ruled_out_reason=NULL, ruled_out_at=NULL, updated_at=? WHERE id=?", new Date().toISOString(), id);
-    const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
-    if (row) ctx.waitUntil((async () => {
-      const mail = await visitMail(env, row, row.visit_date, null); // pending visit comes back → re-invite
-      await tgSend(env, `↩️ *${aptName(row)}* de vuelta en la lista${via}${mail}`);
-    })().catch(() => {}));
-    return json({ ok: true, row });
+    const res = await reactivateApt(env, id);
+    if (!res) return json({ ok: false, error: 'no encontrado' }, 404);
+    echo(`↩️ *${mdEscape(aptName(res.row))}* de vuelta en la lista${via}${res.mail}`);
+    return json({ ok: true, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
   }
   if (b.action === 'rescrape') {
     const res = await rescrapeOne(env, id);
@@ -1005,9 +1259,7 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
   if (b.action === 'apt_note') {
     const note = (b.note && String(b.note).trim()) ? String(b.note).trim().slice(0, 300) : null;
     if (!note) return json({ ok: false, error: 'empty note' }, 400);
-    const author = webAuthor(req);
-    const stamped = today() + (author ? ' [' + author + ']' : '') + ': ' + note;
-    await run(env, "UPDATE apartments SET notes=COALESCE(notes||char(10),'')||?, updated_at=? WHERE id=?", stamped, new Date().toISOString(), id);
+    await appendAptNote(env, id, webAuthor(req), note);
     const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
     if (row) echo(`📝 Nota en *${aptName(row)}*: ${note}${via}`);
     return json({ ok: true, row });
@@ -1031,7 +1283,8 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
 
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    const path = new URL(req.url).pathname;
+    const url = new URL(req.url);
+    const path = url.pathname;
 
     if (path === '/telegram-webhook' && req.method === 'POST') {
       if (req.headers.get('x-telegram-bot-api-secret-token') !== env.TG_WEBHOOK_SECRET) {
@@ -1047,6 +1300,8 @@ export default {
     if (req.method === 'GET' && path === '/dashboard.html') return dashboardPage(env);
     if (req.method === 'GET' && path === '/apartments.html') return html(apartmentsHtml);
     if (req.method === 'GET' && path === '/apartments-data.json') return apartmentsData(env);
+    const photoM = path.match(/^\/apt-photo\/(\d+)$/);
+    if (req.method === 'GET' && photoM) return photoResponse(env, Number(photoM[1]), url.searchParams.get('s') === 't');
     if (req.method === 'GET' && path === '/manifest.json') return manifestResponse();
     if (req.method === 'GET' && path === '/icon.png') return iconResponse();
     if (req.method === 'POST' && path === '/apartments-action') return apartmentsAction(env, req, ctx);
@@ -1056,9 +1311,16 @@ export default {
   },
 
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
-    // '0 0 * * *' = the 19:00-Bogota evening cron in wrangler.toml; keep both strings in sync.
-    // Any other trigger (the 07:30 morning cron) sends the full digest.
-    if (controller.cron === '0 0 * * *') { await sendEveningReminder(env); return; }
-    await sendDigest(env);
+    // Explicit dispatch per cron — keep the strings in sync with [triggers] in wrangler.toml:
+    //   '30 12 * * *' = 07:30 Bogota morning digest
+    //   '0 0 * * *'   = 19:00 Bogota evening: still-due nudge + post-visit follow-up
+    //   '0 * * * *'   = hourly visit reminders (~1 h before each timed visit)
+    // At 00:00 UTC the evening and hourly crons both fire, as two separate invocations — fine.
+    switch (controller.cron) {
+      case '30 12 * * *': await sendDigest(env); return;
+      case '0 0 * * *': await sendEveningReminder(env); await sendPostVisitFollowup(env); return;
+      case '0 * * * *': await sendVisitReminders(env); return;
+      default: console.log('unknown cron:', controller.cron); // never guess — a wrong guess spams the group
+    }
   },
 } satisfies ExportedHandler<Env>;

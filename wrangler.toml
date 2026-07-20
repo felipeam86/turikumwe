@@ -7,9 +7,10 @@ routes = [
   { pattern = "turikumwe.cc", custom_domain = true },
 ]
 
-# 07:30 digest + 19:00 still-due-today nudge, America/Bogota (UTC-5, no DST)
+# 07:30 digest + 19:00 evening nudge & post-visit follow-up + hourly visit reminders,
+# America/Bogota (UTC-5, no DST). Keep in sync with the scheduled() dispatch in src/index.ts.
 [triggers]
-crons = ["30 12 * * *", "0 0 * * *"]
+crons = ["30 12 * * *", "0 0 * * *", "0 * * * *"]
 
 [[d1_databases]]
 binding = "DB"

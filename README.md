@@ -37,6 +37,20 @@ Same reasoning — run **before** `wrangler deploy`, or the `set_fields` action 
 npx wrangler d1 execute household --remote --command "ALTER TABLE apartments ADD COLUMN address TEXT; ALTER TABLE apartments ADD COLUMN agent_name TEXT; ALTER TABLE apartments ADD COLUMN agent_phone TEXT; ALTER TABLE apartments ADD COLUMN tag TEXT"
 ```
 
+**Migrating a database created before the visit-reminder column:**
+
+Same reasoning — run **before** `wrangler deploy`, or the hourly visit-reminder cron will fail:
+
+```sh
+npx wrangler d1 execute household --remote --command "ALTER TABLE apartments ADD COLUMN visit_reminder_sent TEXT"
+```
+
+**Migrating a database created before visit photos:** `apartment_photos` is a **new table**, so no `ALTER` is needed — just re-apply the schema file (its `CREATE TABLE IF NOT EXISTS` leaves existing tables alone), before deploy:
+
+```sh
+npx wrangler d1 execute household --remote --file schema.sql
+```
+
 ### 2. Config
 
 In `wrangler.toml`, set `GROUP_CHAT_ID` to the Telegram group's chat id (usually negative, e.g. `-100123456789`). Then set the three secrets:
@@ -86,6 +100,7 @@ The cron (07:30 America/Bogota = `30 12 * * *` UTC) is already in `wrangler.toml
 | `POST /items-action` | Access | `complete` an item (monthly items roll forward); echoes to the Telegram group |
 | `GET /apartments.html` | Access | Apartment comparison (mobile-first cards) |
 | `GET /apartments-data.json` | Access | Data for the apartments screen |
+| `GET /apt-photo/<id>` | Access | A visit photo, streamed from Telegram by its stored `file_id` (`?s=t` = mid-size thumb) |
 | `POST /apartments-action` | Access | `set_visit` / `rescrape` / `rule_out` / `reactivate` / `apt_note` / `set_fields` (address, agent, phone, tag); most echo to the Telegram group |
 | `GET /manifest.json`, `GET /icon.png` | Access | PWA manifest + icon (icons inlined as data URIs — Chrome fetches manifest icons without the Access cookie) |
 
