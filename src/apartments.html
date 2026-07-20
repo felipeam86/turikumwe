@@ -237,7 +237,8 @@ function aptName(r){return r.location||r.title||r.source_site||("apto "+r.id);}
 // WhatsApp deep link: wa.me needs a full international number, digits only.
 // Bare 10-digit Colombian mobiles (start with 3) get the +57 country code.
 function waLink(phone){var d=String(phone||"").replace(/\D/g,"");if(d.length===10&&d.charAt(0)==="3")d="57"+d;return "https://wa.me/"+d;}
-function mapsLink(addr){return "https://maps.google.com/?q="+encodeURIComponent(addr);}
+// anchor the query to Bogotá so a bare street address doesn't resolve to the same one in another city
+function mapsLink(addr){var a=String(addr||"").trim();if(a&&!/bogot[aá]/i.test(a))a+=", Bogotá";return "https://maps.google.com/?q="+encodeURIComponent(a);}
 function mny(n){return (n==null||isNaN(Number(n)))?"—":"$"+Number(n).toLocaleString("es-CO");}
 function toast(t){var el=document.getElementById("toast");el.textContent=t;el.classList.add("show");setTimeout(function(){el.classList.remove("show");},1800);}
 function num(v){return v==null?"—":v;}
