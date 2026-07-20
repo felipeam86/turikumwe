@@ -310,6 +310,7 @@ const HELP = [
   '• Pregunta: "¿qué hay pendiente?"',
   '• Pega el link de un apartamento y lo guardo con precio y detalles.',
   '• Apartamentos: responde al mensaje del apto y di "visita el martes a las 10am" y agendo la visita con hora; también "agenda visita al apto 2 el sábado 3pm", "descarta el de Cedritos", "reactiva el apto 1", "el de Chicó nos gustó" (queda como nota), "reintenta" (relee links bloqueados).',
+  '• Fotos de visitas: responde al mensaje del apto con la foto (o pon "#id" en el pie) y la guardo en su tarjeta.',
   '• "resumen de aptos" te muestra cómo va la búsqueda.',
   '📱 App: https://turikumwe.cc',
 ].join('\n');
@@ -757,12 +758,65 @@ async function handleCallback(env: Env, cq: any) {
   await tgSend(env, `📝 Nota en *${mdEscape(aptName(row))}* #${id}: ${note} — ${who}, vía botón`);
 }
 
+// a photo message: attach it to the apartment resolved from the replied-to message or a "#id"
+// in the caption. The caption, when present, is usually an impression — store it as a note too.
+//
+// Albums arrive as one update per photo, and the user's caption rides on only ONE of them.
+// Remember each album's resolved apartment (and whether we already nagged) in isolate memory so
+// caption-attributed albums save every photo. Best-effort: a cold isolate can still miss a
+// sibling, but the updates of one album virtually always land on the same isolate together.
+const ALBUM_APT = new Map<string, { id: number; name: string; at: number }>();
+const ALBUM_NAGGED = new Map<string, number>();
+function albumPrune() {
+  const cutoff = Date.now() - 10 * 60000;
+  for (const [k, v] of ALBUM_APT) if (v.at < cutoff) ALBUM_APT.delete(k);
+  for (const [k, at] of ALBUM_NAGGED) if (at < cutoff) ALBUM_NAGGED.delete(k);
+}
+async function handlePhoto(env: Env, msg: any) {
+  const sizes = msg.photo; // Telegram sends sizes ascending — the last is the full-resolution one
+  const fileId = String(sizes[sizes.length - 1].file_id);
+  // a mid-size rendition for the web thumb strip: the smallest ≥240px wide, else the largest
+  const thumbId = String((sizes.find((s: any) => Number(s.width) >= 240) || sizes[sizes.length - 1]).file_id);
+  const caption = String(msg.caption || '').trim();
+  const album = msg.media_group_id ? String(msg.media_group_id) : null;
+  albumPrune();
+  let apt = await replyAptFromMsg(env, msg); // reads only reply_to_message, so it works on photos
+  if (!apt) {
+    const m = caption.match(/#(\d+)/);
+    const row = m ? await get(env, 'SELECT * FROM apartments WHERE id=?', Number(m[1])) : null;
+    if (row) apt = { id: row.id, name: aptName(row) };
+  }
+  if (!apt && album) {
+    // caption-less album sibling — its captioned sibling may still be in flight; give it a
+    // moment, then adopt the album's resolution from memory
+    if (!ALBUM_APT.has(album)) await new Promise((res) => setTimeout(res, 4000));
+    apt = ALBUM_APT.get(album) || null;
+  }
+  if (!apt) {
+    if (album) { // nag once per album, not once per photo
+      if (ALBUM_NAGGED.has(album)) return;
+      ALBUM_NAGGED.set(album, Date.now());
+    }
+    await tgSend(env, '📸 ¿De cuál apto? Responde al mensaje del apartamento con la foto, o pon "#id" en el pie.', msg.message_id);
+    return;
+  }
+  if (album) ALBUM_APT.set(album, { id: apt.id, name: apt.name, at: Date.now() });
+  const who = msg.from?.first_name || null;
+  await run(env, 'INSERT INTO apartment_photos (apartment_id, tg_file_id, tg_thumb_file_id, caption, created_by, created_at) VALUES (?,?,?,?,?,?)',
+    apt.id, fileId, thumbId, caption || null, who, new Date().toISOString());
+  if (caption) await appendAptNote(env, apt.id, who || '', caption);
+  await tgSend(env, `📸 Foto guardada en *${mdEscape(apt.name)}* #${apt.id}`, msg.message_id);
+}
+
 async function handleUpdate(env: Env, update: any) {
   if (update?.callback_query) { await handleCallback(env, update.callback_query); return; }
   const msg = update?.message;
-  const text = String(msg?.text || '').trim();
-  if (!msg || !text) return;
-  if (String(msg.chat?.id) !== String(env.GROUP_CHAT_ID)) return;
+  if (!msg || String(msg.chat?.id) !== String(env.GROUP_CHAT_ID)) return;
+  // photos first — they have no text, so they'd be dropped by the guard below.
+  // Albums arrive as one update per photo; each is saved and acked individually.
+  if (Array.isArray(msg.photo) && msg.photo.length) { await handlePhoto(env, msg); return; }
+  const text = String(msg.text || '').trim();
+  if (!text) return;
   const who = [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(' ') || 'group';
   const td = today();
 
@@ -1086,7 +1140,39 @@ async function itemsAction(env: Env, req: Request, ctx: ExecutionContext): Promi
 async function apartmentsData(env: Env): Promise<Response> {
   const rows = await all(env, "SELECT * FROM apartments WHERE status='active' ORDER BY created_at DESC");
   const ruledOut = await all(env, "SELECT * FROM apartments WHERE status='ruled_out' ORDER BY ruled_out_at DESC, updated_at DESC");
+  // visit photos, grouped per apartment (active and ruled-out alike); file ids stay server-side
+  const photos = await all(env, 'SELECT id, apartment_id, caption, created_at FROM apartment_photos ORDER BY id');
+  const byApt: Record<number, any[]> = {};
+  for (const p of photos) (byApt[p.apartment_id] = byApt[p.apartment_id] || []).push({ id: p.id, caption: p.caption, created_at: p.created_at });
+  for (const r of [...rows, ...ruledOut]) r.photos = byApt[r.id] || [];
   return json({ apartments: rows, ruledOut, today: today() });
+}
+
+// serve a stored visit photo: permanent file_id → short-lived file_path (getFile, expires ~1 h,
+// so it's resolved per request and never stored) → stream the bytes. Access guards the route.
+// thumb=true serves the mid-size rendition (the strip's 72px squares don't need full res).
+async function photoResponse(env: Env, photoId: number, thumb: boolean): Promise<Response> {
+  const row = await get(env, 'SELECT tg_file_id, tg_thumb_file_id FROM apartment_photos WHERE id=?', photoId);
+  if (!row) return new Response('not found', { status: 404 });
+  try {
+    const gf = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/getFile`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ file_id: (thumb && row.tg_thumb_file_id) || row.tg_file_id }),
+    });
+    const j: any = await gf.json();
+    if (!j.ok || !j.result?.file_path) return new Response('telegram getFile failed', { status: 502 });
+    const f = await fetch(`https://api.telegram.org/file/bot${env.BOT_TOKEN}/${j.result.file_path}`);
+    if (!f.ok || !f.body) return new Response('telegram file fetch failed', { status: 502 });
+    return new Response(f.body, {
+      headers: {
+        'content-type': f.headers.get('content-type') || 'image/jpeg',
+        'cache-control': 'private, max-age=86400',
+      },
+    });
+  } catch (e: any) {
+    return new Response('telegram error: ' + String(e && e.message || e).slice(0, 80), { status: 502 });
+  }
 }
 
 async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): Promise<Response> {
@@ -1197,7 +1283,8 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
 
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    const path = new URL(req.url).pathname;
+    const url = new URL(req.url);
+    const path = url.pathname;
 
     if (path === '/telegram-webhook' && req.method === 'POST') {
       if (req.headers.get('x-telegram-bot-api-secret-token') !== env.TG_WEBHOOK_SECRET) {
@@ -1213,6 +1300,8 @@ export default {
     if (req.method === 'GET' && path === '/dashboard.html') return dashboardPage(env);
     if (req.method === 'GET' && path === '/apartments.html') return html(apartmentsHtml);
     if (req.method === 'GET' && path === '/apartments-data.json') return apartmentsData(env);
+    const photoM = path.match(/^\/apt-photo\/(\d+)$/);
+    if (req.method === 'GET' && photoM) return photoResponse(env, Number(photoM[1]), url.searchParams.get('s') === 't');
     if (req.method === 'GET' && path === '/manifest.json') return manifestResponse();
     if (req.method === 'GET' && path === '/icon.png') return iconResponse();
     if (req.method === 'POST' && path === '/apartments-action') return apartmentsAction(env, req, ctx);

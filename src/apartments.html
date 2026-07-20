@@ -184,6 +184,11 @@
   .arow .atime.tbd{color:var(--muted);font-weight:400;font-style:italic;font-size:11px;min-width:0;}
   .arow .aname{font-weight:600;font-size:14px;color:var(--fg);text-decoration:none;flex:1;min-width:0;overflow-wrap:break-word;}
   .arow .aloc a{color:var(--accent);text-decoration:none;font-size:15px;}
+  /* visit-photo thumb strip (photos taken by us, under the listing's own og:image) */
+  .pstrip{display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;margin-bottom:10px;}
+  .pstrip a{flex:0 0 auto;}
+  .pstrip img{width:72px;height:72px;object-fit:cover;border-radius:8px;display:block;border:1px solid var(--border);}
+  .pcount{display:block;font-size:10px;color:var(--muted);text-align:center;margin-top:2px;white-space:nowrap;}
   /* post-visit follow-up block */
   .fublock{display:flex;flex-direction:column;gap:8px;}
   .furow{background:var(--bg-raised);border:1px solid var(--border);border-radius:12px;padding:12px;}
@@ -283,6 +288,16 @@ function card(r,best,isRent){
   var vdInput=(vd&&vd.indexOf("T")<0)?vd+"T09:00":vd;
   var h="<div class=\"apt\" id=\"apt-"+r.id+"\">";
   if(r.image_url)h+="<img class=\"photo\" src=\""+esc(r.image_url)+"\" loading=\"lazy\" alt=\"\" onerror=\"this.remove()\">";
+  // our own visit photos: the ad's og:image shows the best angle, these show the truth.
+  // ?s=t = mid-size rendition for the 72px squares; the tap-through opens full resolution.
+  if(r.photos&&r.photos.length){
+    h+="<div class=\"pstrip\">";
+    for(var pj=0;pj<r.photos.length;pj++){var ph=r.photos[pj];
+      h+="<a href=\"/apt-photo/"+ph.id+"\" target=\"_blank\" rel=\"noopener\">";
+      h+="<img src=\"/apt-photo/"+ph.id+"?s=t\" loading=\"lazy\" alt=\"\""+(ph.caption?" title=\""+esc(ph.caption)+"\"":"")+" onerror=\"this.parentNode.remove()\"></a>";
+    }
+    h+="</div>";
+  }
   h+="<div class=\"head\"><div class=\"loc\">"+esc(aptName(r))+flag+(r.tag?tagChip(r.tag):"")+sub+"</div>";
   if(isRent&&r.price!=null){
     var total=Number(r.price)+Number(r.admin_fee||0);
@@ -377,7 +392,11 @@ function sortRows(rows){
 // formatted (read-only) display for one cell; "" means empty → shown as a clickable dash
 function cellDisplay(r,c){
   var isRent=r.deal_type==="rent";
-  if(c.k==="thumb")return r.image_url?"<img class=\"thumb\" src=\""+esc(r.image_url)+"\" loading=\"lazy\" alt=\"\" onerror=\"this.className='thumb noimg';this.removeAttribute('src')\">":"<span class=\"thumb noimg\"></span>";
+  if(c.k==="thumb"){
+    var th=r.image_url?"<img class=\"thumb\" src=\""+esc(r.image_url)+"\" loading=\"lazy\" alt=\"\" onerror=\"this.className='thumb noimg';this.removeAttribute('src')\">":"<span class=\"thumb noimg\"></span>";
+    if(r.photos&&r.photos.length)th+="<span class=\"pcount\">📸 "+r.photos.length+"</span>";
+    return th;
+  }
   if(c.k==="tag")return r.tag?tagChip(r.tag):"";
   if(c.k==="name")return esc(aptName(r));
   if(c.k==="type")return isRent?"Arriendo":r.deal_type==="buy"?"Compra":"";
