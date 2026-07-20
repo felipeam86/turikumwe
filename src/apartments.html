@@ -178,6 +178,7 @@
   .hero .hact .act{flex:1;}
   .agrp{margin-top:14px;}
   .agrp .gh{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin:0 2px 6px;}
+  .agrp .arow+.gh{margin-top:12px;} /* space before each new dated day header within "Después" */
   .arow{display:flex;align-items:baseline;gap:10px;padding:9px 11px;background:var(--bg-raised);border:1px solid var(--border);border-radius:10px;margin-bottom:6px;}
   .arow .atime{font-weight:700;color:var(--accent);font-size:12px;white-space:nowrap;min-width:44px;}
   .arow .atime.tbd{color:var(--muted);font-weight:400;font-style:italic;font-size:11px;min-width:0;}
@@ -632,6 +633,15 @@ function heroCard(r,now,todayStr,clash){
   h+="<div class=\"hact\"><button class=\"act nt\" data-id=\""+r.id+"\">📝 Nota</button><button class=\"act danger ro\" data-id=\""+r.id+"\">🚫 Descartar</button></div>";
   return h+"</div>";
 }
+// weekday + day + month for a day header, matching the uppercase .gh style (e.g. "sáb 26 jul")
+function agendaDayHead(day){try{return parseDay(day).toLocaleDateString("es-CO",{timeZone:"UTC",weekday:"short",day:"numeric",month:"short"});}catch(e){return day;}}
+function agendaRow(r,clash){
+  var timed=r.visit_date.length>10,t=timed?r.visit_date.slice(11,16):"";
+  var h="<div class=\"arow\">"+(t?"<span class=\"atime\">"+esc(t)+"</span>":"<span class=\"atime tbd\">hora por definir</span>");
+  h+="<a class=\"aname\" href=\"#apt-"+r.id+"\">"+esc(aptName(r))+(clash&&clash[r.id]?" <span class=\"flag\">⚠️</span>":"")+"</a>";
+  if(r.address)h+="<span class=\"aloc\"><a href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\" aria-label=\"Cómo llegar\">🗺</a></span>";
+  return h+"</div>";
+}
 function agendaList(list,now,todayStr,clash){
   var manana=addDays(todayStr,1),weekEnd=addDays(mondayOf(todayStr),6);
   var groups=[["Hoy",[]],["Mañana",[]],["Esta semana",[]],["Después",[]]];
@@ -641,14 +651,20 @@ function agendaList(list,now,todayStr,clash){
   }
   var h="";
   for(var g=0;g<groups.length;g++){var gl=groups[g][1];if(!gl.length)continue;
-    h+="<div class=\"agrp\"><div class=\"gh\">"+groups[g][0]+"</div>";
-    for(var j=0;j<gl.length;j++){var r=gl[j],timed=r.visit_date.length>10,t=timed?r.visit_date.slice(11,16):"";
-      h+="<div class=\"arow\">"+(t?"<span class=\"atime\">"+esc(t)+"</span>":"<span class=\"atime tbd\">hora por definir</span>");
-      h+="<a class=\"aname\" href=\"#apt-"+r.id+"\">"+esc(aptName(r))+(clash&&clash[r.id]?" <span class=\"flag\">⚠️</span>":"")+"</a>";
-      if(r.address)h+="<span class=\"aloc\"><a href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\" aria-label=\"Cómo llegar\">🗺</a></span>";
+    if(groups[g][0]==="Después"){
+      // "Después" spans many dates, so a single header would hide them — give each day its own
+      // dated header (list is date-sorted, so consecutive items share a day)
+      var curDay=null;h+="<div class=\"agrp\">";
+      for(var k=0;k<gl.length;k++){var d2=gl[k].visit_date.slice(0,10);
+        if(d2!==curDay){curDay=d2;h+="<div class=\"gh\">"+esc(agendaDayHead(d2))+"</div>";}
+        h+=agendaRow(gl[k],clash);
+      }
+      h+="</div>";
+    }else{
+      h+="<div class=\"agrp\"><div class=\"gh\">"+groups[g][0]+"</div>";
+      for(var j=0;j<gl.length;j++)h+=agendaRow(gl[j],clash);
       h+="</div>";
     }
-    h+="</div>";
   }
   return h;
 }
