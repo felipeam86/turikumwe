@@ -46,12 +46,27 @@ CREATE TABLE IF NOT EXISTS apartments (
   visit_date TEXT,
   ruled_out_reason TEXT,
   ruled_out_at TEXT,
-  visit_reminder_sent TEXT
+  visit_reminder_sent TEXT,
+  -- previous price + when it changed, written only when a rescrape sees a different price
+  -- (manual edits are corrections, not market signals); one prior value is enough
+  prev_price INTEGER,
+  price_changed_at TEXT
 );
 
 -- photos taken during visits, sent to the Telegram group. Only permanent Telegram
 -- file_ids are stored (full size + a mid-size rendition for the web thumb strip);
 -- the short-lived file_path is resolved on demand.
+-- one structured 👍/👎 per person per apartment. voter is canonical ('felipe' | 'lucia' —
+-- unknown identities fall back to their normalized name), vote is 'up' | 'down'; clearing
+-- a verdict deletes the row.
+CREATE TABLE IF NOT EXISTS apartment_votes (
+  apartment_id INTEGER NOT NULL,
+  voter TEXT NOT NULL,
+  vote TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (apartment_id, voter)
+);
+
 CREATE TABLE IF NOT EXISTS apartment_photos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   apartment_id INTEGER NOT NULL,

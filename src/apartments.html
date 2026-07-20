@@ -20,6 +20,13 @@
   nav a:active{border-color:var(--accent);color:var(--accent);}
   nav a.on{color:var(--fg);border-color:var(--accent);background:rgba(122,162,255,.12);}
   .sub{color:var(--muted);font-size:13px;margin-bottom:16px;}
+  /* sticky filter/sort bar: one thumb-friendly chip row, scrolls horizontally like .caldays */
+  .fbar{position:sticky;top:0;z-index:30;background:var(--bg);display:flex;gap:8px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:8px 0 10px;margin-bottom:6px;}
+  .fbar:empty{display:none;}
+  .fchip{flex:0 0 auto;font-family:inherit;font-size:12px;font-weight:600;min-height:38px;background:var(--bg-raised);color:var(--muted);border:1px solid var(--border);border-radius:999px;padding:6px 12px;cursor:pointer;white-space:nowrap;}
+  .fchip.on{color:var(--accent);border-color:var(--accent);background:rgba(122,162,255,.12);}
+  .fchip.tagf.on{color:#12151b;} /* active tag chip gets its own hue as bg (inline style) */
+  .fclearlink{background:none;border:none;color:var(--accent);font:inherit;cursor:pointer;padding:0;text-decoration:underline;}
   /* weekly visits calendar */
   .cal{background:var(--bg-raised);border:1px solid var(--accent);border-radius:14px;padding:12px 14px;margin-bottom:6px;}
   .calhead{display:flex;align-items:center;gap:8px;margin-bottom:10px;}
@@ -64,6 +71,21 @@
   .price .adm{display:block;color:var(--muted);font-size:11px;font-weight:400;margin-top:2px;}
   .flag{display:inline-block;font-size:11px;color:var(--warn);border:1px solid var(--warn);border-radius:999px;padding:1px 7px;margin-left:6px;vertical-align:middle;}
   .flag.new{color:var(--accent);border-color:var(--accent);}
+  /* pipeline-stage chips: scheduled = accent, visited / deal-type = muted */
+  .flag.sched{color:var(--accent);border-color:var(--accent);}
+  .flag.mut{color:var(--muted);border-color:var(--border);}
+  /* per-person verdict: agreement = green, split = warn */
+  .flag.both{color:var(--ok);border-color:var(--ok);}
+  .flag.split{color:var(--warn);border-color:var(--warn);}
+  /* price moved on a rescrape: a drop is good news (green); a rise keeps the warn default */
+  .flag.drop{color:var(--ok);border-color:var(--ok);}
+  .votes{display:flex;align-items:center;gap:8px;margin-top:12px;flex-wrap:wrap;font-size:12px;color:var(--muted);}
+  .votes .vo{font-family:inherit;font-size:12px;font-weight:600;min-height:36px;background:var(--bg);color:var(--fg);border:1px solid var(--accent);border-radius:999px;padding:4px 12px;cursor:pointer;}
+  .votes .vo:disabled{opacity:.5;}
+  .votes .vopill{display:inline-flex;align-items:center;font-size:12px;color:var(--muted);border:1px solid var(--border);border-radius:999px;padding:5px 12px;}
+  .apttable .votes{margin-top:0;flex-wrap:nowrap;gap:5px;}
+  .apttable .votes .vo{min-height:0;padding:3px 8px;}
+  .apttable .votes .vopill{padding:3px 8px;}
   .specs{display:grid;grid-template-columns:repeat(3,1fr);gap:10px 8px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);}
   .spec .k{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:1px;}
   .xtra{color:var(--muted);font-size:12px;margin-top:10px;line-height:1.45;}
@@ -102,9 +124,19 @@
   .tel{color:var(--accent);text-decoration:none;}
   .ctrl{flex-wrap:wrap;}
   .act.prim{border-color:var(--accent);color:var(--accent);}
-  /* desktop table view */
-  .toolbar{display:none;}
-  @media(min-width:760px){.toolbar{display:flex;justify-content:flex-end;margin-bottom:10px;}}
+  /* toolbar: view toggle (Tarjetas/Tabla on desktop, Tarjetas/Lista on phones) + grouping toggle */
+  .toolbar{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-bottom:10px;}
+  .tlabel{font-size:11px;font-weight:600;color:var(--muted);display:inline-flex;align-items:center;padding-left:12px;}
+  /* compact list mode (phones): one ~64px row per apartment, tap to expand the full card below */
+  .grid.listmode{gap:6px;}
+  .lrow{display:flex;align-items:center;gap:10px;background:var(--bg-raised);border:1px solid var(--border);border-radius:12px;padding:9px 10px;cursor:pointer;}
+  .lrow .lmid{flex:1;min-width:0;}
+  .lrow .lname{font-weight:700;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .lrow .lsub{color:var(--muted);font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .lrow .lright{display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex:0 0 auto;}
+  .lrow .lright .flag{margin-left:0;}
+  .lrow .chev{color:var(--muted);font-size:18px;flex:0 0 auto;}
+  .lexp{margin:-2px 0 4px;}
   .viewtoggle{display:inline-flex;border:1px solid var(--border);border-radius:999px;overflow:hidden;}
   .viewtoggle button{font-family:inherit;font-size:13px;font-weight:600;background:transparent;color:var(--muted);border:none;padding:9px 15px;cursor:pointer;}
   .viewtoggle button.on{background:rgba(122,162,255,.14);color:var(--fg);}
@@ -119,6 +151,7 @@
   .apttable td.nm{font-weight:600;white-space:normal;min-width:150px;}
   .apttable tbody tr:hover{background:rgba(255,255,255,.03);}
   .apttable .tag{margin-left:0;}
+  .apttable .flag{margin-left:0;}
   .thumb{width:46px;height:46px;object-fit:cover;border-radius:8px;display:block;}
   .thumb.noimg{background:var(--bg);border:1px solid var(--border);}
   .rowact{display:flex;gap:6px;align-items:center;}
@@ -202,10 +235,15 @@
 <div class="wrap">
   <nav><a href="/">⌂</a><a href="/dashboard.html">🏠 Hogar</a><a class="on" href="/apartments.html">🏢 Apartamentos</a></nav>
   <div class="sub" id="sub">Cargando…</div>
-  <div class="toolbar"><div class="viewtoggle" id="viewtoggle">
-    <button class="vt-btn" data-view="cards">▦ Tarjetas</button>
-    <button class="vt-btn" data-view="table">▤ Tabla</button>
-  </div></div>
+  <div class="fbar" id="fbar"></div>
+  <div class="toolbar">
+    <div class="viewtoggle" id="grouptoggle"><span class="tlabel">Agrupar</span>
+      <button class="gr-btn" data-group="tipo">Tipo</button>
+      <button class="gr-btn" data-group="estado">Estado</button>
+    </div>
+    <div class="viewtoggle" id="viewtoggle"></div><!-- buttons rendered per viewport -->
+
+  </div>
   <div id="visits"></div>
   <div id="followup"></div>
   <div id="root"></div>
@@ -259,6 +297,147 @@ function ppmOf(r,isRent){
   }
   return (r.price_per_m2&&r.price_per_m2>0)?r.price_per_m2:null;
 }
+// ---- filter + sort bar ----
+// null = filter off; sort "ppm" = today's default order. Persisted as JSON; unknown keys dropped,
+// a stale tag simply matches nothing (and stays clearable).
+var FILTERS={deal:null,minBeds:null,maxPrice:null,tag:null,stage:null,sort:"ppm"};
+var SORT_LABELS={ppm:"mejor $/m²",price:"precio ↑",recent:"más reciente",visit:"próxima visita"};
+try{
+  var _sf=JSON.parse(localStorage.getItem("aptFilters")||"{}");
+  for(var _fk in FILTERS)if(_sf&&_sf[_fk]!==undefined)FILTERS[_fk]=_sf[_fk];
+  if(!SORT_LABELS[FILTERS.sort])FILTERS.sort="ppm";
+}catch(e){}
+function saveFilters(){try{localStorage.setItem("aptFilters",JSON.stringify(FILTERS));}catch(e){}}
+function filtersActive(){return !!(FILTERS.deal||FILTERS.minBeds||FILTERS.maxPrice!=null||FILTERS.tag||FILTERS.stage);}
+// the price a person actually pays: rent compares against price+admin, buy against the sale price
+function effPrice(r){if(r.price==null)return null;return r.deal_type==="rent"?Number(r.price)+Number(r.admin_fee||0):Number(r.price);}
+// pure: filtered copy of the active rows; feeds both the cards sections and the desktop table
+function applyFilters(rows){
+  return rows.filter(function(r){
+    if(FILTERS.deal&&r.deal_type!==FILTERS.deal)return false;
+    if(FILTERS.minBeds&&!(Number(r.bedrooms)>=FILTERS.minBeds))return false;
+    if(FILTERS.maxPrice!=null){var p=effPrice(r);if(p==null||p>FILTERS.maxPrice)return false;}
+    if(FILTERS.tag&&r.tag!==FILTERS.tag)return false;
+    if(FILTERS.stage&&stageOf(r)!==FILTERS.stage)return false;
+    return true;
+  });
+}
+// comparator for the chosen Orden, or null to keep each section's own default order.
+// "~" sorts after any digit, so cards without a visit go last under "próxima visita".
+function activeSorter(){
+  if(FILTERS.sort==="price")return function(a,b){var pa=effPrice(a),pb=effPrice(b);return (pa==null?Infinity:pa)-(pb==null?Infinity:pb);};
+  if(FILTERS.sort==="recent")return function(a,b){return String(b.created_at||"").localeCompare(String(a.created_at||""));};
+  if(FILTERS.sort==="visit")return function(a,b){var va=a.visit_date?visitCmp(a.visit_date):"~",vb=b.visit_date?visitCmp(b.visit_date):"~";return va<vb?-1:va>vb?1:0;};
+  return null;
+}
+// Precio presets: quartile-ish cutoffs from the data, rounded up to friendly COP steps.
+// Derived from the deal-filtered subset when Tipo is set (rent and buy prices don't mix well).
+function niceCut(v){
+  var step=v>=5e8?5e7:v>=1e8?1e7:v>=1e7?1e6:v>=1e6?1e5:1e4;
+  return Math.ceil(v/step)*step;
+}
+function priceCuts(rows){
+  var base=FILTERS.deal?rows.filter(function(r){return r.deal_type===FILTERS.deal;}):rows;
+  var ps=base.map(effPrice).filter(function(p){return p!=null&&p>0;}).sort(function(a,b){return a-b;});
+  if(ps.length<2)return [];
+  var out=[],seen={},qs=[0.25,0.5,0.75];
+  for(var i=0;i<qs.length;i++){
+    var c=niceCut(ps[Math.min(ps.length-1,Math.floor(ps.length*qs[i]))]);
+    if(!seen[c]){seen[c]=1;out.push(c);}
+  }
+  return out;
+}
+function buildFilterBar(rows){
+  if(!rows.length&&!filtersActive())return "";
+  var h="<button class=\"fchip"+(FILTERS.deal?" on":"")+"\" data-f=\"deal\">"
+    +(FILTERS.deal==="rent"?"Arriendo":FILTERS.deal==="buy"?"Compra":"Tipo: todos")+"</button>";
+  h+="<button class=\"fchip"+(FILTERS.minBeds?" on":"")+"\" data-f=\"beds\">"
+    +(FILTERS.minBeds?("Hab: "+FILTERS.minBeds+"+"):"Hab: todas")+"</button>";
+  h+="<button class=\"fchip"+(FILTERS.maxPrice!=null?" on":"")+"\" data-f=\"price\">"
+    +(FILTERS.maxPrice!=null?("≤ "+mny(FILTERS.maxPrice)):"Precio: todos")+"</button>";
+  h+="<button class=\"fchip"+(FILTERS.stage?" on":"")+"\" data-f=\"stage\">"
+    +(FILTERS.stage==="pending"?"⏳ por agendar":FILTERS.stage==="scheduled"?"📅 agendada":FILTERS.stage==="visited"?"✔ visitado":"Estado: todos")+"</button>";
+  var tags=[],tseen={};
+  for(var i=0;i<rows.length;i++){var t=rows[i].tag;if(t&&!tseen[t]){tseen[t]=1;tags.push(t);}}
+  if(FILTERS.tag&&!tseen[FILTERS.tag])tags.push(FILTERS.tag); // stale filter tag must stay clearable
+  tags.sort(function(a,b){return a.localeCompare(b,"es");});
+  for(var j=0;j<tags.length;j++){var tg=tags[j],hue=tagColor(tg),on=FILTERS.tag===tg;
+    h+="<button class=\"fchip tagf"+(on?" on":"")+"\" data-f=\"tag\" data-v=\""+esc(tg)+"\" style=\"border-color:hsl("+hue+" 58% 62%)"+(on?";background:hsl("+hue+" 58% 62%)":"")+"\">"+esc(tg)+"</button>";
+  }
+  h+="<button class=\"fchip"+(FILTERS.sort!=="ppm"?" on":"")+"\" data-f=\"sort\">Orden: "+SORT_LABELS[FILTERS.sort]+"</button>";
+  if(filtersActive())h+="<button class=\"fchip\" data-f=\"clear\">✕ limpiar</button>";
+  return h;
+}
+// «⬇ bajó $X» / «⬆ subió $X» pill while a rescrape-detected price change is fresh (14 days);
+// prev_price/price_changed_at only ever come from rescrapes — manual edits clear them
+function priceFlag(r){
+  if(!r.price_changed_at||r.prev_price==null||r.price==null)return "";
+  var age=Date.now()-Date.parse(r.price_changed_at);
+  if(!(age>=0&&age<=14*86400000))return "";
+  var diff=Number(r.prev_price)-Number(r.price);
+  if(!diff)return "";
+  var tt="de "+mny(r.prev_price)+" a "+mny(r.price)+" ("+noteDate(r.price_changed_at.slice(0,10))+")";
+  return diff>0
+    ? "<span class=\"flag drop\" title=\""+esc(tt)+"\">⬇ bajó "+mny(diff)+"</span>"
+    : "<span class=\"flag\" title=\""+esc(tt)+"\">⬆ subió "+mny(-diff)+"</span>";
+}
+// ---- per-person verdicts (r.votes = {felipe:"up", lucia:"down", ...}; DATA.me = logged-in voter) ----
+function voterName(p){return p==="felipe"?"Felipe":p==="lucia"?"Lucía":p?(p.charAt(0).toUpperCase()+p.slice(1)):"";}
+function shortVoter(p){return p==="felipe"?"FL":p==="lucia"?"LU":String(p).slice(0,2).toUpperCase();}
+// "both" = the two of them 👍, "split" = one up one down; "" otherwise
+function voteState(r){
+  var v=r.votes||{},ups=0,downs=0;
+  for(var k in v){if(!v.hasOwnProperty(k))continue;if(v[k]==="up")ups++;else if(v[k]==="down")downs++;}
+  if(ups>=2)return "both";
+  if(ups&&downs)return "split";
+  return "";
+}
+// funnel rank for the table's Voto column: both-up < one-up < none < any-down
+function voteRank(r){
+  var v=r.votes||{},ups=0,downs=0;
+  for(var k in v){if(!v.hasOwnProperty(k))continue;if(v[k]==="up")ups++;else if(v[k]==="down")downs++;}
+  return downs?3:ups>=2?0:ups?1:2;
+}
+// the verdict row: my control cycles — → 👍 → 👎 → — on tap, the other person's is read-only
+function voteRow(r,compact){
+  var v=r.votes||{},me=DATA&&DATA.me||"";
+  var people=["felipe","lucia"];
+  for(var k in v)if(v.hasOwnProperty(k)&&people.indexOf(k)<0)people.push(k);
+  if(me&&people.indexOf(me)<0)people.push(me);
+  var parts=[];
+  for(var i=0;i<people.length;i++){var p=people[i];
+    var glyph=v[p]==="up"?"👍":v[p]==="down"?"👎":"—";
+    var name=compact?shortVoter(p):voterName(p);
+    if(p===me)parts.push("<button class=\"vo\" data-id=\""+r.id+"\" data-cur=\""+(v[p]||"")+"\" title=\"Toca para cambiar tu veredicto\">"+esc(name)+" "+glyph+"</button>");
+    else parts.push("<span class=\"vopill\">"+esc(name)+" "+glyph+"</span>");
+  }
+  return "<div class=\"votes\">"+parts.join("")+"</div>";
+}
+// head badge: agreement gets the green 💚, a split gets a subtle 👍/👎 indicator
+function voteFlag(r){
+  var st=voteState(r);
+  if(st==="both")return "<span class=\"flag both\">💚 les gustó a los dos</span>";
+  if(st==="split")return "<span class=\"flag split\">👍/👎</span>";
+  return "";
+}
+// hunt-pipeline stage of an active apartment: no visit set => still to schedule; a set visit is
+// upcoming or already passed (visitCmp pads date-only visits to end-of-day; wall-clock compare)
+function stageOf(r){
+  if(!r.visit_date)return "pending";
+  return visitCmp(r.visit_date)>=nowBogota()?"scheduled":"visited";
+}
+// compact "vie 25 · 10:00" (or just "vie 25") for the scheduled-stage chip
+function fmtVisitShort(s){try{
+  var day=parseDay(s).toLocaleDateString("es-CO",{timeZone:"UTC",weekday:"short",day:"numeric"});
+  var t=s.length>10?s.slice(11,16):"";
+  return t?day+" · "+t:day;
+}catch(e){return s;}}
+function stageChip(r){
+  var st=stageOf(r);
+  if(st==="pending")return "<span class=\"flag\">⏳ por agendar</span>";
+  if(st==="scheduled")return "<span class=\"flag sched\">📅 "+esc(fmtVisitShort(r.visit_date))+"</span>";
+  return "<span class=\"flag mut\">✔ visitado</span>";
+}
 // note lines: "YYYY-MM-DD [Autor]: text"; older lines lack the [Autor] part
 var NOTE_RE=/^(\d{4}-\d{2}-\d{2})(?: \[([^\]]+)\])?: (.*)$/;
 // unicode-safe base64 so the exact raw line survives quotes/colons inside an HTML attribute
@@ -276,12 +455,17 @@ function noteLines(r){
   }
   return h;
 }
-function card(r,best,isRent){
+function card(r,best,isRent,withDeal){
   var ppm=ppmOf(r,isRent);
   var isBest=best&&ppm===best;
   var flag=(r.scrape_status&&r.scrape_status!=="ok")?"<span class=\"flag\">sin leer</span>":"";
   // "nuevo" pill for 48h so a freshly shared listing is findable despite the $/m² sort
   if(r.created_at&&Date.now()-Date.parse(r.created_at)<48*3600*1000)flag+="<span class=\"flag new\">nuevo</span>";
+  flag+=stageChip(r);
+  flag+=priceFlag(r);
+  flag+=voteFlag(r);
+  // Estado grouping mixes rent and buy in one section — say which is which on the card itself
+  if(withDeal&&(r.deal_type==="rent"||r.deal_type==="buy"))flag+="<span class=\"flag mut\">"+(r.deal_type==="rent"?"arriendo":"compra")+"</span>";
   var sub=(r.title&&r.location)?"<div class=\"sub2\">"+esc(r.title)+"</div>":"";
   var vd=r.visit_date?esc(r.visit_date):"";
   // datetime-local needs YYYY-MM-DDTHH:MM; pad legacy date-only visits with an editable 09:00 default
@@ -326,6 +510,7 @@ function card(r,best,isRent){
   if(r.agent_name)contact.push("👤 "+esc(r.agent_name));
   if(r.agent_phone)contact.push("📞 <a class=\"tel\" href=\"tel:"+esc(r.agent_phone)+"\">"+esc(r.agent_phone)+"</a>");
   if(contact.length)h+="<div class=\"contact\">"+contact.join("<br>")+"</div>";
+  h+=voteRow(r);
   // a stored date without T means the time isn't agreed yet — say so instead of showing the padded 09:00 as fact
   var tbd=(vd&&vd.indexOf("T")<0)?"<span class=\"tbd\">hora por definir</span>":"";
   h+="<div class=\"visit\"><span class=\"k\">Visita"+tbd+"</span><input type=\"datetime-local\" data-id=\""+r.id+"\" class=\"vd\" value=\""+vdInput+"\"></div>";
@@ -337,19 +522,79 @@ function card(r,best,isRent){
   h+="</div></div>";
   return h;
 }
+// one condensed, whole-row-tappable line per apartment (phones' list mode)
+function listRow(r,isRent,open,withDeal){
+  var total=(isRent&&r.price!=null)?Number(r.price)+Number(r.admin_fee||0):r.price;
+  var l2=[];
+  if(total!=null)l2.push(mny(total)+(isRent?"/mes":""));
+  if(r.bedrooms!=null)l2.push(r.bedrooms+" hab");
+  if(r.area_m2!=null)l2.push(r.area_m2+" m²");
+  var pills="";
+  if(r.scrape_status&&r.scrape_status!=="ok")pills+="<span class=\"flag\">sin leer</span>";
+  if(r.created_at&&Date.now()-Date.parse(r.created_at)<48*3600*1000)pills+="<span class=\"flag new\">nuevo</span>";
+  pills+=stageChip(r); // scheduled chips carry the visit date, so no separate date pill needed
+  pills+=priceFlag(r);
+  var vst=voteState(r);
+  if(vst==="both")pills+="<span class=\"flag both\">💚</span>";
+  else if(vst==="split")pills+="<span class=\"flag split\">👍/👎</span>";
+  if(withDeal&&(r.deal_type==="rent"||r.deal_type==="buy"))pills+="<span class=\"flag mut\">"+(r.deal_type==="rent"?"arriendo":"compra")+"</span>";
+  var th=r.image_url?"<img class=\"thumb\" src=\""+esc(r.image_url)+"\" loading=\"lazy\" alt=\"\" onerror=\"this.className='thumb noimg';this.removeAttribute('src')\">":"<span class=\"thumb noimg\"></span>";
+  // collapsed rows own the #apt- anchor; expanded ones cede it to the full card below
+  var h="<div class=\"lrow\""+(open?"":" id=\"apt-"+r.id+"\"")+" data-id=\""+r.id+"\">"+th;
+  h+="<div class=\"lmid\"><div class=\"lname\">"+esc(aptName(r))+(r.tag?tagChip(r.tag):"")+"</div>";
+  h+="<div class=\"lsub\">"+esc(l2.join(" · ")||"—")+"</div></div>";
+  h+="<div class=\"lright\">"+pills+"</div>";
+  h+="<span class=\"chev\">"+(open?"⌄":"›")+"</span></div>";
+  return h;
+}
+// list mode swaps each card for a row, expanding the full card in place for the open one.
+// All card actions keep working there — every handler is delegated on class + data-id.
+function cardOrRow(r,best,isRent,withDeal){
+  if(effView()==="list"){
+    var open=OPEN_ROW===r.id;
+    var h=listRow(r,isRent,open,withDeal);
+    if(open)h+="<div class=\"lexp\">"+card(r,best,isRent,withDeal)+"</div>";
+    return h;
+  }
+  return card(r,best,isRent,withDeal);
+}
+function gridOpen(){return "<div class=\"grid"+(effView()==="list"?" listmode":"")+"\">";}
 function section(title,list,isRent){
   if(!list.length)return "";
-  // best value first; cards without enough data go last
-  var sorted=list.slice().sort(function(a,b){
+  // default: best value first, cards without enough data last; a chosen Orden overrides it.
+  // Mutual favorites (💚) float to the top of the section either way.
+  var cmp=activeSorter()||function(a,b){
     var pa=ppmOf(a,isRent),pb=ppmOf(b,isRent);
     return (pa==null?Infinity:pa)-(pb==null?Infinity:pb);
+  };
+  var sorted=list.slice().sort(function(a,b){
+    var ba=voteState(a)==="both"?0:1,bb=voteState(b)==="both"?0:1;
+    return (ba-bb)||cmp(a,b);
   });
   var ppm=sorted.map(function(r){return ppmOf(r,isRent);}).filter(function(v){return v&&v>0;});
   // "best value" only means something when there is something to compare against
   var best=ppm.length>1?Math.min.apply(null,ppm):null;
-  var h="<h2 class=\"sect\">"+title+" <span class=\"count\">"+sorted.length+"</span></h2><div class=\"grid\">";
-  for(var i=0;i<sorted.length;i++)h+=card(sorted[i],best,isRent);
+  var h="<h2 class=\"sect\">"+title+" <span class=\"count\">"+sorted.length+"</span></h2>"+gridOpen();
+  for(var i=0;i<sorted.length;i++)h+=cardOrRow(sorted[i],best,isRent);
   h+="</div>";return h;
+}
+// Estado grouping: sections are pipeline stages (mixed deal types), each with its own sort.
+// No "best $/m²" highlight — comparing rent vs buy $/m² in one section is meaningless.
+function stageSection(title,list,cmp){
+  if(!list.length)return "";
+  var inner=activeSorter()||cmp;
+  var sorted=list.slice().sort(function(a,b){
+    var ba=voteState(a)==="both"?0:1,bb=voteState(b)==="both"?0:1;
+    return (ba-bb)||inner(a,b);
+  });
+  var h="<h2 class=\"sect\">"+title+" <span class=\"count\">"+sorted.length+"</span></h2>"+gridOpen();
+  for(var i=0;i<sorted.length;i++){var r=sorted[i];h+=cardOrRow(r,null,r.deal_type==="rent",true);}
+  h+="</div>";return h;
+}
+// $/m² ascending with per-row deal type (Estado sections mix rent and buy), nulls last
+function ppmCmpMixed(a,b){
+  var pa=ppmOf(a,a.deal_type==="rent"),pb=ppmOf(b,b.deal_type==="rent");
+  return (pa==null?Infinity:pa)-(pb==null?Infinity:pb);
 }
 // ---- desktop table view ----
 // every listing field is editable in place; edit=type drives both the input widget and server coercion
@@ -370,6 +615,8 @@ var COLS=[
   {k:"address",label:"Dirección",type:"s",field:"address",edit:"text"},
   {k:"agent_name",label:"Agente",type:"s",field:"agent_name",edit:"text"},
   {k:"agent_phone",label:"Teléfono",type:"s",field:"agent_phone",edit:"text"},
+  {k:"stage",label:"Estado",type:"n"},
+  {k:"voto",label:"Voto",type:"n"},
   {k:"visit_date",label:"Visita",type:"s",field:"visit_date",edit:"visit"},
   {k:"actions",label:""}
 ];
@@ -377,6 +624,8 @@ function cellVal(r,k){
   if(k==="name")return aptName(r);
   if(k==="type")return r.deal_type||"";
   if(k==="ppm")return ppmOf(r,r.deal_type==="rent");
+  if(k==="stage"){var st=stageOf(r);return st==="pending"?0:st==="scheduled"?1:2;} // funnel order
+  if(k==="voto")return voteRank(r); // both-up first
   return r[k];
 }
 function sortRows(rows){
@@ -400,11 +649,13 @@ function cellDisplay(r,c){
   if(c.k==="tag")return r.tag?tagChip(r.tag):"";
   if(c.k==="name")return esc(aptName(r));
   if(c.k==="type")return isRent?"Arriendo":r.deal_type==="buy"?"Compra":"";
-  if(c.k==="price")return r.price==null?"":mny(r.price)+(isRent?"/mes":"");
+  if(c.k==="price")return r.price==null?"":mny(r.price)+(isRent?"/mes":"")+priceFlag(r);
   if(c.k==="admin_fee")return r.admin_fee==null?"":mny(r.admin_fee);
   if(c.k==="ppm")return mny(ppmOf(r,isRent));
   // the cell stays click-to-edit; the small 🗺 anchor rides along (the click handler lets anchors through)
   if(c.k==="address")return r.address?esc(r.address)+" <a href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\" aria-label=\"Cómo llegar\">🗺</a>":"";
+  if(c.k==="stage")return stageChip(r);
+  if(c.k==="voto")return voteRow(r,true); // compact FL/LU labels; my control stays tappable
   if(c.k==="visit_date")return r.visit_date?esc(fmtVisit(r.visit_date)):"";
   if(c.k==="actions"){
     var a="<div class=\"rowact\">";
@@ -480,10 +731,16 @@ function tableView(rows){
   for(var j=0;j<sorted.length;j++)h+=tableRow(sorted[j]);
   return h+"</tbody></table></div>";
 }
-// table is a desktop-only affordance; phones always get the cards
+// two independent view prefs: desktop picks cards|table, phones pick cards|list —
+// so a phone never gets the table and a desktop never gets the compact list
 var VIEW=localStorage.getItem("aptView")||"table";
+var VIEWM=localStorage.getItem("aptViewM")||"cards";
+// cards grouping: by deal type (historic default) or by pipeline stage; opt-in, persisted
+var GROUP=localStorage.getItem("aptGroup")||"tipo";
+// list mode: id of the row currently expanded in place (survives re-renders after saves)
+var OPEN_ROW=null;
 function isDesktop(){return window.innerWidth>=760;}
-function effView(){return isDesktop()?VIEW:"cards";}
+function effView(){return isDesktop()?VIEW:VIEWM;}
 // ---- edit sheet (address / agent / phone / tag), shared by cards + table ----
 var EDIT_ID=null;
 function findApt(id){var all=(DATA.apartments||[]).concat(DATA.ruledOut||[]);for(var i=0;i<all.length;i++)if(all[i].id===id)return all[i];return null;}
@@ -741,8 +998,13 @@ function ruledSection(list){
     var bits=[deal,pr!=="—"?pr:"",r.area_m2?(r.area_m2+" m²"):"",r.price_per_m2?("≈"+mny(r.price_per_m2)+"/m²"):""].filter(Boolean).join(" · ");
     var reason=r.ruled_out_reason?"<span class=\"reason\">"+esc(r.ruled_out_reason)+"</span>":"";
     var when=ruledDate(r.ruled_out_at)?("descartado "+ruledDate(r.ruled_out_at)):"";
+    // verdicts survive the rule-out — context for "reconsiderar"
+    var vv=r.votes||{},vb=[];
+    for(var vk in vv)if(vv.hasOwnProperty(vk))vb.push(voterName(vk)+" "+(vv[vk]==="up"?"👍":"👎"));
     h+="<div class=\"rrow\" id=\"apt-"+r.id+"\"><span class=\"rloc\">"+esc(aptName(r))+"</span>"+reason;
-    h+="<span class=\"rmeta\">"+esc(bits)+"</span><span class=\"grow\"></span>";
+    h+="<span class=\"rmeta\">"+esc(bits)+"</span>";
+    if(vb.length)h+="<span class=\"rmeta\">"+esc(vb.join(" · "))+"</span>";
+    h+="<span class=\"grow\"></span>";
     h+="<span class=\"rmeta\">"+when+"</span>";
     if(r.url)h+="<a class=\"link\" href=\""+esc(r.url)+"\" target=\"_blank\">link</a>";
     h+="<button class=\"act re\" data-id=\""+r.id+"\">Reconsiderar</button></div>";
@@ -756,6 +1018,13 @@ function jumpToHash(){
   if(HASH_DONE)return;
   var m=(location.hash||"").match(/^#apt-(\d+)$/);
   if(!m)return;
+  // list mode: expand the target row first so the full card is the scroll target
+  // (render() re-runs jumpToHash; second pass falls through with OPEN_ROW already set)
+  var hid=Number(m[1]);
+  if(effView()==="list"&&OPEN_ROW!==hid){
+    var act=(DATA&&DATA.apartments)||[];
+    for(var i=0;i<act.length;i++)if(act[i].id===hid){OPEN_ROW=hid;render();return;}
+  }
   var el=document.getElementById("apt-"+m[1]);
   if(!el)return;
   HASH_DONE=true;
@@ -767,7 +1036,11 @@ function jumpToHash(){
 }
 function render(){
   var rows=DATA.apartments||[];var ruled=DATA.ruledOut||[];
-  var parts=[rows.length+(rows.length===1?" activo":" activos")];
+  // filters narrow the cards/table only — the agenda, follow-up block and Descartados always
+  // see every active row (a filter must never hide an upcoming visit)
+  var shown=applyFilters(rows);
+  document.getElementById("fbar").innerHTML=buildFilterBar(rows);
+  var parts=[filtersActive()?(shown.length+" de "+rows.length+" activos"):(rows.length+(rows.length===1?" activo":" activos"))];
   if(ruled.length)parts.push(ruled.length+(ruled.length===1?" descartado":" descartados"));
   // toLocaleDateString returns the string "Invalid Date" (never throws) on bad input, so guard explicitly
   var niceDay="";if(DATA.today){var nd=new Date(DATA.today+"T00:00:00Z");niceDay=isNaN(nd)?DATA.today:nd.toLocaleDateString("es-CO",{timeZone:"UTC",weekday:"long",day:"numeric",month:"long"});}
@@ -777,18 +1050,36 @@ function render(){
   if(isDesktop())snapCalendar();
   // post-visit follow-up sits between the agenda and the cards/table, in both views
   document.getElementById("followup").innerHTML=followupBlock(rows);
-  // reflect the active view on the toggle (only visible on desktop)
-  var vt=document.getElementById("viewtoggle").getElementsByTagName("button");
-  for(var t=0;t<vt.length;t++)vt[t].className="vt-btn"+(vt[t].getAttribute("data-view")===VIEW?" on":"");
+  // the view toggle offers Tabla on desktop and Lista on phones — rebuild it per viewport
+  var vopts=isDesktop()?[["cards","▦ Tarjetas"],["table","▤ Tabla"]]:[["cards","▦ Tarjetas"],["list","☰ Lista"]];
+  var vcur=isDesktop()?VIEW:VIEWM;
+  document.getElementById("viewtoggle").innerHTML=vopts.map(function(o){
+    return "<button class=\"vt-btn"+(o[0]===vcur?" on":"")+"\" data-view=\""+o[0]+"\">"+o[1]+"</button>";
+  }).join("");
+  // grouping toggle only makes sense over cards; hide it while the table is showing
+  var gt=document.getElementById("grouptoggle");
+  gt.style.display=effView()==="table"?"none":"";
+  var gb=gt.getElementsByTagName("button");
+  for(var g=0;g<gb.length;g++)gb[g].className="gr-btn"+(gb[g].getAttribute("data-group")===GROUP?" on":"");
   // let the table use the full screen width; cards keep the centered column
   document.querySelector(".wrap").classList.toggle("wide",effView()==="table");
   if(!rows.length&&!ruled.length){document.getElementById("root").innerHTML="<div class=\"empty\">Aún no hay apartamentos. Envía un link al grupo de Telegram para empezar.</div>";document.getElementById("ruledRoot").innerHTML="";return;}
-  if(effView()==="table"){
-    document.getElementById("root").innerHTML=tableView(rows);
+  if(rows.length&&!shown.length){
+    document.getElementById("root").innerHTML="<div class=\"empty\">Nada coincide con los filtros — <button class=\"fclearlink\" data-f=\"clear\">límpialos</button>.</div>";
+  }else if(effView()==="table"){
+    document.getElementById("root").innerHTML=tableView(shown);
+  }else if(GROUP==="estado"){
+    // funnel sections: upcoming visits by soonest, unscheduled by value, visited most recent first
+    var sch=[],pen=[],seen=[];
+    for(var si=0;si<shown.length;si++){var st=stageOf(shown[si]);(st==="scheduled"?sch:st==="pending"?pen:seen).push(shown[si]);}
+    document.getElementById("root").innerHTML=
+      stageSection("📅 Con visita",sch,function(a,b){return visitCmp(a.visit_date)<visitCmp(b.visit_date)?-1:1;})+
+      stageSection("⏳ Por agendar",pen,ppmCmpMixed)+
+      stageSection("✔ Visitados",seen,function(a,b){return visitCmp(a.visit_date)<visitCmp(b.visit_date)?1:-1;});
   }else{
-    var buy=rows.filter(function(r){return r.deal_type==="buy";});
-    var rent=rows.filter(function(r){return r.deal_type==="rent";});
-    var unk=rows.filter(function(r){return r.deal_type!=="buy"&&r.deal_type!=="rent";});
+    var buy=shown.filter(function(r){return r.deal_type==="buy";});
+    var rent=shown.filter(function(r){return r.deal_type==="rent";});
+    var unk=shown.filter(function(r){return r.deal_type!=="buy"&&r.deal_type!=="rent";});
     document.getElementById("root").innerHTML=section("🛒 Compra",buy,false)+section("🔑 Arriendo",rent,true)+section("❔ Sin clasificar",unk,false);
   }
   document.getElementById("ruledRoot").innerHTML=ruledSection(ruled);
@@ -808,9 +1099,50 @@ document.addEventListener("change",function(e){
 });
 document.addEventListener("click",function(e){
   var el=e.target;if(!el.classList)return;
-  // links inside editable cells (e.g. the 🗺 maps anchor) must navigate, not begin an edit
-  if(el.closest&&el.closest("a"))return;
-  if(el.classList.contains("vt-btn")){VIEW=el.getAttribute("data-view");localStorage.setItem("aptView",VIEW);render();return;}
+  // links inside editable cells (e.g. the 🗺 maps anchor) must navigate, not begin an edit.
+  // Exception: in list mode an in-page #apt- link (hero/agenda) expands its row before scrolling.
+  var an=el.closest?el.closest("a"):null;
+  if(an){
+    var hm=(an.getAttribute("href")||"").match(/^#apt-(\d+)$/);
+    if(hm&&effView()==="list"){
+      var hid=Number(hm[1]),act=(DATA&&DATA.apartments)||[];
+      for(var ha=0;ha<act.length;ha++)if(act[ha].id===hid){
+        e.preventDefault();OPEN_ROW=hid;render();
+        var ht=document.getElementById("apt-"+hid);
+        if(ht){ht.scrollIntoView({block:"start"});ht.classList.add("hilite");setTimeout(function(){ht.classList.remove("hilite");},2000);}
+        return;
+      }
+    }
+    return;
+  }
+  // list mode: tapping a row toggles its full card in place (one open at a time)
+  var lr=el.closest?el.closest(".lrow"):null;
+  if(lr){var lid=Number(lr.getAttribute("data-id"));OPEN_ROW=OPEN_ROW===lid?null:lid;render();return;}
+  if(el.classList.contains("vt-btn")){
+    var nv=el.getAttribute("data-view");
+    if(isDesktop()){VIEW=nv;localStorage.setItem("aptView",VIEW);}
+    else{VIEWM=nv;localStorage.setItem("aptViewM",VIEWM);}
+    render();return;
+  }
+  if(el.classList.contains("gr-btn")){GROUP=el.getAttribute("data-group");localStorage.setItem("aptGroup",GROUP);render();return;}
+  if(el.classList.contains("fchip")||el.classList.contains("fclearlink")){
+    var ff=el.getAttribute("data-f");
+    if(ff==="deal")FILTERS.deal=FILTERS.deal==null?"rent":FILTERS.deal==="rent"?"buy":null;
+    else if(ff==="beds")FILTERS.minBeds=FILTERS.minBeds==null?2:FILTERS.minBeds===2?3:null;
+    else if(ff==="price"){
+      var cuts=priceCuts(DATA.apartments||[]);
+      var ci=cuts.indexOf(FILTERS.maxPrice);
+      if(!cuts.length)FILTERS.maxPrice=null;
+      else if(FILTERS.maxPrice==null)FILTERS.maxPrice=cuts[0];
+      else if(ci<0||ci===cuts.length-1)FILTERS.maxPrice=null; // stale cutoff or end of cycle → off
+      else FILTERS.maxPrice=cuts[ci+1];
+    }
+    else if(ff==="stage")FILTERS.stage=FILTERS.stage==null?"pending":FILTERS.stage==="pending"?"scheduled":FILTERS.stage==="scheduled"?"visited":null;
+    else if(ff==="tag"){var tv=el.getAttribute("data-v");FILTERS.tag=FILTERS.tag===tv?null:tv;}
+    else if(ff==="sort")FILTERS.sort=FILTERS.sort==="ppm"?"price":FILTERS.sort==="price"?"recent":FILTERS.sort==="recent"?"visit":"ppm";
+    else if(ff==="clear")FILTERS={deal:null,minBeds:null,maxPrice:null,tag:null,stage:null,sort:"ppm"};
+    saveFilters();render();return;
+  }
   // week nav is desktop-only (buttons don't render on mobile); no-op if WEEK_START isn't set yet
   if(el.classList.contains("cal-prev")){if(!WEEK_START)return;WEEK_START=addDays(WEEK_START,-7);render();return;}
   if(el.classList.contains("cal-next")){if(!WEEK_START)return;WEEK_START=addDays(WEEK_START,7);render();return;}
@@ -838,12 +1170,29 @@ document.addEventListener("click",function(e){
     return;
   }
   if(el.classList.contains("fbup")||el.classList.contains("fbdn")){
-    // one-tap post-visit verdict: a canned, stamped note (echoes to Telegram); the reload hides the row
+    // one-tap post-visit verdict: a canned, stamped note (echoes to Telegram); the reload hides
+    // the row. The tap also records the tapper's structured vote — quiet, the note already echoes.
     var id=Number(el.getAttribute("data-id"));
-    var note=el.classList.contains("fbup")?"👍 nos gustó":"👎 no nos gustó";
+    var up=el.classList.contains("fbup");
+    var note=up?"👍 nos gustó":"👎 no nos gustó";
     el.disabled=true;
-    action({action:"apt_note",id:id,note:note}).then(function(res){
+    action({action:"vote",id:id,vote:up?"up":"down",quiet:true}).catch(function(){}).then(function(){
+      return action({action:"apt_note",id:id,note:note});
+    }).then(function(res){
       if(res&&res.ok){toast("Guardado ✓");}else{toast("Error al guardar");}
+      return load();
+    }).catch(function(){toast("Error de red");render();});
+    return;
+  }
+  if(el.classList.contains("vo")){
+    // my own verdict cycles — → 👍 → 👎 → — ; the server derives the voter from the login
+    var id=Number(el.getAttribute("data-id"));
+    var cur=el.getAttribute("data-cur")||"";
+    var next=cur===""?"up":cur==="up"?"down":null;
+    el.disabled=true;
+    action({action:"vote",id:id,vote:next}).then(function(res){
+      if(res&&res.ok){toast(next==="up"?"👍 Guardado":next==="down"?"👎 Guardado":"Veredicto borrado");}
+      else{toast(res&&res.error?("Error: "+res.error):"Error al guardar");}
       return load();
     }).catch(function(){toast("Error de red");render();});
     return;
@@ -877,7 +1226,10 @@ document.addEventListener("click",function(e){
     var id=Number(el.getAttribute("data-id"));
     el.disabled=true;var old=el.textContent;el.textContent="Leyendo…";
     action({action:"rescrape",id:id}).then(function(res){
-      if(res&&res.ok){toast("Releído ✓");}
+      if(res&&res.ok){
+        var pc=res.priceChange;
+        toast("Releído ✓"+(pc?(" · "+(pc.to<pc.from?"⬇ bajó a ":"⬆ subió a ")+mny(pc.to)):""));
+      }
       else{toast("No se pudo leer"+(res&&res.blocked?(" ("+(res.blocked==="bot"?"el sitio bloquea robots":res.blocked)+")"):""));}
       return load();
     }).catch(function(){toast("Error de red");}).then(function(){el.disabled=false;el.textContent=old;});
