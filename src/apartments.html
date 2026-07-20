@@ -5,6 +5,9 @@
 <link rel="manifest" href="/manifest.json" crossorigin="use-credentials">
 <link rel="icon" href="/icon.png">
 <title>Apartamentos</title>
+<!-- Leaflet (keyless map lib; SRI-pinned). If the CDN is unreachable the map section simply stays hidden. -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <style>
   :root{
     --bg:#0e1013;--bg-raised:#171a20;--fg:#e8eaed;--muted:#8b919c;--border:#272c35;
@@ -231,6 +234,20 @@
   .furow .fuact{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
   .furow .fuact .act{min-height:42px;}
   @media(min-width:760px){.furow .fuact{display:flex;}.furow .fuact .act{flex:0 0 auto;}}
+  /* map: pins for every apartment with a geocoded address. z-index:0 makes a stacking context
+     so Leaflet's internal panes (z up to ~800) stay under the modals/sheets (z 50) */
+  #map{height:380px;border:1px solid var(--border);border-radius:14px;position:relative;z-index:0;}
+  .leaflet-container{background:var(--bg);font-family:var(--font-ui);}
+  #map .leaflet-popup-content-wrapper,#map .leaflet-popup-tip{background:var(--bg-raised);color:var(--fg);box-shadow:0 3px 14px rgba(0,0,0,.5);}
+  #map .leaflet-popup-close-button{color:var(--muted);}
+  #map .leaflet-control-attribution{background:rgba(14,16,19,.72);color:var(--muted);}
+  #map .leaflet-control-attribution a{color:var(--muted);}
+  #map .leaflet-bar a{background:var(--bg-raised);color:var(--fg);border-color:var(--border);}
+  .mpop{font-size:12px;line-height:1.5;}
+  .mpop .mname{font-weight:700;font-size:13px;margin-bottom:2px;}
+  .mpop .mmeta{color:var(--muted);}
+  .mpop .mlinks{margin-top:4px;}
+  .mpop a{color:var(--accent);text-decoration:none;}
 </style></head><body>
 <div class="wrap">
   <nav><a href="/">⌂</a><a href="/dashboard.html">🏠 Hogar</a><a class="on" href="/apartments.html">🏢 Apartamentos</a></nav>
@@ -248,6 +265,10 @@
   <div id="followup"></div>
   <div id="root"></div>
   <div id="ruledRoot"></div>
+  <div id="mapsect" style="display:none">
+    <h2 class="sect">🗺 En el mapa <span class="count" id="mapcount"></span></h2>
+    <div id="map"></div>
+  </div>
   <div class="foot">Fija la fecha y hora de visita, vuelve a leer un link, o descarta un apartamento aquí.<br>También puedes responder al mensaje del apto en Telegram: "visita el martes a las 10am".<br>Al agendar o mover una visita, la invitación de calendario llega al correo de ambos.</div>
 </div>
 <div class="toast" id="toast"></div>
@@ -1011,6 +1032,67 @@ function ruledSection(list){
   }
   h+="</div></details>";return h;
 }
+// ---- map: a pin for every apartment (active + descartado) with a geocoded address ----
+// coords are geocoded and cached server-side (Nominatim); geo_address===address guards
+// against showing a stale pin while a freshly edited address is still being looked up
+var MAP=null,MAP_LAYER=null,MAP_KEY="";
+function mapRows(){
+  var out=[],rows=(DATA.apartments||[]).concat(DATA.ruledOut||[]);
+  for(var i=0;i<rows.length;i++){var r=rows[i];
+    if(r.address&&r.geo_lat!=null&&r.geo_lng!=null&&r.geo_address===r.address)out.push(r);
+  }
+  return out;
+}
+function mapPopup(r){
+  var isRent=r.deal_type==="rent";
+  var total=(isRent&&r.price!=null)?Number(r.price)+Number(r.admin_fee||0):r.price;
+  var bits=[];
+  if(total!=null)bits.push(mny(total)+(isRent?"/mes":""));
+  if(r.bedrooms!=null)bits.push(r.bedrooms+" hab");
+  if(r.area_m2!=null)bits.push(r.area_m2+" m²");
+  var h="<div class=\"mpop\"><div class=\"mname\">"+esc(aptName(r))+(r.status==="ruled_out"?" · 🚫 descartado":"")+"</div>";
+  if(bits.length)h+="<div class=\"mmeta\">"+esc(bits.join(" · "))+"</div>";
+  h+="<div class=\"mmeta\">📍 "+esc(r.address)+"</div>";
+  h+="<div class=\"mlinks\"><a href=\"#apt-"+r.id+"\">Ver tarjeta</a> · <a href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\">Cómo llegar</a></div></div>";
+  return h;
+}
+function updateMap(){
+  var sect=document.getElementById("mapsect");
+  if(!window.L||!DATA){sect.style.display="none";return;} // Leaflet CDN unreachable → no map, no error
+  var rows=mapRows();
+  if(!rows.length){sect.style.display="none";return;}
+  // addresses the geocoder hasn't placed (yet, or not found) — say so instead of silently missing pins
+  var all=(DATA.apartments||[]).concat(DATA.ruledOut||[]),noGeo=0;
+  for(var i=0;i<all.length;i++){var r=all[i];
+    if(r.address&&!(r.geo_lat!=null&&r.geo_lng!=null&&r.geo_address===r.address))noGeo++;
+  }
+  sect.style.display="";
+  document.getElementById("mapcount").textContent=rows.length+(noGeo?" · "+noGeo+" con dirección aún sin ubicar":"");
+  if(!MAP){
+    MAP=L.map("map",{scrollWheelZoom:false}); // wheel keeps scrolling the page; zoom via buttons/pinch
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",{
+      subdomains:"abcd",maxZoom:19,
+      attribution:"&copy; <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap</a> &copy; <a href=\"https://carto.com/attributions\" target=\"_blank\" rel=\"noopener\">CARTO</a>"
+    }).addTo(MAP);
+    MAP_LAYER=L.layerGroup().addTo(MAP);
+  }
+  MAP_LAYER.clearLayers();
+  var pts=[];
+  for(var j=0;j<rows.length;j++){var r2=rows[j];var ruled=r2.status==="ruled_out";
+    L.circleMarker([r2.geo_lat,r2.geo_lng],{
+      radius:9,color:"#0e1013",weight:2,
+      fillColor:ruled?"#8b919c":"#7aa2ff",fillOpacity:ruled?0.55:0.9
+    }).bindPopup(mapPopup(r2)).addTo(MAP_LAYER);
+    pts.push([r2.geo_lat,r2.geo_lng]);
+  }
+  // refit only when the pin set changes, so popup clicks / unrelated re-renders don't yank the view
+  var key=rows.map(function(r3){return r3.id+":"+r3.geo_lat+","+r3.geo_lng;}).join("|");
+  if(key!==MAP_KEY){
+    MAP_KEY=key;
+    if(pts.length===1)MAP.setView(pts[0],15);
+    else MAP.fitBounds(pts,{padding:[28,28],maxZoom:15});
+  }
+}
 // deep link from Telegram acks: #apt-<id> scrolls to and briefly highlights that card/row.
 // one-shot (HASH_DONE) so week-nav / resize re-renders don't re-trigger the jump
 var HASH_DONE=false;
@@ -1063,7 +1145,7 @@ function render(){
   for(var g=0;g<gb.length;g++)gb[g].className="gr-btn"+(gb[g].getAttribute("data-group")===GROUP?" on":"");
   // let the table use the full screen width; cards keep the centered column
   document.querySelector(".wrap").classList.toggle("wide",effView()==="table");
-  if(!rows.length&&!ruled.length){document.getElementById("root").innerHTML="<div class=\"empty\">Aún no hay apartamentos. Envía un link al grupo de Telegram para empezar.</div>";document.getElementById("ruledRoot").innerHTML="";return;}
+  if(!rows.length&&!ruled.length){document.getElementById("root").innerHTML="<div class=\"empty\">Aún no hay apartamentos. Envía un link al grupo de Telegram para empezar.</div>";document.getElementById("ruledRoot").innerHTML="";updateMap();return;}
   if(rows.length&&!shown.length){
     document.getElementById("root").innerHTML="<div class=\"empty\">Nada coincide con los filtros — <button class=\"fclearlink\" data-f=\"clear\">límpialos</button>.</div>";
   }else if(effView()==="table"){
@@ -1083,6 +1165,7 @@ function render(){
     document.getElementById("root").innerHTML=section("🛒 Compra",buy,false)+section("🔑 Arriendo",rent,true)+section("❔ Sin clasificar",unk,false);
   }
   document.getElementById("ruledRoot").innerHTML=ruledSection(ruled);
+  updateMap();
   jumpToHash();
 }
 function load(){return fetch("apartments-data.json").then(function(r){if(!r.ok)throw 0;return r.json();}).then(function(d){DATA=d;render();});}
