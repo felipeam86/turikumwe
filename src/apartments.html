@@ -64,6 +64,9 @@
   .price .adm{display:block;color:var(--muted);font-size:11px;font-weight:400;margin-top:2px;}
   .flag{display:inline-block;font-size:11px;color:var(--warn);border:1px solid var(--warn);border-radius:999px;padding:1px 7px;margin-left:6px;vertical-align:middle;}
   .flag.new{color:var(--accent);border-color:var(--accent);}
+  /* pipeline-stage chips: scheduled = accent, visited / deal-type = muted */
+  .flag.sched{color:var(--accent);border-color:var(--accent);}
+  .flag.mut{color:var(--muted);border-color:var(--border);}
   .specs{display:grid;grid-template-columns:repeat(3,1fr);gap:10px 8px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);}
   .spec .k{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:1px;}
   .xtra{color:var(--muted);font-size:12px;margin-top:10px;line-height:1.45;}
@@ -102,9 +105,10 @@
   .tel{color:var(--accent);text-decoration:none;}
   .ctrl{flex-wrap:wrap;}
   .act.prim{border-color:var(--accent);color:var(--accent);}
-  /* desktop table view */
-  .toolbar{display:none;}
-  @media(min-width:760px){.toolbar{display:flex;justify-content:flex-end;margin-bottom:10px;}}
+  /* toolbar: view toggle (desktop-only until the list view lands) + cards grouping toggle */
+  .toolbar{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-bottom:10px;}
+  @media(max-width:759px){#viewtoggle{display:none;}}
+  .tlabel{font-size:11px;font-weight:600;color:var(--muted);display:inline-flex;align-items:center;padding-left:12px;}
   .viewtoggle{display:inline-flex;border:1px solid var(--border);border-radius:999px;overflow:hidden;}
   .viewtoggle button{font-family:inherit;font-size:13px;font-weight:600;background:transparent;color:var(--muted);border:none;padding:9px 15px;cursor:pointer;}
   .viewtoggle button.on{background:rgba(122,162,255,.14);color:var(--fg);}
@@ -119,6 +123,7 @@
   .apttable td.nm{font-weight:600;white-space:normal;min-width:150px;}
   .apttable tbody tr:hover{background:rgba(255,255,255,.03);}
   .apttable .tag{margin-left:0;}
+  .apttable .flag{margin-left:0;}
   .thumb{width:46px;height:46px;object-fit:cover;border-radius:8px;display:block;}
   .thumb.noimg{background:var(--bg);border:1px solid var(--border);}
   .rowact{display:flex;gap:6px;align-items:center;}
@@ -202,10 +207,16 @@
 <div class="wrap">
   <nav><a href="/">⌂</a><a href="/dashboard.html">🏠 Hogar</a><a class="on" href="/apartments.html">🏢 Apartamentos</a></nav>
   <div class="sub" id="sub">Cargando…</div>
-  <div class="toolbar"><div class="viewtoggle" id="viewtoggle">
-    <button class="vt-btn" data-view="cards">▦ Tarjetas</button>
-    <button class="vt-btn" data-view="table">▤ Tabla</button>
-  </div></div>
+  <div class="toolbar">
+    <div class="viewtoggle" id="grouptoggle"><span class="tlabel">Agrupar</span>
+      <button class="gr-btn" data-group="tipo">Tipo</button>
+      <button class="gr-btn" data-group="estado">Estado</button>
+    </div>
+    <div class="viewtoggle" id="viewtoggle">
+      <button class="vt-btn" data-view="cards">▦ Tarjetas</button>
+      <button class="vt-btn" data-view="table">▤ Tabla</button>
+    </div>
+  </div>
   <div id="visits"></div>
   <div id="followup"></div>
   <div id="root"></div>
@@ -259,6 +270,24 @@ function ppmOf(r,isRent){
   }
   return (r.price_per_m2&&r.price_per_m2>0)?r.price_per_m2:null;
 }
+// hunt-pipeline stage of an active apartment: no visit set => still to schedule; a set visit is
+// upcoming or already passed (visitCmp pads date-only visits to end-of-day; wall-clock compare)
+function stageOf(r){
+  if(!r.visit_date)return "pending";
+  return visitCmp(r.visit_date)>=nowBogota()?"scheduled":"visited";
+}
+// compact "vie 25 · 10:00" (or just "vie 25") for the scheduled-stage chip
+function fmtVisitShort(s){try{
+  var day=parseDay(s).toLocaleDateString("es-CO",{timeZone:"UTC",weekday:"short",day:"numeric"});
+  var t=s.length>10?s.slice(11,16):"";
+  return t?day+" · "+t:day;
+}catch(e){return s;}}
+function stageChip(r){
+  var st=stageOf(r);
+  if(st==="pending")return "<span class=\"flag\">⏳ por agendar</span>";
+  if(st==="scheduled")return "<span class=\"flag sched\">📅 "+esc(fmtVisitShort(r.visit_date))+"</span>";
+  return "<span class=\"flag mut\">✔ visitado</span>";
+}
 // note lines: "YYYY-MM-DD [Autor]: text"; older lines lack the [Autor] part
 var NOTE_RE=/^(\d{4}-\d{2}-\d{2})(?: \[([^\]]+)\])?: (.*)$/;
 // unicode-safe base64 so the exact raw line survives quotes/colons inside an HTML attribute
@@ -276,12 +305,15 @@ function noteLines(r){
   }
   return h;
 }
-function card(r,best,isRent){
+function card(r,best,isRent,withDeal){
   var ppm=ppmOf(r,isRent);
   var isBest=best&&ppm===best;
   var flag=(r.scrape_status&&r.scrape_status!=="ok")?"<span class=\"flag\">sin leer</span>":"";
   // "nuevo" pill for 48h so a freshly shared listing is findable despite the $/m² sort
   if(r.created_at&&Date.now()-Date.parse(r.created_at)<48*3600*1000)flag+="<span class=\"flag new\">nuevo</span>";
+  flag+=stageChip(r);
+  // Estado grouping mixes rent and buy in one section — say which is which on the card itself
+  if(withDeal&&(r.deal_type==="rent"||r.deal_type==="buy"))flag+="<span class=\"flag mut\">"+(r.deal_type==="rent"?"arriendo":"compra")+"</span>";
   var sub=(r.title&&r.location)?"<div class=\"sub2\">"+esc(r.title)+"</div>":"";
   var vd=r.visit_date?esc(r.visit_date):"";
   // datetime-local needs YYYY-MM-DDTHH:MM; pad legacy date-only visits with an editable 09:00 default
@@ -351,6 +383,20 @@ function section(title,list,isRent){
   for(var i=0;i<sorted.length;i++)h+=card(sorted[i],best,isRent);
   h+="</div>";return h;
 }
+// Estado grouping: sections are pipeline stages (mixed deal types), each with its own sort.
+// No "best $/m²" highlight — comparing rent vs buy $/m² in one section is meaningless.
+function stageSection(title,list,cmp){
+  if(!list.length)return "";
+  var sorted=list.slice().sort(cmp);
+  var h="<h2 class=\"sect\">"+title+" <span class=\"count\">"+sorted.length+"</span></h2><div class=\"grid\">";
+  for(var i=0;i<sorted.length;i++){var r=sorted[i];h+=card(r,null,r.deal_type==="rent",true);}
+  h+="</div>";return h;
+}
+// $/m² ascending with per-row deal type (Estado sections mix rent and buy), nulls last
+function ppmCmpMixed(a,b){
+  var pa=ppmOf(a,a.deal_type==="rent"),pb=ppmOf(b,b.deal_type==="rent");
+  return (pa==null?Infinity:pa)-(pb==null?Infinity:pb);
+}
 // ---- desktop table view ----
 // every listing field is editable in place; edit=type drives both the input widget and server coercion
 var SORT={key:"ppm",dir:1}; // default: best $/m² first, like the cards
@@ -370,6 +416,7 @@ var COLS=[
   {k:"address",label:"Dirección",type:"s",field:"address",edit:"text"},
   {k:"agent_name",label:"Agente",type:"s",field:"agent_name",edit:"text"},
   {k:"agent_phone",label:"Teléfono",type:"s",field:"agent_phone",edit:"text"},
+  {k:"stage",label:"Estado",type:"n"},
   {k:"visit_date",label:"Visita",type:"s",field:"visit_date",edit:"visit"},
   {k:"actions",label:""}
 ];
@@ -377,6 +424,7 @@ function cellVal(r,k){
   if(k==="name")return aptName(r);
   if(k==="type")return r.deal_type||"";
   if(k==="ppm")return ppmOf(r,r.deal_type==="rent");
+  if(k==="stage"){var st=stageOf(r);return st==="pending"?0:st==="scheduled"?1:2;} // funnel order
   return r[k];
 }
 function sortRows(rows){
@@ -405,6 +453,7 @@ function cellDisplay(r,c){
   if(c.k==="ppm")return mny(ppmOf(r,isRent));
   // the cell stays click-to-edit; the small 🗺 anchor rides along (the click handler lets anchors through)
   if(c.k==="address")return r.address?esc(r.address)+" <a href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\" aria-label=\"Cómo llegar\">🗺</a>":"";
+  if(c.k==="stage")return stageChip(r);
   if(c.k==="visit_date")return r.visit_date?esc(fmtVisit(r.visit_date)):"";
   if(c.k==="actions"){
     var a="<div class=\"rowact\">";
@@ -482,6 +531,8 @@ function tableView(rows){
 }
 // table is a desktop-only affordance; phones always get the cards
 var VIEW=localStorage.getItem("aptView")||"table";
+// cards grouping: by deal type (historic default) or by pipeline stage; opt-in, persisted
+var GROUP=localStorage.getItem("aptGroup")||"tipo";
 function isDesktop(){return window.innerWidth>=760;}
 function effView(){return isDesktop()?VIEW:"cards";}
 // ---- edit sheet (address / agent / phone / tag), shared by cards + table ----
@@ -780,11 +831,24 @@ function render(){
   // reflect the active view on the toggle (only visible on desktop)
   var vt=document.getElementById("viewtoggle").getElementsByTagName("button");
   for(var t=0;t<vt.length;t++)vt[t].className="vt-btn"+(vt[t].getAttribute("data-view")===VIEW?" on":"");
+  // grouping toggle only makes sense over cards; hide it while the table is showing
+  var gt=document.getElementById("grouptoggle");
+  gt.style.display=effView()==="table"?"none":"";
+  var gb=gt.getElementsByTagName("button");
+  for(var g=0;g<gb.length;g++)gb[g].className="gr-btn"+(gb[g].getAttribute("data-group")===GROUP?" on":"");
   // let the table use the full screen width; cards keep the centered column
   document.querySelector(".wrap").classList.toggle("wide",effView()==="table");
   if(!rows.length&&!ruled.length){document.getElementById("root").innerHTML="<div class=\"empty\">Aún no hay apartamentos. Envía un link al grupo de Telegram para empezar.</div>";document.getElementById("ruledRoot").innerHTML="";return;}
   if(effView()==="table"){
     document.getElementById("root").innerHTML=tableView(rows);
+  }else if(GROUP==="estado"){
+    // funnel sections: upcoming visits by soonest, unscheduled by value, visited most recent first
+    var sch=[],pen=[],seen=[];
+    for(var si=0;si<rows.length;si++){var st=stageOf(rows[si]);(st==="scheduled"?sch:st==="pending"?pen:seen).push(rows[si]);}
+    document.getElementById("root").innerHTML=
+      stageSection("📅 Con visita",sch,function(a,b){return visitCmp(a.visit_date)<visitCmp(b.visit_date)?-1:1;})+
+      stageSection("⏳ Por agendar",pen,ppmCmpMixed)+
+      stageSection("✔ Visitados",seen,function(a,b){return visitCmp(a.visit_date)<visitCmp(b.visit_date)?1:-1;});
   }else{
     var buy=rows.filter(function(r){return r.deal_type==="buy";});
     var rent=rows.filter(function(r){return r.deal_type==="rent";});
@@ -811,6 +875,7 @@ document.addEventListener("click",function(e){
   // links inside editable cells (e.g. the 🗺 maps anchor) must navigate, not begin an edit
   if(el.closest&&el.closest("a"))return;
   if(el.classList.contains("vt-btn")){VIEW=el.getAttribute("data-view");localStorage.setItem("aptView",VIEW);render();return;}
+  if(el.classList.contains("gr-btn")){GROUP=el.getAttribute("data-group");localStorage.setItem("aptGroup",GROUP);render();return;}
   // week nav is desktop-only (buttons don't render on mobile); no-op if WEEK_START isn't set yet
   if(el.classList.contains("cal-prev")){if(!WEEK_START)return;WEEK_START=addDays(WEEK_START,-7);render();return;}
   if(el.classList.contains("cal-next")){if(!WEEK_START)return;WEEK_START=addDays(WEEK_START,7);render();return;}
