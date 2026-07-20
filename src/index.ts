@@ -110,6 +110,54 @@ function mapsLink(addr: string): string {
   if (a && !/bogot[aá]/i.test(a)) a += ', Bogotá';
   return 'https://maps.google.com/?q=' + encodeURIComponent(a);
 }
+// ---- geocoding (Nominatim/OSM — keyless, results cached in the row) ----
+// geo_address remembers the exact address string the coords came from, so an edited address
+// re-geocodes and an unchanged one never hits the API again. A lookup that finds nothing still
+// writes geo_address (with NULL coords) so the same bad address isn't retried on every page
+// load; transient failures (network, non-200) leave the row unmarked and retry next time.
+async function geocodeApt(env: Env, row: { id: number; address: string | null; location?: string | null }): Promise<void> {
+  const addr = String(row.address || '').trim();
+  if (!addr) return;
+  const anchor = (s: string) => (/bogot[aá]/i.test(s) ? s : s + ', Bogotá'); // same anchoring as mapsLink
+  // the neighborhood ("location") steers Nominatim to the right stretch of a long grid street
+  // (a bare "Calle 94" can match kilometres away); fall back to the address alone if the
+  // narrower query finds nothing
+  const loc = String(row.location || '').trim();
+  const queries = loc && !addr.toLowerCase().includes(loc.toLowerCase().split(',')[0])
+    ? [anchor(addr + ', ' + loc), anchor(addr)] : [anchor(addr)];
+  try {
+    for (let i = 0; i < queries.length; i++) {
+      if (i) await new Promise((res) => setTimeout(res, 1100)); // Nominatim asks for ~1 req/s
+      const r = await fetch('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=co&q=' + encodeURIComponent(queries[i]), {
+        signal: AbortSignal.timeout(6000),
+        headers: { 'user-agent': 'turikumwe.cc household worker (apartment hunt map)', accept: 'application/json' },
+      });
+      if (!r.ok) return; // transient — leave the row unmarked so a later load retries
+      const j: any = await r.json();
+      const hit = Array.isArray(j) ? j[0] : null;
+      const lat = hit ? Number(hit.lat) : NaN;
+      const lng = hit ? Number(hit.lon) : NaN;
+      if (isFinite(lat) && isFinite(lng)) {
+        await run(env, 'UPDATE apartments SET geo_lat=?, geo_lng=?, geo_address=? WHERE id=?', lat, lng, addr, row.id);
+        return;
+      }
+    }
+    // nothing found — remember that (NULL coords) so the same address isn't retried forever
+    await run(env, 'UPDATE apartments SET geo_lat=NULL, geo_lng=NULL, geo_address=? WHERE id=?', addr, row.id);
+  } catch (e: any) {
+    console.log('geocode error:', String(e && e.message || e));
+  }
+}
+// background sweep for rows whose address is new or changed (a handful per page load, spaced
+// out — Nominatim asks for ~1 req/s). Pins appear on the next data load.
+async function geocodeBackfill(env: Env): Promise<void> {
+  const rows = await all(env,
+    "SELECT id, address, location FROM apartments WHERE address IS NOT NULL AND address!='' AND (geo_address IS NULL OR geo_address!=address) LIMIT 3");
+  for (let i = 0; i < rows.length; i++) {
+    if (i) await new Promise((res) => setTimeout(res, 1100));
+    await geocodeApt(env, rows[i]);
+  }
+}
 // WhatsApp: wa.me needs a full international number; bare 10-digit Colombian mobiles (start with 3) get +57
 function waLink(phone: string): string {
   let d = String(phone || '').replace(/\D/g, '');
@@ -1178,7 +1226,9 @@ async function itemsAction(env: Env, req: Request, ctx: ExecutionContext): Promi
   return json({ ok: true, next: r.next ? fmtDate(r.next) : null });
 }
 
-async function apartmentsData(env: Env, req: Request): Promise<Response> {
+async function apartmentsData(env: Env, req: Request, ctx: ExecutionContext): Promise<Response> {
+  // geocode any new/changed addresses in the background; their pins show on the next load
+  ctx.waitUntil(geocodeBackfill(env).catch((e) => console.log('geocode backfill error:', String(e && e.message || e))));
   const rows = await all(env, "SELECT * FROM apartments WHERE status='active' ORDER BY created_at DESC");
   const ruledOut = await all(env, "SELECT * FROM apartments WHERE status='ruled_out' ORDER BY ruled_out_at DESC, updated_at DESC");
   // visit photos, grouped per apartment (active and ruled-out alike); file ids stay server-side
@@ -1282,6 +1332,9 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
     const clean = (v: any) => { const s = (v == null ? '' : String(v)).trim(); return s ? s.slice(0, 200) : null; };
     await run(env, 'UPDATE apartments SET address=?, agent_name=?, agent_phone=?, tag=?, updated_at=? WHERE id=?',
       clean(b.address), clean(b.agent_name), clean(b.agent_phone), clean(b.tag), new Date().toISOString(), id);
+    // a new/changed address gets geocoded right away, so the map pin appears on the reload
+    const grow = await get(env, 'SELECT id, address, location, geo_address FROM apartments WHERE id=?', id);
+    if (grow?.address && grow.address !== grow.geo_address) await geocodeApt(env, grow);
     return json({ ok: true, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
   }
   if (b.action === 'edit') {
@@ -1311,6 +1364,11 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
     // a hand-typed price is a correction, not a market move — drop any «bajó/subió» record so
     // the UI never flags a change the market didn't make
     if (field === 'price') await run(env, 'UPDATE apartments SET prev_price=NULL, price_changed_at=NULL WHERE id=?', id);
+    // same as set_fields: an address typed into the table cell gets its map pin right away
+    if (field === 'address' && val) {
+      const grow = await get(env, 'SELECT id, address, location, geo_address FROM apartments WHERE id=?', id);
+      if (grow?.address && grow.address !== grow.geo_address) await geocodeApt(env, grow);
+    }
     return json({ ok: true, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
   }
   if (b.action === 'vote') {
@@ -1374,7 +1432,7 @@ export default {
     if (req.method === 'GET' && path === '/') return homePage(env);
     if (req.method === 'GET' && path === '/dashboard.html') return dashboardPage(env);
     if (req.method === 'GET' && path === '/apartments.html') return html(apartmentsHtml);
-    if (req.method === 'GET' && path === '/apartments-data.json') return apartmentsData(env, req);
+    if (req.method === 'GET' && path === '/apartments-data.json') return apartmentsData(env, req, ctx);
     const photoM = path.match(/^\/apt-photo\/(\d+)$/);
     if (req.method === 'GET' && photoM) return photoResponse(env, Number(photoM[1]), url.searchParams.get('s') === 't');
     if (req.method === 'GET' && path === '/manifest.json') return manifestResponse();

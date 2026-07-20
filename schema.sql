@@ -50,7 +50,13 @@ CREATE TABLE IF NOT EXISTS apartments (
   -- previous price + when it changed, written only when a rescrape sees a different price
   -- (manual edits are corrections, not market signals); one prior value is enough
   prev_price INTEGER,
-  price_changed_at TEXT
+  price_changed_at TEXT,
+  -- cached geocode (Nominatim/OSM) for the map pins. geo_address remembers the exact address
+  -- string the coords came from: address edited => mismatch => re-geocode; lookup found nothing
+  -- => geo_address set with NULL coords, so the same bad address isn't retried on every load
+  geo_lat REAL,
+  geo_lng REAL,
+  geo_address TEXT
 );
 
 -- photos taken during visits, sent to the Telegram group. Only permanent Telegram
