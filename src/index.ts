@@ -262,7 +262,11 @@ async function completeItem(env: Env, id: number): Promise<{ ok: boolean; title?
 }
 
 // ---- telegram ----
-async function tgSend(env: Env, text: string, replyTo?: number) {
+// inline-keyboard shorthand: kb([[btn, btn], [btn]]) — one inner array per button row
+type TgBtn = { text: string; url?: string; callback_data?: string };
+const kb = (rows: TgBtn[][]) => ({ inline_keyboard: rows });
+
+async function tgSend(env: Env, text: string, replyTo?: number, replyMarkup?: unknown) {
   const send = (payload: Record<string, unknown>) =>
     fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`, {
       method: 'POST',
@@ -270,9 +274,23 @@ async function tgSend(env: Env, text: string, replyTo?: number) {
       body: JSON.stringify(payload),
     });
   const reply = replyTo ? { reply_to_message_id: replyTo, allow_sending_without_reply: true } : {};
-  const r = await send({ chat_id: env.GROUP_CHAT_ID, text, parse_mode: 'Markdown', ...reply });
+  const markup = replyMarkup ? { reply_markup: replyMarkup } : {};
+  let r = await send({ chat_id: env.GROUP_CHAT_ID, text, parse_mode: 'Markdown', ...reply, ...markup });
   // ponytail: if legacy-Markdown parsing rejects the text, resend plain rather than dropping the ack
-  if (!r.ok) await send({ chat_id: env.GROUP_CHAT_ID, text, ...reply });
+  if (!r.ok) r = await send({ chat_id: env.GROUP_CHAT_ID, text, ...reply, ...markup });
+  // still failing with a keyboard attached (e.g. Telegram rejecting a pasted listing url as a
+  // button url) → the text matters more than the buttons
+  if (!r.ok && replyMarkup) r = await send({ chat_id: env.GROUP_CHAT_ID, text, ...reply });
+  if (!r.ok) console.log('tgSend failed:', r.status, (await r.text().catch(() => '')).slice(0, 200));
+}
+
+// answerCallbackQuery clears the client-side spinner on a tapped button; text shows as a toast
+async function tgAnswerCallback(env: Env, callbackQueryId: string, text?: string) {
+  await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/answerCallbackQuery`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ callback_query_id: callbackQueryId, ...(text ? { text } : {}) }),
+  }).catch(() => {});
 }
 
 // fire-and-forget "typing…" indicator (Telegram shows it ~5s) so slow scrape/Claude work isn't dead air
@@ -454,6 +472,36 @@ async function retryBlockedScrapes(env: Env): Promise<{ updated: any[], still: a
 // deep link straight to the card in the web app (apartments.html scrolls to and highlights #apt-<id>)
 const aptLink = (id: number | string) => 'https://turikumwe.cc/apartments.html#apt-' + id;
 
+// ---- shared apartment mutations ----
+// One implementation for the Telegram ops loop, the web actions, and callback buttons — including
+// the calendar-invite side effects. Both return null when the row isn't in the required status,
+// which doubles as the idempotency check for stale button taps.
+async function ruleOutApt(env: Env, id: number, rawReason: unknown): Promise<{ row: any; reason: string | null; mail: string } | null> {
+  const row = await get(env, "SELECT * FROM apartments WHERE id=? AND status='active'", id);
+  if (!row) return null;
+  const reason = (rawReason && String(rawReason).trim()) ? String(rawReason).trim().slice(0, 120) : null;
+  const now = new Date().toISOString();
+  // status predicate + changes check: two concurrent taps can both pass the SELECT, but only the
+  // invocation whose UPDATE actually flips the row gets to send mail and announce
+  const res = await run(env, "UPDATE apartments SET status='ruled_out', ruled_out_reason=?, ruled_out_at=?, updated_at=? WHERE id=? AND status='active'", reason, now, now, id);
+  if (!res.meta.changes) return null;
+  const mail = await visitMail(env, row, null, row.visit_date); // pending visit? tell the calendars it's off
+  return { row, reason, mail };
+}
+async function reactivateApt(env: Env, id: number): Promise<{ row: any; mail: string } | null> {
+  const row = await get(env, "SELECT * FROM apartments WHERE id=? AND status='ruled_out'", id);
+  if (!row) return null;
+  const res = await run(env, "UPDATE apartments SET status='active', ruled_out_reason=NULL, ruled_out_at=NULL, updated_at=? WHERE id=? AND status='ruled_out'", new Date().toISOString(), id);
+  if (!res.meta.changes) return null;
+  const mail = await visitMail(env, row, row.visit_date, null); // pending visit comes back → re-invite
+  return { row, mail };
+}
+// append one attributed, stamped note line ("YYYY-MM-DD [Autor]: text") — the format every reader parses
+async function appendAptNote(env: Env, id: number, author: string, note: string) {
+  const stamped = today() + (author ? ' [' + author + ']' : '') + ': ' + String(note).trim().slice(0, 300);
+  await run(env, "UPDATE apartments SET notes=COALESCE(notes||char(10),'')||?, updated_at=? WHERE id=?", stamped, new Date().toISOString(), id);
+}
+
 function apartmentAck(rec: any): string {
   const f = rec.f, dt = rec.deal;
   const label = dt === 'rent' ? 'arriendo' : dt === 'buy' ? 'compra' : 'sin especificar (dime si es compra o arriendo)';
@@ -474,9 +522,9 @@ function apartmentAck(rec: any): string {
   if (f.parking != null) extra.push('🚗 ' + f.parking + ' parq.');
   if (extra.length) lines.push(extra.join(' · '));
   if (!rec.scr.ok) {
-    lines.push('_No pude leer la página automáticamente (' + rec.scr.blocked + '). Guardé lo que escribiste; escribe "reintenta" para volver a probar._');
+    lines.push('_No pude leer la página automáticamente (' + rec.scr.blocked + '). Guardé lo que escribiste; toca 🔁 Releer (o escribe "reintenta") para volver a probar._');
   }
-  lines.push(aptLink(rec.id));
+  // no trailing deep link: the 📱 button on this ack covers it, and the #id keeps replies resolvable
   return lines.join('\n');
 }
 
@@ -608,10 +656,14 @@ async function sendVisitReminders(env: Env) {
     const lines = [`🔔 *Visita en ~1h — ${String(r.visit_date).slice(11, 16)}* · *${mdEscape(aptName(r))}* #${r.id}`];
     if (r.address) lines.push(`📍 ${mdLink(r.address, mapsLink(r.address))}`);
     if (r.agent_name) lines.push(`👤 ${mdEscape(r.agent_name)}`);
-    if (r.agent_phone) lines.push(`💬 ${waLink(r.agent_phone)}`);
-    if (r.url) lines.push(`🔗 ${mdLink(siteOf(r.url) || 'anuncio', r.url)}`);
-    lines.push(aptLink(r.id));
-    await tgSend(env, lines.join('\n'));
+    // the links live in buttons (url buttons never touch the Markdown parser)
+    const row1: TgBtn[] = [];
+    if (r.address) row1.push({ text: '🗺 Cómo llegar', url: mapsLink(r.address) });
+    if (r.agent_phone) row1.push({ text: '💬 Agente', url: waLink(r.agent_phone) });
+    const row2: TgBtn[] = [];
+    if (r.url) row2.push({ text: '🔗 Anuncio', url: r.url });
+    row2.push({ text: '📱 Abrir en la app', url: aptLink(r.id) });
+    await tgSend(env, lines.join('\n'), undefined, kb(row1.length ? [row1, row2] : [row2]));
     await run(env, 'UPDATE apartments SET visit_reminder_sent=? WHERE id=?', r.visit_date, r.id);
   }
 }
@@ -625,7 +677,11 @@ async function sendPostVisitFollowup(env: Env) {
     "SELECT * FROM apartments WHERE status='active' AND visit_date IS NOT NULL AND substr(visit_date,1,10)=? AND visit_date<=?",
     today(), nowBogota());
   for (const r of rows) {
-    await tgSend(env, `🗣 ¿Cómo les fue en *${mdEscape(aptName(r))}* #${r.id}? Respondan a este mensaje con su opinión y la guardo como nota.`);
+    await tgSend(env, `🗣 ¿Cómo les fue en *${mdEscape(aptName(r))}* #${r.id}? Un toque para el veredicto, o respondan a este mensaje y lo guardo como nota.`,
+      undefined, kb([
+        [{ text: '👍 Nos gustó', callback_data: 'up:' + r.id }, { text: '👎 No', callback_data: 'dn:' + r.id }],
+        [{ text: '🚫 Descartar', callback_data: 'ro:' + r.id }],
+      ]));
   }
 }
 
@@ -648,7 +704,61 @@ async function replyAptFromMsg(env: Env, msg: any): Promise<{ id: number; name: 
 }
 
 // ================= TELEGRAM UPDATE PROCESSING =================
+// Inline-keyboard callbacks. data is a server-generated "verb:id" string; anything else
+// (wrong chat, malformed data, missing row) just clears the spinner and does nothing.
+// A stale tap — the action already done or undone elsewhere — answers "ya estaba hecho".
+async function handleCallback(env: Env, cq: any) {
+  const m = String(cq?.data || '').match(/^(ro|re|rs|up|dn):(\d+)$/);
+  if (!m || String(cq?.message?.chat?.id) !== String(env.GROUP_CHAT_ID)) { await tgAnswerCallback(env, cq.id); return; }
+  const verb = m[1];
+  const id = Number(m[2]);
+  const who = cq.from?.first_name || 'alguien';
+  const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
+  if (!row) { await tgAnswerCallback(env, cq.id, 'Ese apartamento ya no existe'); return; }
+
+  if (verb === 'ro') {
+    const res = await ruleOutApt(env, id, null);
+    if (!res) { await tgAnswerCallback(env, cq.id, 'Ya estaba hecho 👍'); return; }
+    await tgAnswerCallback(env, cq.id, 'Descartado 🚫');
+    await tgSend(env, `🚫 *${mdEscape(aptName(row))}* #${id} descartado — ${who}, vía botón${res.mail}`,
+      undefined, kb([[{ text: '↩️ Reactivar', callback_data: 're:' + id }]]));
+    return;
+  }
+  if (verb === 're') {
+    const res = await reactivateApt(env, id);
+    if (!res) { await tgAnswerCallback(env, cq.id, 'Ya estaba hecho 👍'); return; }
+    await tgAnswerCallback(env, cq.id, 'De vuelta ↩️');
+    await tgSend(env, `↩️ *${mdEscape(aptName(row))}* #${id} de vuelta en la lista — ${who}, vía botón${res.mail}`);
+    return;
+  }
+  if (verb === 'rs') {
+    if (row.scrape_status === 'ok') { await tgAnswerCallback(env, cq.id, 'Ya estaba leído 👍'); return; }
+    // answer BEFORE the scrape: it can run 15 s+, past the window in which Telegram still
+    // accepts the answer — a late answer is silently rejected and the button spins forever
+    await tgAnswerCallback(env, cq.id, 'Leyendo… 🔍');
+    tgTyping(env);
+    const rr = await rescrapeOne(env, id);
+    if (rr.ok) await tgSend(env, `🔄 Releí *${mdEscape(aptName(row))}* #${id} — ${who}, vía botón\n` + aptLink(id));
+    else await tgSend(env, `⚠️ Sigo sin poder leer *${mdEscape(aptName(row))}* #${id} (${rr.blocked || 'error'}) — prueba más tarde.`,
+      undefined, kb([[{ text: '🔁 Releer', callback_data: 'rs:' + id }]]));
+    return;
+  }
+  // up/dn: one-tap post-visit verdict — a canned note attributed to whoever tapped
+  if (row.status !== 'active') { await tgAnswerCallback(env, cq.id, 'Ese apartamento está descartado'); return; }
+  const note = verb === 'up' ? '👍 nos gustó' : '👎 no nos gustó';
+  // the keyboard stays on the message forever, so dedup a repeat tap: same person, same
+  // verdict, same day → already recorded
+  if (String(row.notes || '').split('\n').includes(today() + ' [' + who + ']: ' + note)) {
+    await tgAnswerCallback(env, cq.id, 'Ya registrado 👍');
+    return;
+  }
+  await appendAptNote(env, id, who, note);
+  await tgAnswerCallback(env, cq.id, 'Nota guardada 📝');
+  await tgSend(env, `📝 Nota en *${mdEscape(aptName(row))}* #${id}: ${note} — ${who}, vía botón`);
+}
+
 async function handleUpdate(env: Env, update: any) {
+  if (update?.callback_query) { await handleCallback(env, update.callback_query); return; }
   const msg = update?.message;
   const text = String(msg?.text || '').trim();
   if (!msg || !text) return;
@@ -662,33 +772,42 @@ async function handleUpdate(env: Env, update: any) {
     return;
   }
 
-  // URL message → apartment ingestion only
+  // URL message → apartment ingestion only. One ack message per URL, so each
+  // inline keyboard unambiguously belongs to its apartment.
   if (URL_RE.test(text)) {
-    const acks: string[] = [];
+    const acks: { text: string; markup?: unknown }[] = [];
     for (const u of extractUrls(text)) {
       tgTyping(env);
       try {
         const rec = await ingestApartment(env, u, text, who);
         if (rec.reread) {
           acks.push(rec.ok
-            ? '🔄 Ya lo tenías (#' + rec.id + ') y no se había podido leer — lo releí ahora.\n' + aptLink(rec.id)
-            : '🔁 Ya lo tenías guardado: *' + rec.name + '* #' + rec.id + '. Sigo sin poder leer la página (' + (rec.blocked || 'error') + ').\n' + aptLink(rec.id));
+            ? { text: '🔄 Ya lo tenías (#' + rec.id + ') y no se había podido leer — lo releí ahora.\n' + aptLink(rec.id) }
+            : {
+              text: '🔁 Ya lo tenías guardado: *' + rec.name + '* #' + rec.id + '. Sigo sin poder leer la página (' + (rec.blocked || 'error') + ').\n' + aptLink(rec.id),
+              markup: kb([[{ text: '🔁 Releer', callback_data: 'rs:' + rec.id }]]),
+            });
         } else if (rec.dup) {
           const st = rec.status === 'ruled_out' ? ' — estaba *descartado*' + (rec.reason ? ' (' + rec.reason + ')' : '') : '';
-          acks.push('🔁 Ya lo tenías guardado: *' + rec.name + '* #' + rec.id + st + '.\n' + aptLink(rec.id));
+          acks.push({ text: '🔁 Ya lo tenías guardado: *' + rec.name + '* #' + rec.id + st + '.\n' + aptLink(rec.id) });
         } else if (rec.skipped) {
-          acks.push('🔗 Ese link no parece un anuncio de apartamento — no lo guardé. Si sí lo es, reenvíalo diciendo que es un apto.');
+          acks.push({ text: '🔗 Ese link no parece un anuncio de apartamento — no lo guardé. Si sí lo es, reenvíalo diciendo que es un apto.' });
         } else {
-          acks.push(apartmentAck(rec));
+          const row2: TgBtn[] = [{ text: '🚫 Descartar', callback_data: 'ro:' + rec.id }];
+          if (!rec.scr.ok) row2.push({ text: '🔁 Releer', callback_data: 'rs:' + rec.id });
+          acks.push({
+            text: apartmentAck(rec),
+            markup: kb([[{ text: '📱 Abrir en la app', url: aptLink(rec.id) }, { text: '🔗 Anuncio', url: u }], row2]),
+          });
         }
       } catch (e: any) {
-        acks.push('No pude guardar un apartamento (' + String(e && e.message || e).slice(0, 80) + ').');
+        acks.push({ text: 'No pude guardar un apartamento (' + String(e && e.message || e).slice(0, 80) + ').' });
       }
     }
     // household text riding along with a URL is not parsed — say so instead of dropping it silently
     const rest = text.replace(new RegExp(URL_RE.source, 'gi'), '').trim();
-    if (rest.length > 30) acks.push('_Ojo: en mensajes con link solo guardo el apartamento — si había algo más que anotar, envíalo aparte._');
-    if (acks.length) await tgSend(env, acks.join('\n\n'), msg.message_id);
+    if (rest.length > 30) acks.push({ text: '_Ojo: en mensajes con link solo guardo el apartamento — si había algo más que anotar, envíalo aparte._' });
+    for (const a of acks) await tgSend(env, a.text, msg.message_id, a.markup);
     return;
   }
 
@@ -800,28 +919,17 @@ async function handleUpdate(env: Env, update: any) {
         visitsSet.push((arow.location || arow.title || ('apto ' + arow.id)) + (vd ? (' → ' + dueLabel(vd, td) + hhmm(vd)) : ' (visita cancelada)') + mail);
       }
     } else if (op.action === 'rule_out' && op.apt_id != null) {
-      const arow = await get(env, "SELECT * FROM apartments WHERE id=? AND status='active'", op.apt_id);
-      if (arow) {
-        const reason = (op.reason && String(op.reason).trim()) ? String(op.reason).trim().slice(0, 120) : null;
-        const rnow = new Date().toISOString();
-        await run(env, "UPDATE apartments SET status='ruled_out', ruled_out_reason=?, ruled_out_at=?, updated_at=? WHERE id=?", reason, rnow, rnow, op.apt_id);
-        const mail = await visitMail(env, arow, null, arow.visit_date); // pending visit? tell the calendars it's off
-        ruledOut.push((arow.location || arow.title || ('apto ' + arow.id)) + (reason ? (' — ' + reason) : '') + mail);
-      }
+      const res = await ruleOutApt(env, Number(op.apt_id), op.reason);
+      if (res) ruledOut.push(aptName(res.row) + (res.reason ? (' — ' + res.reason) : '') + res.mail);
     } else if (op.action === 'reactivate' && op.apt_id != null) {
-      const arow = await get(env, "SELECT * FROM apartments WHERE id=? AND status='ruled_out'", op.apt_id);
-      if (arow) {
-        await run(env, "UPDATE apartments SET status='active', ruled_out_reason=NULL, ruled_out_at=NULL, updated_at=? WHERE id=?", new Date().toISOString(), op.apt_id);
-        const mail = await visitMail(env, arow, arow.visit_date, null); // pending visit comes back → re-invite
-        reactivated.push((arow.location || arow.title || ('apto ' + arow.id)) + mail);
-      }
+      const res = await reactivateApt(env, Number(op.apt_id));
+      if (res) reactivated.push(aptName(res.row) + res.mail);
     } else if (op.action === 'apt_note' && op.apt_id != null && op.note) {
       // any status — recording why a ruled-out apartment was rejected is legit; a miss must not be silent
       const arow = await get(env, "SELECT * FROM apartments WHERE id=?", op.apt_id);
       if (arow) {
-        // attributed line ("YYYY-MM-DD [Autor]: text") — first name of whoever sent the Telegram message
-        const note = td + ' [' + who.split(' ')[0] + ']: ' + String(op.note).trim().slice(0, 300);
-        await run(env, "UPDATE apartments SET notes=COALESCE(notes||char(10),'')||?, updated_at=? WHERE id=?", note, new Date().toISOString(), op.apt_id);
+        // attributed to the first name of whoever sent the Telegram message
+        await appendAptNote(env, Number(op.apt_id), who.split(' ')[0], String(op.note));
         noted.push(aptName(arow) + ' — ' + String(op.note).trim());
       } else notFound.push('apto #' + op.apt_id);
     }
@@ -987,7 +1095,7 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
   if (!id) return json({ ok: false, error: 'missing id' }, 400);
   const who = webUser(req);
   const via = ` — vía web${who ? ' · ' + who : ''}`;
-  const echo = (msg: string) => ctx.waitUntil(tgSend(env, msg).catch(() => {}));
+  const echo = (msg: string, markup?: unknown) => ctx.waitUntil(tgSend(env, msg, undefined, markup).catch(() => {}));
   if (b.action === 'set_visit') {
     const vd = (b.visit_date == null || b.visit_date === '') ? null : String(b.visit_date);
     const oldVd = (await get(env, 'SELECT visit_date FROM apartments WHERE id=?', id))?.visit_date || null;
@@ -1013,24 +1121,17 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
     return json({ ok: true });
   }
   if (b.action === 'rule_out') {
-    const reason = (b.reason && String(b.reason).trim()) ? String(b.reason).trim().slice(0, 120) : null;
-    const now = new Date().toISOString();
-    await run(env, "UPDATE apartments SET status='ruled_out', ruled_out_reason=?, ruled_out_at=?, updated_at=? WHERE id=?", reason, now, now, id);
-    const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
-    if (row) ctx.waitUntil((async () => {
-      const mail = await visitMail(env, row, null, row.visit_date); // pending visit? tell the calendars it's off
-      await tgSend(env, `🚫 *${aptName(row)}* descartado${reason ? ' — ' + reason : ''}${via}${mail}`);
-    })().catch(() => {}));
-    return json({ ok: true, row });
+    const res = await ruleOutApt(env, id, b.reason); // shared with Telegram ops + callback buttons
+    if (!res) return json({ ok: false, error: 'no encontrado' }, 404);
+    echo(`🚫 *${mdEscape(aptName(res.row))}* descartado${res.reason ? ' — ' + res.reason : ''}${via}${res.mail}`,
+      kb([[{ text: '↩️ Reactivar', callback_data: 're:' + id }]]));
+    return json({ ok: true, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
   }
   if (b.action === 'reactivate') {
-    await run(env, "UPDATE apartments SET status='active', ruled_out_reason=NULL, ruled_out_at=NULL, updated_at=? WHERE id=?", new Date().toISOString(), id);
-    const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
-    if (row) ctx.waitUntil((async () => {
-      const mail = await visitMail(env, row, row.visit_date, null); // pending visit comes back → re-invite
-      await tgSend(env, `↩️ *${aptName(row)}* de vuelta en la lista${via}${mail}`);
-    })().catch(() => {}));
-    return json({ ok: true, row });
+    const res = await reactivateApt(env, id);
+    if (!res) return json({ ok: false, error: 'no encontrado' }, 404);
+    echo(`↩️ *${mdEscape(aptName(res.row))}* de vuelta en la lista${via}${res.mail}`);
+    return json({ ok: true, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
   }
   if (b.action === 'rescrape') {
     const res = await rescrapeOne(env, id);
@@ -1072,9 +1173,7 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
   if (b.action === 'apt_note') {
     const note = (b.note && String(b.note).trim()) ? String(b.note).trim().slice(0, 300) : null;
     if (!note) return json({ ok: false, error: 'empty note' }, 400);
-    const author = webAuthor(req);
-    const stamped = today() + (author ? ' [' + author + ']' : '') + ': ' + note;
-    await run(env, "UPDATE apartments SET notes=COALESCE(notes||char(10),'')||?, updated_at=? WHERE id=?", stamped, new Date().toISOString(), id);
+    await appendAptNote(env, id, webAuthor(req), note);
     const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
     if (row) echo(`📝 Nota en *${aptName(row)}*: ${note}${via}`);
     return json({ ok: true, row });
