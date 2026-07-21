@@ -222,8 +222,16 @@
   .arow .aloc a{color:var(--accent);text-decoration:none;font-size:15px;}
   /* visit-photo thumb strip (photos taken by us, under the listing's own og:image) */
   .pstrip{display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;margin-bottom:10px;}
-  .pstrip a{flex:0 0 auto;}
+  .pstrip a{flex:0 0 auto;cursor:zoom-in;}
   .pstrip img{width:72px;height:72px;object-fit:cover;border-radius:8px;display:block;border:1px solid var(--border);}
+  /* full-screen photo lightbox — tapping a thumb opens the full-res photo here (z above the
+     other modals/sheets at 50, and well above the clamped Leaflet panes) */
+  .lb{display:none;position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:60;flex-direction:column;align-items:center;justify-content:center;padding:16px;cursor:zoom-out;}
+  .lb.show{display:flex;}
+  .lb img{max-width:100%;max-height:calc(100vh - 96px);object-fit:contain;border-radius:8px;cursor:default;}
+  .lb .lb-cap{color:#fff;font-size:13px;line-height:1.4;margin-top:12px;text-align:center;max-width:640px;}
+  .lb .lb-cap:empty{display:none;}
+  .lb .lb-close{position:absolute;top:calc(12px + env(safe-area-inset-top));right:16px;width:40px;height:40px;border-radius:999px;border:none;background:rgba(0,0,0,.55);color:#fff;font-size:20px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;}
   .pcount{display:block;font-size:10px;color:var(--muted);text-align:center;margin-top:2px;white-space:nowrap;}
   /* post-visit follow-up block */
   .fublock{display:flex;flex-direction:column;gap:8px;}
@@ -295,6 +303,11 @@
   <label>Motivo (opcional)<input id="r_reason" type="text" autocomplete="off"></label>
   <div class="mctrl"><button class="act" id="r_cancel">Cancelar</button><button class="act dgr" id="r_save">Descartar</button></div>
 </div></div>
+<div class="lb" id="photoLb" role="dialog" aria-modal="true" aria-label="Foto">
+  <button class="lb-close" id="lb_close" type="button" aria-label="Cerrar">✕</button>
+  <img id="lb_img" alt="">
+  <div class="lb-cap" id="lb_cap"></div>
+</div>
 <script>
 var DATA=null;
 function esc(s){s=(s==null?"":String(s));return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;");}
@@ -499,7 +512,10 @@ function card(r,best,isRent,withDeal){
   if(r.photos&&r.photos.length){
     h+="<div class=\"pstrip\">";
     for(var pj=0;pj<r.photos.length;pj++){var ph=r.photos[pj];
-      h+="<a href=\"/apt-photo/"+ph.id+"\" target=\"_blank\" rel=\"noopener\">";
+      // href points at the full-res photo (fallback for right-click / no-JS); a normal tap is
+      // intercepted by the delegated click handler, which opens it in the in-app lightbox
+      // instead of navigating to the raw image (which the PWA turns into a download).
+      h+="<a class=\"pview\" href=\"/apt-photo/"+ph.id+"\""+(ph.caption?" data-cap=\""+esc(ph.caption)+"\"":"")+">";
       h+="<img src=\"/apt-photo/"+ph.id+"?s=t\" loading=\"lazy\" alt=\"\""+(ph.caption?" title=\""+esc(ph.caption)+"\"":"")+" onerror=\"this.parentNode.remove()\"></a>";
     }
     h+="</div>";
@@ -795,6 +811,16 @@ function openRo(id){
   document.getElementById("r_reason").focus();
 }
 function closeRo(){RO_ID=null;document.getElementById("roModal").classList.remove("show");}
+// ---- photo lightbox: view a visit photo full-size in-app instead of downloading it ----
+function openPhoto(src,cap){
+  document.getElementById("lb_img").src=src;
+  document.getElementById("lb_cap").textContent=cap||"";
+  document.getElementById("photoLb").classList.add("show");
+}
+function closePhoto(){
+  document.getElementById("photoLb").classList.remove("show");
+  document.getElementById("lb_img").removeAttribute("src"); // stop the download + free the memory
+}
 function fmtVisit(s){try{
   var day=new Date(s.slice(0,10)+"T00:00:00Z").toLocaleDateString("es-CO",{timeZone:"UTC",weekday:"short",day:"numeric",month:"short"});
   var t=s.length>10?s.slice(11,16):""; // wall-clock as typed; no TZ math on the time
@@ -1185,6 +1211,10 @@ document.addEventListener("change",function(e){
 });
 document.addEventListener("click",function(e){
   var el=e.target;if(!el.classList)return;
+  // visit-photo thumb: open the full-res photo in the lightbox instead of letting the anchor
+  // navigate to the raw image (checked before the generic anchor handling below, which bails out)
+  var pv=el.closest?el.closest("a.pview"):null;
+  if(pv){e.preventDefault();openPhoto(pv.getAttribute("href"),pv.getAttribute("data-cap"));return;}
   // links inside editable cells (e.g. the 🗺 maps anchor) must navigate, not begin an edit.
   // Exception: in list mode an in-page #apt- link (hero/agenda) expands its row before scrolling.
   var an=el.closest?el.closest("a"):null;
@@ -1372,6 +1402,10 @@ document.getElementById("r_save").onclick=function(){
     closeRo();return load();
   }).catch(function(){toast("Error de red");}).then(function(){btn.disabled=false;});
 };
+// photo lightbox: close on the ✕, on any tap outside the image, or on Escape
+document.getElementById("lb_close").onclick=closePhoto;
+document.getElementById("photoLb").addEventListener("click",function(e){if(e.target.id!=="lb_img")closePhoto();});
+document.addEventListener("keydown",function(e){if(e.key==="Escape"&&document.getElementById("photoLb").classList.contains("show"))closePhoto();});
 load().catch(showRetry);
 // re-render only when crossing the mobile/desktop line, so a phone never gets the table
 var wasDesktop=isDesktop();
