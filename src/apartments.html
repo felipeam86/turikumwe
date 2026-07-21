@@ -246,6 +246,7 @@
   .mpop{font-size:12px;line-height:1.5;}
   .mpop .mname{font-weight:700;font-size:13px;margin-bottom:2px;}
   .mpop .mmeta{color:var(--muted);}
+  .mpop .mapprox{color:var(--muted);font-size:10px;font-style:italic;margin-top:2px;}
   .mpop .mlinks{margin-top:4px;}
   .mpop a{color:var(--accent);text-decoration:none;}
 </style></head><body>
@@ -1033,7 +1034,7 @@ function ruledSection(list){
   h+="</div></details>";return h;
 }
 // ---- map: a pin for every apartment (active + descartado) with a geocoded address ----
-// coords are geocoded and cached server-side (Nominatim); geo_address===address guards
+// coords are resolved from the Bogotá street grid and cached server-side; geo_address===address guards
 // against showing a stale pin while a freshly edited address is still being looked up
 var MAP=null,MAP_LAYER=null,MAP_KEY="";
 function mapRows(){
@@ -1052,7 +1053,9 @@ function mapPopup(r){
   if(r.area_m2!=null)bits.push(r.area_m2+" m²");
   var h="<div class=\"mpop\"><div class=\"mname\">"+esc(aptName(r))+(r.status==="ruled_out"?" · 🚫 descartado":"")+"</div>";
   if(bits.length)h+="<div class=\"mmeta\">"+esc(bits.join(" · "))+"</div>";
+  // pins sit on the street crossing the address names, so they are block-accurate, not door-accurate
   h+="<div class=\"mmeta\">📍 "+esc(r.address)+"</div>";
+  h+="<div class=\"mapprox\">Ubicación aproximada (al cruce de calles)</div>";
   h+="<div class=\"mlinks\"><a href=\"#apt-"+r.id+"\">Ver tarjeta</a> · <a href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\">Cómo llegar</a></div></div>";
   return h;
 }
@@ -1067,7 +1070,7 @@ function updateMap(){
     if(r.address&&!(r.geo_lat!=null&&r.geo_lng!=null&&r.geo_address===r.address))noGeo++;
   }
   sect.style.display="";
-  document.getElementById("mapcount").textContent=rows.length+(noGeo?" · "+noGeo+" con dirección aún sin ubicar":"");
+  document.getElementById("mapcount").textContent=rows.length+(noGeo?" · "+noGeo+" con dirección que no pude ubicar":"");
   if(!MAP){
     MAP=L.map("map",{scrollWheelZoom:false}); // wheel keeps scrolling the page; zoom via buttons/pinch
     L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",{

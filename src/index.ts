@@ -110,51 +110,104 @@ function mapsLink(addr: string): string {
   if (a && !/bogot[aá]/i.test(a)) a += ', Bogotá';
   return 'https://maps.google.com/?q=' + encodeURIComponent(a);
 }
-// ---- geocoding (Nominatim/OSM — keyless, results cached in the row) ----
+// ---- geocoding (OSM/Overpass — keyless, results cached in the row) ----
+// A Bogotá address names a CROSSING, not a point: "Carrera 18 No 82-24" is on Carrera 18 near
+// Calle 82. Free-text geocoders are useless here — street names repeat across the city, so
+// "Calle 77" happily resolves to Calle 77 Sur in Ciudad Bolívar, 15 km from the listing. Instead
+// we parse the grid ourselves and ask OSM where those two roads actually meet, which lands
+// within a block of the door. Pins are therefore block-accurate, not door-accurate.
+const BOGOTA_BBOX = { s: 4.55, w: -74.16, n: 4.82, e: -74.00 };
+// "82", "83a", "93 bis" → the way name OSM uses ("Calle 83A", "Calle 93 Bis")
+const gridNum = (n: string, bis?: string, letter?: string) =>
+  n + (bis ? ' Bis' : '') + (letter ? letter.toUpperCase() : '');
+const GRID_NUM = '(\\d{1,3})\\s*(bis)?\\s*([a-z])?';
+const GRID_VIA = '(calle|cll|cl|carrera|cra|kra|kr|car|avenida calle|av calle|ac|avenida carrera|av carrera|ak|diagonal|dg|transversal|tv)';
+// the two roads a Colombian address refers to, or null when it isn't in grid form
+function parseBogotaAddress(raw: string): { a: string; b: string } | null {
+  // building names ("Edificio Colpatria") and landmarks ("Al lado del Raddisson") ride along in
+  // real data; the anchored number pair is matched wherever it sits in the string
+  const s = String(raw || '').toLowerCase().replace(/[.,]/g, ' ').replace(/\s+/g, ' ').trim();
+  let m = s.match(new RegExp(GRID_VIA + '\\s*' + GRID_NUM + '\\s*(?:no|nro|n°|#|°)?\\s*' + GRID_NUM + '\\s*-\\s*\\d+'));
+  if (m) {
+    const via = m[1], first = gridNum(m[2], m[3], m[4]), second = gridNum(m[5], m[6], m[7]);
+    const isCalle = /^(calle|cll|cl|avenida calle|av calle|ac|diagonal|dg)$/.test(via);
+    return isCalle ? { a: 'Calle ' + first, b: 'Carrera ' + second }
+                   : { a: 'Carrera ' + first, b: 'Calle ' + second };
+  }
+  // bare "73 con 9" — by local convention the calle comes first
+  m = s.match(new RegExp('^' + GRID_NUM + '\\s*(?:con|x|y|&)\\s*' + GRID_NUM + '$'));
+  if (m) return { a: 'Calle ' + gridNum(m[1], m[2], m[3]), b: 'Carrera ' + gridNum(m[4], m[5], m[6]) };
+  return null;
+}
+// Overpass matches names with POSIX regex — no \s, so spaces stay literal. The same road is
+// tagged "Calle 92" / "Avenida Calle 92" / "Av. Calle 92", and "93 Bis" also appears as "93B".
+function osmNameRegex(v: string): string {
+  const flex = v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/ +Bis$/i, ' *(bis|b)').replace(/ +/g, ' *');
+  return '^(av\\.? *|avenida )?' + flex + '$';
+}
+// where the two roads meet. Asking for a shared node misses the many crossings OSM doesn't
+// node-connect, so we pull both geometries and take their closest pair of vertices.
+async function osmCrossing(p: { a: string; b: string }): Promise<{ lat: number; lng: number } | null> {
+  const bb = `${BOGOTA_BBOX.s},${BOGOTA_BBOX.w},${BOGOTA_BBOX.n},${BOGOTA_BBOX.e}`;
+  const data = `[out:json][timeout:25];
+way["highway"]["name"~"${osmNameRegex(p.a)}",i](${bb})->.a;
+way["highway"]["name"~"${osmNameRegex(p.b)}",i](${bb})->.b;
+.a out geom;
+.b out geom;`;
+  const r = await fetch('https://overpass-api.de/api/interpreter', {
+    method: 'POST',
+    signal: AbortSignal.timeout(30000),
+    // Overpass answers 406 without a User-Agent
+    headers: { 'user-agent': 'turikumwe.cc household worker (apartment hunt map)' },
+    body: new URLSearchParams({ data }),
+  });
+  if (!r.ok) throw new Error('overpass ' + r.status); // 429/504 are common — caller retries later
+  const j: any = await r.json();
+  const A: any[] = [], B: any[] = [];
+  const key = p.a.toLowerCase().replace(/\s+/g, '');
+  for (const w of j.elements || []) {
+    const nm = String(w.tags?.name || '').toLowerCase().replace(/\s+/g, '');
+    (nm.includes(key) ? A : B).push(...(w.geometry || []));
+  }
+  if (!A.length || !B.length) return null;
+  let best: { d: number; lat: number; lon: number } | null = null;
+  for (const x of A) for (const y of B) {
+    const d = (x.lat - y.lat) ** 2 + ((x.lon - y.lon) * 0.997) ** 2; // lon shrinks by cos(4.7°)≈1
+    if (!best || d < best.d) best = { d, lat: (x.lat + y.lat) / 2, lon: (x.lon + y.lon) / 2 };
+  }
+  // the roads must genuinely meet: >150 m apart means we matched two that never cross, and a
+  // confident-looking pin in the wrong place is worse than no pin at all
+  if (!best || Math.sqrt(best.d) * 111320 > 150) return null;
+  if (best.lat < BOGOTA_BBOX.s || best.lat > BOGOTA_BBOX.n || best.lon < BOGOTA_BBOX.w || best.lon > BOGOTA_BBOX.e) return null;
+  return { lat: best.lat, lng: best.lon };
+}
 // geo_address remembers the exact address string the coords came from, so an edited address
-// re-geocodes and an unchanged one never hits the API again. A lookup that finds nothing still
-// writes geo_address (with NULL coords) so the same bad address isn't retried on every page
-// load; transient failures (network, non-200) leave the row unmarked and retry next time.
-async function geocodeApt(env: Env, row: { id: number; address: string | null; location?: string | null }): Promise<void> {
+// re-geocodes and an unchanged one never hits the API again. An address we cannot place still
+// writes geo_address (with NULL coords) so it isn't retried on every page load; transient
+// failures (network, 429/504) leave the row unmarked and retry next time.
+async function geocodeApt(env: Env, row: { id: number; address: string | null }): Promise<void> {
   const addr = String(row.address || '').trim();
   if (!addr) return;
-  const anchor = (s: string) => (/bogot[aá]/i.test(s) ? s : s + ', Bogotá'); // same anchoring as mapsLink
-  // the neighborhood ("location") steers Nominatim to the right stretch of a long grid street
-  // (a bare "Calle 94" can match kilometres away); fall back to the address alone if the
-  // narrower query finds nothing
-  const loc = String(row.location || '').trim();
-  const queries = loc && !addr.toLowerCase().includes(loc.toLowerCase().split(',')[0])
-    ? [anchor(addr + ', ' + loc), anchor(addr)] : [anchor(addr)];
+  const parsed = parseBogotaAddress(addr);
   try {
-    for (let i = 0; i < queries.length; i++) {
-      if (i) await new Promise((res) => setTimeout(res, 1100)); // Nominatim asks for ~1 req/s
-      const r = await fetch('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=co&q=' + encodeURIComponent(queries[i]), {
-        signal: AbortSignal.timeout(6000),
-        headers: { 'user-agent': 'turikumwe.cc household worker (apartment hunt map)', accept: 'application/json' },
-      });
-      if (!r.ok) return; // transient — leave the row unmarked so a later load retries
-      const j: any = await r.json();
-      const hit = Array.isArray(j) ? j[0] : null;
-      const lat = hit ? Number(hit.lat) : NaN;
-      const lng = hit ? Number(hit.lon) : NaN;
-      if (isFinite(lat) && isFinite(lng)) {
-        await run(env, 'UPDATE apartments SET geo_lat=?, geo_lng=?, geo_address=? WHERE id=?', lat, lng, addr, row.id);
-        return;
-      }
+    const hit = parsed ? await osmCrossing(parsed) : null;
+    if (hit) {
+      await run(env, 'UPDATE apartments SET geo_lat=?, geo_lng=?, geo_address=? WHERE id=?', hit.lat, hit.lng, addr, row.id);
+      return;
     }
-    // nothing found — remember that (NULL coords) so the same address isn't retried forever
     await run(env, 'UPDATE apartments SET geo_lat=NULL, geo_lng=NULL, geo_address=? WHERE id=?', addr, row.id);
   } catch (e: any) {
-    console.log('geocode error:', String(e && e.message || e));
+    console.log('geocode error:', addr, String(e && e.message || e));
   }
 }
-// background sweep for rows whose address is new or changed (a handful per page load, spaced
-// out — Nominatim asks for ~1 req/s). Pins appear on the next data load.
+// background sweep for rows whose address is new or changed. Overpass is a donated shared
+// service and these queries are chunky, so keep the batch small and spaced; each address is
+// looked up once and cached forever, and pins appear on the next data load.
 async function geocodeBackfill(env: Env): Promise<void> {
   const rows = await all(env,
-    "SELECT id, address, location FROM apartments WHERE address IS NOT NULL AND address!='' AND (geo_address IS NULL OR geo_address!=address) LIMIT 3");
+    "SELECT id, address FROM apartments WHERE address IS NOT NULL AND address!='' AND (geo_address IS NULL OR geo_address!=address) LIMIT 2");
   for (let i = 0; i < rows.length; i++) {
-    if (i) await new Promise((res) => setTimeout(res, 1100));
+    if (i) await new Promise((res) => setTimeout(res, 2000));
     await geocodeApt(env, rows[i]);
   }
 }
@@ -1333,7 +1386,7 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
     await run(env, 'UPDATE apartments SET address=?, agent_name=?, agent_phone=?, tag=?, updated_at=? WHERE id=?',
       clean(b.address), clean(b.agent_name), clean(b.agent_phone), clean(b.tag), new Date().toISOString(), id);
     // a new/changed address gets geocoded right away, so the map pin appears on the reload
-    const grow = await get(env, 'SELECT id, address, location, geo_address FROM apartments WHERE id=?', id);
+    const grow = await get(env, 'SELECT id, address, geo_address FROM apartments WHERE id=?', id);
     if (grow?.address && grow.address !== grow.geo_address) await geocodeApt(env, grow);
     return json({ ok: true, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
   }
@@ -1366,7 +1419,7 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
     if (field === 'price') await run(env, 'UPDATE apartments SET prev_price=NULL, price_changed_at=NULL WHERE id=?', id);
     // same as set_fields: an address typed into the table cell gets its map pin right away
     if (field === 'address' && val) {
-      const grow = await get(env, 'SELECT id, address, location, geo_address FROM apartments WHERE id=?', id);
+      const grow = await get(env, 'SELECT id, address, geo_address FROM apartments WHERE id=?', id);
       if (grow?.address && grow.address !== grow.geo_address) await geocodeApt(env, grow);
     }
     return json({ ok: true, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });

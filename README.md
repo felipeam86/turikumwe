@@ -120,7 +120,7 @@ The cron (07:30 America/Bogota = `30 12 * * *` UTC) is already in `wrangler.toml
 | `GET /` | Access | Home screen: pick Household or Apartamentos |
 | `GET /dashboard.html` | Access | Household overview, tap ✓ to complete items |
 | `POST /items-action` | Access | `complete` an item (monthly items roll forward); echoes to the Telegram group |
-| `GET /apartments.html` | Access | Apartment comparison (mobile-first cards) + a map of every apartment with an address (pins geocoded via Nominatim/OSM, cached in D1 — no API keys) |
+| `GET /apartments.html` | Access | Apartment comparison (mobile-first cards) + a map of every apartment with an address (pins resolved from the Bogotá street grid via OSM/Overpass, cached in D1 — no API keys) |
 | `GET /apartments-data.json` | Access | Data for the apartments screen |
 | `GET /apt-photo/<id>` | Access | A visit photo, streamed from Telegram by its stored `file_id` (`?s=t` = mid-size thumb) |
 | `POST /apartments-action` | Access | `set_visit` / `rescrape` / `rule_out` / `reactivate` / `apt_note` / `set_fields` (address, agent, phone, tag); most echo to the Telegram group |
