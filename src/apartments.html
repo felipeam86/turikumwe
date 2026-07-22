@@ -121,6 +121,15 @@
   .rrow .grow{flex:1;}
   .rrow button.act{flex:0 0 auto;min-height:44px;}
   .rrow a.link{min-height:44px;padding:4px 10px;}
+  /* descartado, still visible: a thin center line crosses the item without hiding anything under
+     it (pointer-events:none so buttons/inputs underneath stay usable) — used on agenda entries
+     (vcard/hero/arow) for a ruled-out apartment's untouched visit, and on the Descartados rows */
+  .xout{position:relative;}
+  .xout::after{content:"";position:absolute;left:8px;right:8px;top:50%;border-top:2px solid var(--err);opacity:.5;pointer-events:none;}
+  /* named .disc, not .ro — .ro is the delegated click-handler class for the Descartar action
+     (matched directly on the click target, not via closest()), so a purely decorative badge must
+     not share that class name or a tap on the badge would try to open the discard sheet */
+  .flag.disc{color:var(--err);border-color:var(--err);}
   /* tag: same label => same color everywhere (hue derived from the text) */
   .tag{display:inline-block;font-size:11px;font-weight:700;color:#12151b;border-radius:999px;padding:1px 9px;margin-left:6px;vertical-align:middle;}
   .contact{color:var(--muted);font-size:12px;margin-top:10px;line-height:1.7;}
@@ -888,10 +897,12 @@ function visitCalendar(rows){
     var list=byDay[ds]||[];
     var clash=markOverlaps(list); // ids clashing on this day
     for(var v=0;v<list.length;v++){var r=list[v];
+      var ruled=r.status==="ruled_out";
       var t=r.visit_date.length>10?r.visit_date.slice(11,16):"";
-      h+="<div class=\"vcard\">";
+      h+="<div class=\"vcard"+(ruled?" xout":"")+"\">";
       if(t)h+="<div class=\"vtime\">"+esc(t)+"</div>";
       else h+="<div class=\"vtime tbd\">hora por definir</div>";
+      if(ruled)h+="<div class=\"vclash\"><span class=\"flag disc\">🚫 descartado</span></div>";
       if(clash[r.id])h+="<div class=\"vclash\"><span class=\"flag\">⚠️ choque de horario</span></div>";
       h+="<div class=\"vloc\">";
       if(r.url)h+="<a href=\""+esc(r.url)+"\" target=\"_blank\" rel=\"noopener\">"+esc(aptName(r))+"<span class=\"ext\">↗</span></a>";
@@ -902,12 +913,15 @@ function visitCalendar(rows){
       if(r.agent_name)m.push("👤 "+esc(r.agent_name));
       if(r.agent_phone)m.push("💬 <a href=\""+esc(waLink(r.agent_phone))+"\" target=\"_blank\" rel=\"noopener\">"+esc(r.agent_phone)+"</a>");
       if(m.length)h+="<div class=\"vmeta\">"+m.join("<br>")+"</div>";
-      // self-sufficient card: Invitar as-is, plus a compact Reagendar / Nota / Descartar row
-      h+="<div class=\"vctrls\"><button class=\"act sm iv\" data-id=\""+r.id+"\">📧 Invitar</button>";
+      // self-sufficient card: Invitar as-is, plus a compact Reagendar / Nota / Descartar row — a
+      // ruled-out apartment drops Invitar (the server only sends invites for status=active) and
+      // swaps Descartar for Reactivar; Reagendar stays so clearing the date remains a manual,
+      // one-tap action (discarding itself never touches visit_date, see ruleOutApt)
+      h+="<div class=\"vctrls\">"+(ruled?"":"<button class=\"act sm iv\" data-id=\""+r.id+"\">📧 Invitar</button>");
       h+="<div class=\"vact\">";
       h+="<button class=\"act sm rvd\" data-id=\""+r.id+"\" title=\"Reagendar\">📅</button>";
       h+="<button class=\"act sm nt\" data-id=\""+r.id+"\" title=\"Nota\">📝</button>";
-      h+="<button class=\"act sm danger ro\" data-id=\""+r.id+"\" title=\"Descartar\">🚫</button>";
+      h+=ruled?"<button class=\"act sm re\" data-id=\""+r.id+"\" title=\"Reactivar\">↩️</button>":"<button class=\"act sm danger ro\" data-id=\""+r.id+"\" title=\"Descartar\">🚫</button>";
       h+="</div></div>";
       h+="</div>";
     }
@@ -945,7 +959,8 @@ function heroLabel(r,now,todayStr){
   return parts.join(" · ");
 }
 function heroCard(r,now,todayStr,clash){
-  var h="<div class=\"hero\"><div class=\"hlabel\">"+esc(heroLabel(r,now,todayStr))+(clash?" <span class=\"flag\">⚠️ choque de horario</span>":"")+"</div>";
+  var ruled=r.status==="ruled_out";
+  var h="<div class=\"hero"+(ruled?" xout":"")+"\"><div class=\"hlabel\">"+esc(heroLabel(r,now,todayStr))+(ruled?" <span class=\"flag disc\">🚫 descartado</span>":"")+(clash?" <span class=\"flag\">⚠️ choque de horario</span>":"")+"</div>";
   h+="<div class=\"hname\"><a href=\"#apt-"+r.id+"\">"+esc(aptName(r))+"</a></div>";
   var m=[];
   if(r.address)m.push("📍 <a href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\">"+esc(r.address)+"</a>");
@@ -955,15 +970,16 @@ function heroCard(r,now,todayStr,clash){
   // Reagendar: a prefilled datetime-local with class vd — the delegated change handler saves it and the server re-sends the invite
   var v=r.visit_date?String(r.visit_date):"";if(v&&v.indexOf("T")<0)v+="T09:00";
   h+="<div class=\"hresch\"><span class=\"k\">📅 Reagendar</span><input type=\"datetime-local\" class=\"vd\" data-id=\""+r.id+"\" value=\""+esc(v)+"\"></div>";
-  h+="<div class=\"hact\"><button class=\"act nt\" data-id=\""+r.id+"\">📝 Nota</button><button class=\"act danger ro\" data-id=\""+r.id+"\">🚫 Descartar</button></div>";
+  h+="<div class=\"hact\"><button class=\"act nt\" data-id=\""+r.id+"\">📝 Nota</button>"+(ruled?"<button class=\"act re\" data-id=\""+r.id+"\">↩️ Reactivar</button>":"<button class=\"act danger ro\" data-id=\""+r.id+"\">🚫 Descartar</button>")+"</div>";
   return h+"</div>";
 }
 // weekday + day + month for a day header, matching the uppercase .gh style (e.g. "sáb 26 jul")
 function agendaDayHead(day){try{return parseDay(day).toLocaleDateString("es-CO",{timeZone:"UTC",weekday:"short",day:"numeric",month:"short"});}catch(e){return day;}}
 function agendaRow(r,clash){
+  var ruled=r.status==="ruled_out";
   var timed=r.visit_date.length>10,t=timed?r.visit_date.slice(11,16):"";
-  var h="<div class=\"arow\">"+(t?"<span class=\"atime\">"+esc(t)+"</span>":"<span class=\"atime tbd\">hora por definir</span>");
-  h+="<a class=\"aname\" href=\"#apt-"+r.id+"\">"+esc(aptName(r))+(clash&&clash[r.id]?" <span class=\"flag\">⚠️</span>":"")+"</a>";
+  var h="<div class=\"arow"+(ruled?" xout":"")+"\">"+(t?"<span class=\"atime\">"+esc(t)+"</span>":"<span class=\"atime tbd\">hora por definir</span>");
+  h+="<a class=\"aname\" href=\"#apt-"+r.id+"\">"+esc(aptName(r))+(ruled?" <span class=\"flag disc\">🚫</span>":"")+(clash&&clash[r.id]?" <span class=\"flag\">⚠️</span>":"")+"</a>";
   if(r.address)h+="<span class=\"aloc\"><a href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\" aria-label=\"Cómo llegar\">🗺</a></span>";
   return h+"</div>";
 }
@@ -1049,7 +1065,7 @@ function ruledSection(list){
     // verdicts survive the rule-out — context for "reconsiderar"
     var vv=r.votes||{},vb=[];
     for(var vk in vv)if(vv.hasOwnProperty(vk))vb.push(voterName(vk)+" "+(vv[vk]==="up"?"👍":"👎"));
-    h+="<div class=\"rrow\" id=\"apt-"+r.id+"\"><span class=\"rloc\">"+esc(aptName(r))+"</span>"+reason;
+    h+="<div class=\"rrow xout\" id=\"apt-"+r.id+"\"><span class=\"rloc\">"+esc(aptName(r))+"</span>"+reason;
     h+="<span class=\"rmeta\">"+esc(bits)+"</span>";
     if(vb.length)h+="<span class=\"rmeta\">"+esc(vb.join(" · "))+"</span>";
     h+="<span class=\"grow\"></span>";
@@ -1148,7 +1164,8 @@ function jumpToHash(){
 function render(){
   var rows=DATA.apartments||[];var ruled=DATA.ruledOut||[];
   // filters narrow the cards/table only — the agenda, follow-up block and Descartados always
-  // see every active row (a filter must never hide an upcoming visit)
+  // see every active row (a filter must never hide an upcoming visit); the agenda also always
+  // sees ruled-out rows with a visit_date, crossed out rather than hidden (see visRows below)
   var shown=applyFilters(rows);
   document.getElementById("fbar").innerHTML=buildFilterBar(rows);
   var parts=[filtersActive()?(shown.length+" de "+rows.length+" activos"):(rows.length+(rows.length===1?" activo":" activos"))];
@@ -1156,8 +1173,12 @@ function render(){
   // toLocaleDateString returns the string "Invalid Date" (never throws) on bad input, so guard explicitly
   var niceDay="";if(DATA.today){var nd=new Date(DATA.today+"T00:00:00Z");niceDay=isNaN(nd)?DATA.today:nd.toLocaleDateString("es-CO",{timeZone:"UTC",weekday:"long",day:"numeric",month:"long"});}
   document.getElementById("sub").textContent=parts.join(" · ")+" · "+niceDay;
-  // desktop keeps the weekly strip; phones get the "next visit" hero + day list
-  document.getElementById("visits").innerHTML=isDesktop()?visitCalendar(rows):agendaMobile(rows);
+  // desktop keeps the weekly strip; phones get the "next visit" hero + day list — both also see
+  // ruled-out apartments that still carry a visit_date (discarding never clears it, see
+  // ruleOutApt) so a pending visit stays on the agenda, crossed out via .xout/.flag.disc instead
+  // of vanishing
+  var visRows=rows.concat(ruled);
+  document.getElementById("visits").innerHTML=isDesktop()?visitCalendar(visRows):agendaMobile(visRows);
   if(isDesktop())snapCalendar();
   // post-visit follow-up sits between the agenda and the cards/table, in both views
   document.getElementById("followup").innerHTML=followupBlock(rows);
