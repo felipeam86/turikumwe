@@ -7,7 +7,9 @@ Lucía) in Bogotá. A Telegram group is the only input: plain messages become
 tracked household items (Claude parses them into ops), listing URLs become
 scraped + extracted apartments, crons post a morning digest / evening nudges /
 visit reminders, and two Cloudflare-Access-protected web screens
-(`/dashboard.html`, `/apartments.html`) mirror the data. Everything
+(`/dashboard.html`, `/apartments.html`) mirror the data. An MCP endpoint
+(`POST /mcp`, bearer token) lets Claude clients ask open-ended questions via
+read-only SQL; its only write is adding an apartment note. Everything
 user-facing is in **Spanish**.
 
 ## Status
@@ -16,7 +18,9 @@ Live: Worker `household` at https://turikumwe.cc (custom domain — Access can't
 cover `*.workers.dev`), remote D1 `household` migrated, secrets set
 (`BOT_TOKEN`, `TG_WEBHOOK_SECRET`, `ANTHROPIC_API_KEY`), Telegram webhook
 registered, Access apps configured (webhook bypass + OTP-gated web UI),
-Email Routing on the zone for calendar invites.
+Email Routing on the zone for calendar invites. The MCP endpoint needs a
+one-time setup before its first deploy: `wrangler secret put MCP_TOKEN` and
+an Access Bypass application on the `mcp` path (README §5–6).
 
 There are no tests: verification = `npx tsc --noEmit` + reading the diff;
 real verification happens in the Telegram group after `npm run deploy`.

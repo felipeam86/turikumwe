@@ -8,6 +8,7 @@ export interface Env {
   DB: D1Database;
   BOT_TOKEN: string;
   TG_WEBHOOK_SECRET: string;
+  MCP_TOKEN: string;
   ANTHROPIC_API_KEY: string;
   GROUP_CHAT_ID: string;
   INVITE_MAIL: SendEmail;
@@ -1468,6 +1469,130 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
   return json({ ok: false, error: 'unknown action' }, 400);
 }
 
+// ---- MCP server (/mcp) ----
+// Model Context Protocol over streamable HTTP, hand-rolled like every other integration here:
+// plain JSON-RPC on POST /mcp, one JSON response per request — stateless, so no SSE stream, no
+// session ids, no SDK. Auth is a bearer-token secret (MCP_TOKEN), the webhook-secret pattern;
+// /mcp needs its own Access Bypass application (README §5), like /telegram-webhook.
+
+// newest first: initialize echoes the client's requested version when we know it
+const MCP_PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
+
+// everything a model needs beyond CREATE TABLE to write correct queries against this data
+const MCP_DB_CONVENTIONS = `Conventions:
+- items.status: 'open' | 'done' | 'deleted' — almost every question is about status='open' (delete is a status flip, so always filter). category: bills|events|groceries|health|pediatrician|general. recurrence='monthly' (+recur_day) means completing rolls due_date forward instead of closing.
+- apartments.status: 'active' | 'ruled_out' (ruled_out_reason / ruled_out_at say why and when). scrape_status is 'ok' or the block reason. prev_price/price_changed_at hold one prior price seen by a rescrape.
+- All time columns are TEXT and string-comparable. created_at/updated_at are UTC ISO; due_date and visit_date are Bogota wall-clock ('YYYY-MM-DD' or 'YYYY-MM-DDTHH:MM').
+- apartments.notes is a newline-joined log of stamped lines: 'YYYY-MM-DD [Autor]: text'.
+- apartment_votes: one row per person per apartment; voter is canonical 'felipe' | 'lucia', vote is 'up' | 'down'; no row = no verdict yet.
+- Effective $/m² for deal_type='rent' is (price + COALESCE(admin_fee,0)) / area_m2; for 'buy' use the stored price_per_m2. Prices are COP.
+- User-facing text (notes, reasons) is Spanish.`;
+
+const MCP_TOOLS = [
+  {
+    name: 'query',
+    description: 'Run one read-only SQL statement (SQLite) against the household database (items, apartments, apartment_votes, apartment_photos). SELECT/WITH only. Call get_schema first if you have not seen the schema in this conversation.',
+    inputSchema: {
+      type: 'object',
+      properties: { sql: { type: 'string', description: 'A single SELECT (or WITH … SELECT) statement, SQLite dialect' } },
+      required: ['sql'],
+    },
+  },
+  {
+    name: 'get_schema',
+    description: 'Return the live database schema (CREATE TABLE statements) plus the data conventions needed to query it correctly (status values, date formats, notes format, $/m² math).',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'add_apartment_note',
+    description: 'Append a stamped note to an apartment — the same notes log Telegram and the web UI use — and announce it in the Telegram group. The only write this server allows.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        apartment_id: { type: 'integer', description: 'The apartments.id to annotate' },
+        note: { type: 'string', description: 'Note text (Spanish preferred), max 300 chars' },
+        author: { type: 'string', enum: ['felipe', 'lucia'], description: "Whose note this is; defaults to 'felipe'" },
+      },
+      required: ['apartment_id', 'note'],
+    },
+  },
+];
+
+// single read-only statement or null. A bare SELECT can't reach DML in SQLite, but WITH can
+// prefix INSERT/UPDATE/DELETE, so CTE statements get a keyword check on top.
+function readOnlySql(raw: unknown): string | null {
+  const sql = String(raw ?? '').trim().replace(/;\s*$/, '');
+  if (!sql || sql.includes(';')) return null;
+  if (/^select\b/i.test(sql)) return sql;
+  if (/^with\b/i.test(sql) && !/\b(insert|update|delete|replace)\b/i.test(sql)) return sql;
+  return null;
+}
+
+const mcpText = (text: string, isError = false) => (isError ? { content: [{ type: 'text', text }], isError: true } : { content: [{ type: 'text', text }] });
+
+async function mcpToolCall(env: Env, ctx: ExecutionContext, params: any): Promise<unknown> {
+  const args: any = params?.arguments || {};
+  switch (params?.name) {
+    case 'query': {
+      const sql = readOnlySql(args.sql);
+      if (!sql) return mcpText('rejected: a single SELECT/WITH statement is required (no writes, no multiple statements)', true);
+      try {
+        const rows = (await env.DB.prepare(sql).all()).results as any[];
+        const shown = rows.slice(0, 300);
+        const head = rows.length + ' row' + (rows.length === 1 ? '' : 's') + (rows.length > shown.length ? ' (showing first ' + shown.length + ')' : '');
+        return mcpText([head, ...shown.map((r) => JSON.stringify(r))].join('\n'));
+      } catch (e: any) {
+        return mcpText('SQL error: ' + String(e && e.message || e), true);
+      }
+    }
+    case 'get_schema': {
+      const tables = await all(env, "SELECT sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND sql IS NOT NULL");
+      return mcpText(tables.map((t) => t.sql + ';').join('\n\n') + '\n\n' + MCP_DB_CONVENTIONS);
+    }
+    case 'add_apartment_note': {
+      const id = Number(args.apartment_id);
+      const note = String(args.note || '').trim().slice(0, 300);
+      if (!id || !note) return mcpText('rejected: apartment_id and a non-empty note are required', true);
+      const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
+      if (!row) return mcpText('apartment #' + id + ' not found', true);
+      const author = voterName(canonVoter(String(args.author || 'felipe')));
+      await appendAptNote(env, id, author, note);
+      ctx.waitUntil(tgSend(env, `📝 Nota en *${mdEscape(aptName(row))}*: ${mdEscape(note)} — vía MCP · ${author}`).catch(() => {}));
+      return mcpText(`Nota añadida a "${aptName(row)}" #${id}: ${today()} [${author}]: ${note}`);
+    }
+    default:
+      return mcpText('unknown tool: ' + String(params?.name), true);
+  }
+}
+
+async function mcpResponse(env: Env, req: Request, ctx: ExecutionContext): Promise<Response> {
+  if ((req.headers.get('authorization') || '') !== 'Bearer ' + env.MCP_TOKEN || !env.MCP_TOKEN) {
+    return new Response('unauthorized', { status: 401, headers: { 'www-authenticate': 'Bearer' } });
+  }
+  // stateless server: nothing to stream on GET, nothing to end on DELETE
+  if (req.method !== 'POST') return new Response('method not allowed', { status: 405, headers: { allow: 'POST' } });
+  const msg: any = await req.json().catch(() => null);
+  if (!msg || Array.isArray(msg) || typeof msg.method !== 'string') {
+    return json({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'expected a single JSON-RPC message' } }, 400);
+  }
+  if (msg.id === undefined || msg.id === null) return new Response(null, { status: 202 }); // notifications get no body
+  const reply = (result: unknown) => json({ jsonrpc: '2.0', id: msg.id, result });
+  switch (msg.method) {
+    case 'initialize': {
+      const want = String(msg.params?.protocolVersion || '');
+      return reply({
+        protocolVersion: MCP_PROTOCOL_VERSIONS.includes(want) ? want : MCP_PROTOCOL_VERSIONS[0],
+        capabilities: { tools: {} },
+        serverInfo: { name: 'turikumwe', version: '1.0.0' },
+      });
+    }
+    case 'ping': return reply({});
+    case 'tools/list': return reply({ tools: MCP_TOOLS });
+    case 'tools/call': return reply(await mcpToolCall(env, ctx, msg.params));
+    default: return json({ jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: 'method not found: ' + msg.method } });
+  }
+}
+
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(req.url);
@@ -1482,6 +1607,8 @@ export default {
       if (update) ctx.waitUntil(handleUpdate(env, update).catch((e) => console.log('webhook error:', String(e && e.message || e))));
       return new Response('ok');
     }
+
+    if (path === '/mcp') return mcpResponse(env, req, ctx);
 
     if (req.method === 'GET' && path === '/') return homePage(env);
     if (req.method === 'GET' && path === '/dashboard.html') return dashboardPage(env);
