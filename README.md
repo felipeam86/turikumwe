@@ -41,6 +41,7 @@ In `wrangler.toml`, set `GROUP_CHAT_ID` to the Telegram group's chat id
 npx wrangler secret put BOT_TOKEN          # from @BotFather
 npx wrangler secret put TG_WEBHOOK_SECRET  # any random string, e.g. `openssl rand -hex 32`
 npx wrangler secret put ANTHROPIC_API_KEY
+npx wrangler secret put MCP_TOKEN          # any random string — bearer token for /mcp
 ```
 
 For calendar invites, enable Email Routing on the zone and verify both
@@ -72,21 +73,44 @@ the Worker rejects anything else. Note: with BotFather privacy mode on
 
 ### 5. Cloudflare Access
 
-In Zero Trust → Access → Applications, create two self-hosted applications on
-the custom domain:
+In Zero Trust → Access → Applications, create three self-hosted applications
+on the custom domain:
 
 1. **Webhook bypass** — application domain `casa.example.com`, path
    `telegram-webhook`; one policy with action **Bypass**, include
    **Everyone**. (The webhook is protected only by the secret token.)
-2. **Web UI** — application domain `casa.example.com` (all paths); one policy
+2. **MCP bypass** — application domain `casa.example.com`, path `mcp`; one
+   policy with action **Bypass**, include **Everyone**. (The endpoint is
+   protected only by the `MCP_TOKEN` bearer token.)
+3. **Web UI** — application domain `casa.example.com` (all paths); one policy
    with action **Allow**, include **Emails** = your two email addresses;
    login method **One-time PIN**.
 
-Access matches the most specific application first, so the webhook stays open
-while everything else requires the PIN login.
+Access matches the most specific application first, so the webhook and MCP
+paths stay open while everything else requires the PIN login.
 
 The crons are already in `wrangler.toml` and activate on deploy — nothing to
 configure.
+
+### 6. Connect an MCP client (optional)
+
+The Worker exposes an MCP server at `https://casa.example.com/mcp`
+(read-only SQL `query`, `get_schema`, and `add_apartment_note`),
+authenticated with the `MCP_TOKEN` bearer token.
+
+- **Claude Code**:
+
+  ```sh
+  claude mcp add --transport http turikumwe https://casa.example.com/mcp \
+    --header "Authorization: Bearer $MCP_TOKEN"
+  ```
+
+- **Claude API (MCP connector)**: pass the server under `mcp_servers` with
+  `authorization_token` set to the token.
+- **claude.ai / Claude Desktop custom connectors**: add the URL and put
+  `Bearer <token>` in the `Authorization` request header field (request-header
+  auth for custom connectors is in beta rollout; until it's enabled on the
+  account, use Claude Code or the API connector).
 
 ## Install on Android
 

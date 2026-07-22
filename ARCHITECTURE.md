@@ -17,6 +17,7 @@ Access-protected web screens mirror the data. All user-facing text is Spanish.
 ```
 Telegram group ──POST /telegram-webhook (secret header)──┐
 Web UI (Cloudflare Access, OTP) ──GET/POST routes────────┤
+MCP clients ──POST /mcp (bearer token)───────────────────┤
 Crons (3 schedules) ──scheduled()────────────────────────┤
                                                          ▼
                        Worker «household» — src/index.ts (ALL logic)
@@ -103,13 +104,15 @@ treat as `$&`-style patterns.
 
 ## 4. Route table (src/index.ts `fetch`)
 
-Cloudflare Access fronts every route except the webhook (a Bypass application
-scoped to the `telegram-webhook` path; the web UI application is
-OTP-gated to the two emails). The Worker itself only authenticates the webhook.
+Cloudflare Access fronts every route except the webhook and `/mcp` (each has
+its own Bypass application scoped to its path; the web UI application is
+OTP-gated to the two emails). The Worker itself authenticates only the
+webhook (secret header) and `/mcp` (bearer token).
 
 | Route | Auth | What |
 |---|---|---|
 | `POST /telegram-webhook` | secret token header | Telegram updates → `handleUpdate` in `waitUntil` (ack first) |
+| `POST /mcp` | `Authorization: Bearer` = `MCP_TOKEN` | MCP server (JSON-RPC over streamable HTTP): `query` (read-only SQL), `get_schema`, `add_apartment_note` |
 | `GET /` | Access | Home screen with live counts |
 | `GET /dashboard.html` | Access | Household items by category, ✓ to complete |
 | `POST /items-action` | Access | `complete` (monthly items roll forward); echoes to Telegram except groceries |
@@ -118,6 +121,29 @@ OTP-gated to the two emails). The Worker itself only authenticates the webhook.
 | `GET /apt-photo/<id>` | Access | Streams a visit photo from Telegram by stored `file_id` (`?s=t` = thumb) |
 | `POST /apartments-action` | Access | `set_visit` / `invite` / `rule_out` / `reactivate` / `rescrape` / `set_fields` / `edit` (allowlisted single field) / `vote` / `apt_note` / `apt_note_del`; most echo to Telegram |
 | `GET /manifest.json`, `GET /icon.png` | Access | PWA manifest + icon — icons are **data URIs** because Chrome fetches manifest icons without the Access cookie |
+
+### MCP endpoint
+
+`/mcp` is a hand-rolled, stateless MCP server (no SDK, no Durable Objects, no
+SSE — every request gets one JSON response; GET returns 405). It implements
+`initialize`, `ping`, `tools/list`, and `tools/call`; notifications are acked
+with an empty 202. Three tools:
+
+- **`query`** — one read-only SQL statement against D1. The guard
+  (`readOnlySql`) allows a single `SELECT`/`WITH` statement only; because
+  SQLite lets `WITH` prefix DML, CTE statements are additionally rejected if
+  they contain INSERT/UPDATE/DELETE/REPLACE keywords. Results cap at 300 rows;
+  SQL errors come back as tool errors, not protocol errors (failures visible).
+- **`get_schema`** — live `sqlite_master` CREATE TABLEs plus the conventions
+  blurb (`MCP_DB_CONVENTIONS`: status values, wall-clock formats, notes line
+  format, $/m² math). Keep that blurb in sync when conventions change.
+- **`add_apartment_note`** — the only write. Goes through `appendAptNote`
+  (the shared mutation, per invariant 2) and echoes to the group "— vía MCP".
+
+Any other write stays deliberately unavailable through MCP until decided
+otherwise. Auth is a constant bearer-token check against the `MCP_TOKEN`
+secret; token holders are household members, so the SQL guard protects
+against accidents, not adversaries.
 
 ### Telegram update handling (in order)
 
