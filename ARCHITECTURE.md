@@ -37,13 +37,16 @@ wrangler + typescript only. HTML screens are static files imported as text.
    `ctx.waitUntil` and returns `ok` immediately — otherwise Telegram retries
    and duplicates every message. Messages from any chat other than
    `GROUP_CHAT_ID` are dropped.
-2. **One implementation per mutation.** Rule-out, reactivate, notes, votes,
-   and the invite/cancel mail decision (`ruleOutApt`, `reactivateApt`,
-   `appendAptNote`, `upsertVote`, `visitMail`) are shared by all three entry
-   points: Claude-parsed ops, inline-button callbacks, and web actions.
-   Concurrency/idempotency lives there too — a status predicate on the
-   `UPDATE` plus a `meta.changes` check means only the tap that actually
-   flips the row announces and mails; stale taps answer "ya estaba hecho".
+2. **One implementation per mutation.** Rule-out, reactivate, notes, and
+   votes (`ruleOutApt`, `reactivateApt`, `appendAptNote`, `upsertVote`) are
+   shared by all three entry points: Claude-parsed ops, inline-button
+   callbacks, and web actions. Concurrency/idempotency lives there too — a
+   status predicate on the `UPDATE` plus a `meta.changes` check means only
+   the tap that actually flips the row announces; stale taps answer "ya
+   estaba hecho". The invite/cancel mail decision (`visitMail`) is separate
+   and fires only on an explicit `visit_date` change — rule-out and
+   reactivate deliberately never call it, so discarding an apartment never
+   touches its calendar invite; only a person editing the visit date does.
 3. **Telegram Markdown is legacy mode and hostile.** Free text (addresses,
    names, scraped titles/URLs) is interpolated only through `mdEscape`;
    links through `mdLink`; raw URLs never go bare in text. `tgSend` retries
@@ -208,11 +211,16 @@ logs and does nothing (never guess — a wrong guess spams the group).
 
 Setting/clearing a future `visit_date` (from any entry point) emails an
 iCalendar REQUEST/CANCEL to both people via the `send_email` binding
-(recipients must be verified in the zone's Email Routing settings). Stable
-`UID:visit-<id>@turikumwe.cc` + epoch-seconds `SEQUENCE` makes reschedules
-replace rather than duplicate. RFC 5545 line folding is UTF-8-safe; headers
-use RFC 2047 for accents. `visitMail` never throws — mail failure becomes a
-⚠️ suffix on the ack, not a broken visit update.
+(recipients must be verified in the zone's Email Routing settings). **Ruling
+out or reactivating an apartment never sends this mail** — a discarded
+apartment keeps its `visit_date` and calendar invite exactly as they were;
+only a person explicitly changing the visit date cancels or moves it (the
+web `set_visit` action works on a `ruled_out` row too, on purpose — it's the
+manual override). Stable `UID:visit-<id>@turikumwe.cc` + epoch-seconds
+`SEQUENCE` makes reschedules replace rather than duplicate. RFC 5545 line
+folding is UTF-8-safe; headers use RFC 2047 for accents. `visitMail` never
+throws — mail failure becomes a ⚠️ suffix on the ack, not a broken visit
+update.
 
 ## 9. Build, run, deploy
 

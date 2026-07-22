@@ -603,28 +603,29 @@ async function retryBlockedScrapes(env: Env): Promise<{ updated: any[], still: a
 const aptLink = (id: number | string) => 'https://turikumwe.cc/apartments.html#apt-' + id;
 
 // ---- shared apartment mutations ----
-// One implementation for the Telegram ops loop, the web actions, and callback buttons — including
-// the calendar-invite side effects. Both return null when the row isn't in the required status,
-// which doubles as the idempotency check for stale button taps.
-async function ruleOutApt(env: Env, id: number, rawReason: unknown): Promise<{ row: any; reason: string | null; mail: string } | null> {
+// One implementation for the Telegram ops loop, the web actions, and callback buttons. Both
+// return null when the row isn't in the required status, which doubles as the idempotency check
+// for stale button taps. Neither touches visit_date or calls visitMail — discarding (or
+// un-discarding) an apartment must never silently cancel or resend its calendar invite; only a
+// person explicitly editing the visit date does that (the set_visit handlers), regardless of
+// whether the row is active or ruled_out.
+async function ruleOutApt(env: Env, id: number, rawReason: unknown): Promise<{ row: any; reason: string | null } | null> {
   const row = await get(env, "SELECT * FROM apartments WHERE id=? AND status='active'", id);
   if (!row) return null;
   const reason = (rawReason && String(rawReason).trim()) ? String(rawReason).trim().slice(0, 120) : null;
   const now = new Date().toISOString();
   // status predicate + changes check: two concurrent taps can both pass the SELECT, but only the
-  // invocation whose UPDATE actually flips the row gets to send mail and announce
+  // invocation whose UPDATE actually flips the row gets to announce
   const res = await run(env, "UPDATE apartments SET status='ruled_out', ruled_out_reason=?, ruled_out_at=?, updated_at=? WHERE id=? AND status='active'", reason, now, now, id);
   if (!res.meta.changes) return null;
-  const mail = await visitMail(env, row, null, row.visit_date); // pending visit? tell the calendars it's off
-  return { row, reason, mail };
+  return { row, reason };
 }
-async function reactivateApt(env: Env, id: number): Promise<{ row: any; mail: string } | null> {
+async function reactivateApt(env: Env, id: number): Promise<{ row: any } | null> {
   const row = await get(env, "SELECT * FROM apartments WHERE id=? AND status='ruled_out'", id);
   if (!row) return null;
   const res = await run(env, "UPDATE apartments SET status='active', ruled_out_reason=NULL, ruled_out_at=NULL, updated_at=? WHERE id=? AND status='ruled_out'", new Date().toISOString(), id);
   if (!res.meta.changes) return null;
-  const mail = await visitMail(env, row, row.visit_date, null); // pending visit comes back → re-invite
-  return { row, mail };
+  return { row };
 }
 // append one attributed, stamped note line ("YYYY-MM-DD [Autor]: text") — the format every reader parses
 async function appendAptNote(env: Env, id: number, author: string, note: string) {
@@ -850,7 +851,7 @@ async function handleCallback(env: Env, cq: any) {
     const res = await ruleOutApt(env, id, null);
     if (!res) { await tgAnswerCallback(env, cq.id, 'Ya estaba hecho 👍'); return; }
     await tgAnswerCallback(env, cq.id, 'Descartado 🚫');
-    await tgSend(env, `🚫 *${mdEscape(aptName(row))}* #${id} descartado — ${who}, vía botón${res.mail}`,
+    await tgSend(env, `🚫 *${mdEscape(aptName(row))}* #${id} descartado — ${who}, vía botón`,
       undefined, kb([[{ text: '↩️ Reactivar', callback_data: 're:' + id }]]));
     return;
   }
@@ -858,7 +859,7 @@ async function handleCallback(env: Env, cq: any) {
     const res = await reactivateApt(env, id);
     if (!res) { await tgAnswerCallback(env, cq.id, 'Ya estaba hecho 👍'); return; }
     await tgAnswerCallback(env, cq.id, 'De vuelta ↩️');
-    await tgSend(env, `↩️ *${mdEscape(aptName(row))}* #${id} de vuelta en la lista — ${who}, vía botón${res.mail}`);
+    await tgSend(env, `↩️ *${mdEscape(aptName(row))}* #${id} de vuelta en la lista — ${who}, vía botón`);
     return;
   }
   if (verb === 'rs') {
@@ -1107,10 +1108,10 @@ async function handleUpdate(env: Env, update: any) {
       }
     } else if (op.action === 'rule_out' && op.apt_id != null) {
       const res = await ruleOutApt(env, Number(op.apt_id), op.reason);
-      if (res) ruledOut.push(aptName(res.row) + (res.reason ? (' — ' + res.reason) : '') + res.mail);
+      if (res) ruledOut.push(aptName(res.row) + (res.reason ? (' — ' + res.reason) : ''));
     } else if (op.action === 'reactivate' && op.apt_id != null) {
       const res = await reactivateApt(env, Number(op.apt_id));
-      if (res) reactivated.push(aptName(res.row) + res.mail);
+      if (res) reactivated.push(aptName(res.row));
     } else if (op.action === 'apt_vote' && op.apt_id != null && (op.vote === 'up' || op.vote === 'down')) {
       // any status — a verdict on a ruled-out apartment is context for reconsidering it
       const arow = await get(env, 'SELECT * FROM apartments WHERE id=?', op.apt_id);
@@ -1359,14 +1360,14 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
   if (b.action === 'rule_out') {
     const res = await ruleOutApt(env, id, b.reason); // shared with Telegram ops + callback buttons
     if (!res) return json({ ok: false, error: 'no encontrado' }, 404);
-    echo(`🚫 *${mdEscape(aptName(res.row))}* descartado${res.reason ? ' — ' + res.reason : ''}${via}${res.mail}`,
+    echo(`🚫 *${mdEscape(aptName(res.row))}* descartado${res.reason ? ' — ' + res.reason : ''}${via}`,
       kb([[{ text: '↩️ Reactivar', callback_data: 're:' + id }]]));
     return json({ ok: true, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
   }
   if (b.action === 'reactivate') {
     const res = await reactivateApt(env, id);
     if (!res) return json({ ok: false, error: 'no encontrado' }, 404);
-    echo(`↩️ *${mdEscape(aptName(res.row))}* de vuelta en la lista${via}${res.mail}`);
+    echo(`↩️ *${mdEscape(aptName(res.row))}* de vuelta en la lista${via}`);
     return json({ ok: true, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
   }
   if (b.action === 'rescrape') {
