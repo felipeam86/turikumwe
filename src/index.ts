@@ -81,6 +81,9 @@ const byDue = (a: any, b: any) => {
 const stripWarn = (s: string) => s.replace(/^⚠️ /, '');
 // human name for an apartment row, with source_site as a last resort before the numeric id
 const aptName = (r: any) => r.location || r.title || r.source_site || ('apto ' + r.id);
+// canonical reference: name + row id — two listings in the same neighborhood are only
+// distinguishable by the #id, so every message that names an apartment uses this
+const aptRef = (r: any) => aptName(r) + ' #' + r.id;
 // ---- per-person verdicts ----
 // canonical voter id from any identity we see: Access email local-parts ('felipeam86',
 // 'lucia.p.villar') and Telegram first names ('Felipe', 'Lucía') all map to the same person.
@@ -682,15 +685,23 @@ async function buildAptSummary(env: Env): Promise<string> {
   const visits = active.filter((r: any) => r.visit_date && String(r.visit_date).slice(0, 10) >= td)
     .sort((a: any, b: any) => String(a.visit_date) < String(b.visit_date) ? -1 : 1).slice(0, 5);
   if (visits.length) {
-    out.push('📅 *Próximas visitas:*\n' + visits.map((v: any) =>
-      `• ${aptName(v)} #${v.id} — ${wdShort(v.visit_date)} ${fmtDate(v.visit_date)}${hhmm(v.visit_date)}`).join('\n'));
+    out.push('📅 *Próximas visitas:*\n' + visits.map((v: any) => {
+      let pr = money(v.price);
+      if (v.deal_type === 'rent' && pr) pr += '/mes';
+      const bits = [pr, v.area_m2 ? v.area_m2 + ' m²' : ''].filter(Boolean).join(' · ');
+      let s = `• ${aptRef(v)} — ${wdShort(v.visit_date)} ${fmtDate(v.visit_date)}${hhmm(v.visit_date)}${bits ? ' · ' + bits : ''}`;
+      const contact = [v.address ? `📍 ${mdLink(v.address, mapsLink(v.address))}` : '', v.agent_name ? `👤 ${mdEscape(v.agent_name)}` : ''].filter(Boolean).join(' · ');
+      if (contact) s += '\n   ' + contact;
+      return s;
+    }).join('\n'));
   }
   const toSchedule = active.filter((r: any) => !r.visit_date);
   if (toSchedule.length) {
     const shown = toSchedule.slice(0, 8).map((r: any) => {
       let pr = money(r.price);
       if (r.deal_type === 'rent' && pr) pr += '/mes';
-      return `• ${aptName(r)} #${r.id}${pr ? ' — ' + pr : ''}`;
+      const bits = [pr, r.area_m2 ? r.area_m2 + ' m²' : ''].filter(Boolean).join(' · ');
+      return `• ${aptRef(r)}${bits ? ' — ' + bits : ''}`;
     });
     if (toSchedule.length > 8) shown.push(`… y ${toSchedule.length - 8} más`);
     out.push('⏳ *Por agendar visita:*\n' + shown.join('\n'));
@@ -705,14 +716,14 @@ async function buildAptSummary(env: Env): Promise<string> {
       // rent shows the all-in monthly (price+admin) so the price matches the ranked $/m²
       const total = dt === 'rent' ? Number(r.price) + Number(r.admin_fee || 0) : r.price;
       const bits = [money(ppm) + '/m²', money(total) + (dt === 'rent' ? '/mes' : ''), r.area_m2 ? r.area_m2 + ' m²' : ''].filter(Boolean).join(' · ');
-      return `• ${aptName(r)} #${r.id} — ${bits}`;
+      return `• ${aptRef(r)} — ${bits}`;
     }).join('\n'));
   }
   const notes: { d: string; line: string }[] = [];
   for (const r of rows) {
     for (const ln of String(r.notes || '').split('\n')) {
       const m = ln.match(NOTE_LINE_RE);
-      if (m) notes.push({ d: m[1], line: `• ${aptName(r)}${m[2] ? ' (' + m[2] + ')' : ''}: ${m[3]}` });
+      if (m) notes.push({ d: m[1], line: `• ${aptRef(r)}${m[2] ? ' (' + m[2] + ')' : ''}: ${m[3]}` });
     }
   }
   if (notes.length) {
@@ -747,10 +758,13 @@ async function buildDigestBody(env: Env, td: string, header: string): Promise<st
     out.push(`${CAT_EMOJI[cat]} *${CAT_LABEL[cat]}:*\n` + rows.join('\n'));
   }
   // upcoming apartment visits live in the apartments table, not items
-  const visits = await all(env, "SELECT location, title, source_site, id, visit_date, address, agent_name, agent_phone FROM apartments WHERE status='active' AND visit_date>=? ORDER BY visit_date", td);
+  const visits = await all(env, "SELECT location, title, source_site, id, visit_date, address, agent_name, agent_phone, price, area_m2, deal_type FROM apartments WHERE status='active' AND visit_date>=? ORDER BY visit_date", td);
   if (visits.length) {
     out.push('🏢 *Visitas de apartamentos:*\n' + visits.map((v: any) => {
-      let s = `• ${mdEscape(aptName(v))} #${v.id} — ${stripWarn(dueLabel(v.visit_date, td))}${hhmm(v.visit_date)}`;
+      let pr = money(v.price);
+      if (v.deal_type === 'rent' && pr) pr += '/mes';
+      const bits = [pr, v.area_m2 ? v.area_m2 + ' m²' : ''].filter(Boolean).join(' · ');
+      let s = `• ${mdEscape(aptRef(v))} — ${stripWarn(dueLabel(v.visit_date, td))}${hhmm(v.visit_date)}${bits ? ' · ' + bits : ''}`;
       if (v.address) s += ` · 📍 ${mdLink(v.address, mapsLink(v.address))}`;
       if (v.agent_phone) s += ` · 💬 ${mdLink(v.agent_name || v.agent_phone, waLink(v.agent_phone))}`;
       return s;
@@ -1105,21 +1119,21 @@ async function handleUpdate(env: Env, update: any) {
       if (arow) {
         await run(env, 'UPDATE apartments SET visit_date=?, updated_at=? WHERE id=?', vd, new Date().toISOString(), op.apt_id);
         const mail = await visitMail(env, arow, vd, arow.visit_date);
-        visitsSet.push((arow.location || arow.title || ('apto ' + arow.id)) + (vd ? (' → ' + dueLabel(vd, td) + hhmm(vd)) : ' (visita cancelada)') + mail);
+        visitsSet.push(aptRef(arow) + (vd ? (' → ' + dueLabel(vd, td) + hhmm(vd)) : ' (visita cancelada)') + mail);
       }
     } else if (op.action === 'rule_out' && op.apt_id != null) {
       const res = await ruleOutApt(env, Number(op.apt_id), op.reason);
-      if (res) ruledOut.push(aptName(res.row) + (res.reason ? (' — ' + res.reason) : ''));
+      if (res) ruledOut.push(aptRef(res.row) + (res.reason ? (' — ' + res.reason) : ''));
     } else if (op.action === 'reactivate' && op.apt_id != null) {
       const res = await reactivateApt(env, Number(op.apt_id));
-      if (res) reactivated.push(aptName(res.row));
+      if (res) reactivated.push(aptRef(res.row));
     } else if (op.action === 'apt_vote' && op.apt_id != null && (op.vote === 'up' || op.vote === 'down')) {
       // any status — a verdict on a ruled-out apartment is context for reconsidering it
       const arow = await get(env, 'SELECT * FROM apartments WHERE id=?', op.apt_id);
       if (arow) {
         const voter = canonVoter(who.split(' ')[0]); // Telegram first name → canonical person
         await upsertVote(env, Number(op.apt_id), voter, op.vote);
-        voted.push((op.vote === 'up' ? '👍 ' : '👎 ') + aptName(arow) + ' — ' + voterName(voter));
+        voted.push((op.vote === 'up' ? '👍 ' : '👎 ') + aptRef(arow) + ' — ' + voterName(voter));
       } else notFound.push('apto #' + op.apt_id);
     } else if (op.action === 'apt_note' && op.apt_id != null && op.note) {
       // any status — recording why a ruled-out apartment was rejected is legit; a miss must not be silent
@@ -1127,7 +1141,7 @@ async function handleUpdate(env: Env, update: any) {
       if (arow) {
         // attributed to the first name of whoever sent the Telegram message
         await appendAptNote(env, Number(op.apt_id), who.split(' ')[0], String(op.note));
-        noted.push(aptName(arow) + ' — ' + String(op.note).trim());
+        noted.push(aptRef(arow) + ' — ' + String(op.note).trim());
       } else notFound.push('apto #' + op.apt_id);
     }
   }
@@ -1153,7 +1167,7 @@ async function handleUpdate(env: Env, update: any) {
     const rr = await retryBlockedScrapes(env);
     if (rr.updated.length) {
       lines.unshift('🔄 *Listo — releí ' + rr.updated.length + ' apartamento(s):*\n' + rr.updated.map((u: any) => {
-        const loc = u.f.location || u.f.title || ('#' + u.id);
+        const loc = (u.f.location || u.f.title || 'apto') + ' #' + u.id;
         let pr = money(u.f.price); if (u.dt === 'rent' && pr) pr += '/mes';
         const bits = [pr, u.ppm ? ('≈' + money(u.ppm) + '/m²') : '', u.f.area_m2 ? (u.f.area_m2 + ' m²') : ''].filter(Boolean).join(' · ');
         return '• ' + loc + (bits ? (' — ' + bits) : '') + priceChangeNote(u.priceChange);
@@ -1341,7 +1355,7 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
     const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
     if (row) ctx.waitUntil((async () => {
       const mail = await visitMail(env, row, vd, oldVd);
-      await tgSend(env, (vd ? `📅 Visita a *${aptName(row)}* → ${fmtDate(vd)}${hhmm(vd)}` : `📅 Visita a *${aptName(row)}* cancelada`) + via + mail);
+      await tgSend(env, (vd ? `📅 Visita a *${aptRef(row)}* → ${fmtDate(vd)}${hhmm(vd)}` : `📅 Visita a *${aptRef(row)}* cancelada`) + via + mail);
     })().catch(() => {}));
     return json({ ok: true, row });
   }
@@ -1355,20 +1369,20 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
       console.log('invite mail error:', String(e && e.message || e));
       return json({ ok: false, error: 'no se pudo enviar el correo' }, 502);
     }
-    echo(`📧 Invitación de *${aptName(row)}* enviada a los correos${via}`);
+    echo(`📧 Invitación de *${aptRef(row)}* enviada a los correos${via}`);
     return json({ ok: true });
   }
   if (b.action === 'rule_out') {
     const res = await ruleOutApt(env, id, b.reason); // shared with Telegram ops + callback buttons
     if (!res) return json({ ok: false, error: 'no encontrado' }, 404);
-    echo(`🚫 *${mdEscape(aptName(res.row))}* descartado${res.reason ? ' — ' + res.reason : ''}${via}`,
+    echo(`🚫 *${mdEscape(aptRef(res.row))}* descartado${res.reason ? ' — ' + res.reason : ''}${via}`,
       kb([[{ text: '↩️ Reactivar', callback_data: 're:' + id }]]));
     return json({ ok: true, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
   }
   if (b.action === 'reactivate') {
     const res = await reactivateApt(env, id);
     if (!res) return json({ ok: false, error: 'no encontrado' }, 404);
-    echo(`↩️ *${mdEscape(aptName(res.row))}* de vuelta en la lista${via}`);
+    echo(`↩️ *${mdEscape(aptRef(res.row))}* de vuelta en la lista${via}`);
     return json({ ok: true, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
   }
   if (b.action === 'rescrape') {
@@ -1378,7 +1392,7 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
     if (res.ok && res.priceChange) {
       const prow = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
       const pc = res.priceChange;
-      echo(`${pc.to < pc.from ? '⬇️' : '⬆️'} *${mdEscape(aptName(prow))}* ${pc.to < pc.from ? 'bajó' : 'subió'} de ${money(pc.from)} a ${money(pc.to)}${via}`);
+      echo(`${pc.to < pc.from ? '⬇️' : '⬆️'} *${mdEscape(aptRef(prow))}* ${pc.to < pc.from ? 'bajó' : 'subió'} de ${money(pc.from)} a ${money(pc.to)}${via}`);
     }
     return json({ ...res, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
   }
@@ -1439,8 +1453,8 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
       await upsertVote(env, id, voter, vote);
       // b.quiet: the post-visit follow-up buttons pair this with an apt_note that already echoes
       if (!b.quiet) echo(vote === 'up'
-        ? `👍 A ${voterName(voter)} le gustó *${mdEscape(aptName(row))}*`
-        : `👎 A ${voterName(voter)} no le convenció *${mdEscape(aptName(row))}*`);
+        ? `👍 A ${voterName(voter)} le gustó *${mdEscape(aptRef(row))}*`
+        : `👎 A ${voterName(voter)} no le convenció *${mdEscape(aptRef(row))}*`);
     }
     return json({ ok: true });
   }
@@ -1449,7 +1463,7 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
     if (!note) return json({ ok: false, error: 'empty note' }, 400);
     await appendAptNote(env, id, webAuthor(req), note);
     const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
-    if (row) echo(`📝 Nota en *${aptName(row)}*: ${note}${via}`);
+    if (row) echo(`📝 Nota en *${aptRef(row)}*: ${note}${via}`);
     return json({ ok: true, row });
   }
   if (b.action === 'apt_note_del') {
@@ -1557,7 +1571,7 @@ async function mcpToolCall(env: Env, ctx: ExecutionContext, params: any): Promis
       if (!row) return mcpText('apartment #' + id + ' not found', true);
       const author = voterName(canonVoter(String(args.author || 'felipe')));
       await appendAptNote(env, id, author, note);
-      ctx.waitUntil(tgSend(env, `📝 Nota en *${mdEscape(aptName(row))}*: ${mdEscape(note)} — vía MCP · ${author}`).catch(() => {}));
+      ctx.waitUntil(tgSend(env, `📝 Nota en *${mdEscape(aptRef(row))}*: ${mdEscape(note)} — vía MCP · ${author}`).catch(() => {}));
       return mcpText(`Nota añadida a "${aptName(row)}" #${id}: ${today()} [${author}]: ${note}`);
     }
     default:

@@ -63,7 +63,6 @@
   h2.sect{font-size:15px;margin:20px 2px 10px;font-weight:600;display:flex;align-items:center;gap:8px;}
   .count{color:var(--muted);font-weight:400;font-size:12px;}
   .grid{display:grid;gap:12px;grid-template-columns:1fr;}
-  @media(min-width:760px){.grid{grid-template-columns:repeat(auto-fill,minmax(340px,1fr));}}
   .apt{background:var(--bg-raised);border:1px solid var(--border);border-radius:14px;padding:14px;}
   .apt img.photo{width:100%;max-height:180px;object-fit:cover;border-radius:10px;margin-bottom:10px;display:block;}
   .head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;}
@@ -136,15 +135,17 @@
   .tel{color:var(--accent);text-decoration:none;}
   .ctrl{flex-wrap:wrap;}
   .act.prim{border-color:var(--accent);color:var(--accent);}
-  /* toolbar: view toggle (Tarjetas/Tabla on desktop, Tarjetas/Lista on phones) + grouping toggle */
+  /* toolbar: view toggle (Lista/Tabla, both viewports) + grouping toggle */
   .toolbar{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-bottom:10px;}
   .tlabel{font-size:11px;font-weight:600;color:var(--muted);display:inline-flex;align-items:center;padding-left:12px;}
-  /* compact list mode (phones): one ~64px row per apartment, tap to expand the full card below */
+  /* compact list mode: one row per apartment, tap to expand the full card below */
   .grid.listmode{gap:6px;}
   .lrow{display:flex;align-items:center;gap:10px;background:var(--bg-raised);border:1px solid var(--border);border-radius:12px;padding:9px 10px;cursor:pointer;}
   .lrow .lmid{flex:1;min-width:0;}
   .lrow .lname{font-weight:700;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .lrow .lsub{color:var(--muted);font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  /* the row id: the one identifier two same-neighborhood listings can never share */
+  .lid,.aptid{color:var(--muted);font-weight:600;}
   .lrow .lright{display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex:0 0 auto;}
   .lrow .lright .flag{margin-left:0;}
   .lrow .chev{color:var(--muted);font-size:18px;flex:0 0 auto;}
@@ -166,6 +167,8 @@
   .apttable .flag{margin-left:0;}
   .thumb{width:46px;height:46px;object-fit:cover;border-radius:8px;display:block;}
   .thumb.noimg{background:var(--bg);border:1px solid var(--border);}
+  /* table thumbnail opens the full card in a modal */
+  .thopen{cursor:zoom-in;display:inline-block;}
   .rowact{display:flex;gap:6px;align-items:center;}
   a.link.sm,button.act.sm{min-height:0;padding:4px 9px;font-size:12px;flex:0 0 auto;}
   /* table view uses the whole screen width */
@@ -181,6 +184,8 @@
   .modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:50;align-items:center;justify-content:center;padding:16px;}
   .modal.show{display:flex;}
   .sheet{background:var(--bg-raised);border:1px solid var(--border);border-radius:16px;padding:18px;width:100%;max-width:420px;}
+  /* card-detail modal: the .apt card brings its own chrome, the sheet just sizes and scrolls it */
+  .sheet.cardsheet{background:transparent;border:none;padding:0;max-width:480px;max-height:calc(100vh - 40px);overflow-y:auto;}
   .sheet .mh{font-size:16px;font-weight:700;margin-bottom:14px;}
   .sheet label{display:block;font-size:12px;color:var(--muted);margin-bottom:12px;}
   .sheet input{display:block;width:100%;margin-top:4px;font-family:inherit;font-size:16px;min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:10px;padding:6px 10px;}
@@ -248,6 +253,7 @@
   .furow .fuinfo{display:flex;align-items:baseline;gap:8px;justify-content:space-between;flex-wrap:wrap;margin-bottom:10px;}
   .furow .funame{font-weight:700;font-size:14px;color:var(--fg);text-decoration:none;}
   .furow .fuwhen{color:var(--muted);font-size:12px;}
+  .furow .fumeta{color:var(--muted);font-size:12px;margin:-4px 0 10px;line-height:1.5;}
   .furow .fuact{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
   .furow .fuact .act{min-height:42px;}
   @media(min-width:760px){.furow .fuact{display:flex;}.furow .fuact .act{flex:0 0 auto;}}
@@ -312,6 +318,7 @@
   <label>Motivo (opcional)<input id="r_reason" type="text" autocomplete="off"></label>
   <div class="mctrl"><button class="act" id="r_cancel">Cancelar</button><button class="act dgr" id="r_save">Descartar</button></div>
 </div></div>
+<div class="modal" id="cardModal"><div class="sheet cardsheet" id="cardBox"></div></div>
 <div class="lb" id="photoLb" role="dialog" aria-modal="true" aria-label="Foto">
   <button class="lb-close" id="lb_close" type="button" aria-label="Cerrar">✕</button>
   <img id="lb_img" alt="">
@@ -321,6 +328,18 @@
 var DATA=null;
 function esc(s){s=(s==null?"":String(s));return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;");}
 function aptName(r){return r.location||r.title||r.source_site||("apto "+r.id);}
+// canonical label: #id · location — two listings in the same neighborhood only differ by the id
+function aptLabel(r){return "#"+r.id+" · "+aptName(r);}
+// price + area: the two numbers that tell twin listings in the same location apart.
+// rent shows the all-in monthly (price+admin), mirroring effPrice/ppmOf.
+function priceAreaBits(r){
+  var isRent=r.deal_type==="rent";
+  var total=(isRent&&r.price!=null)?Number(r.price)+Number(r.admin_fee||0):r.price;
+  var b=[];
+  if(total!=null)b.push(mny(total)+(isRent?"/mes":""));
+  if(r.area_m2!=null)b.push(r.area_m2+" m²");
+  return b;
+}
 // WhatsApp deep link: wa.me needs a full international number, digits only.
 // Bare 10-digit Colombian mobiles (start with 3) get the +57 country code.
 function waLink(phone){var d=String(phone||"").replace(/\D/g,"");if(d.length===10&&d.charAt(0)==="3")d="57"+d;return "https://wa.me/"+d;}
@@ -355,7 +374,7 @@ function saveFilters(){try{localStorage.setItem("aptFilters",JSON.stringify(FILT
 function filtersActive(){return !!(FILTERS.deal||FILTERS.minBeds||FILTERS.maxPrice!=null||FILTERS.tag||FILTERS.stage);}
 // the price a person actually pays: rent compares against price+admin, buy against the sale price
 function effPrice(r){if(r.price==null)return null;return r.deal_type==="rent"?Number(r.price)+Number(r.admin_fee||0):Number(r.price);}
-// pure: filtered copy of the active rows; feeds both the cards sections and the desktop table
+// pure: filtered copy of the active rows; feeds both the list sections and the table
 function applyFilters(rows){
   return rows.filter(function(r){
     if(FILTERS.deal&&r.deal_type!==FILTERS.deal)return false;
@@ -367,7 +386,7 @@ function applyFilters(rows){
   });
 }
 // comparator for the chosen Orden, or null to keep each section's own default order.
-// "~" sorts after any digit, so cards without a visit go last under "próxima visita".
+// "~" sorts after any digit, so rows without a visit go last under "próxima visita".
 function activeSorter(){
   if(FILTERS.sort==="price")return function(a,b){var pa=effPrice(a),pb=effPrice(b);return (pa==null?Infinity:pa)-(pb==null?Infinity:pb);};
   if(FILTERS.sort==="recent")return function(a,b){return String(b.created_at||"").localeCompare(String(a.created_at||""));};
@@ -480,7 +499,8 @@ function stageChip(r){
   var st=stageOf(r);
   if(st==="pending")return "<span class=\"flag\">⏳ por agendar</span>";
   if(st==="scheduled")return "<span class=\"flag sched\">📅 "+esc(fmtVisitShort(r.visit_date))+"</span>";
-  return "<span class=\"flag mut\">✔ visitado</span>";
+  // the visit date stays visible after the visit — it identifies the apartment ("el del viernes")
+  return "<span class=\"flag mut\">✔ visitado "+esc(fmtVisitShort(r.visit_date))+"</span>";
 }
 // note lines: "YYYY-MM-DD [Autor]: text"; older lines lack the [Autor] part
 var NOTE_RE=/^(\d{4}-\d{2}-\d{2})(?: \[([^\]]+)\])?: (.*)$/;
@@ -499,7 +519,7 @@ function noteLines(r){
   }
   return h;
 }
-function card(r,best,isRent,withDeal){
+function card(r,best,isRent,withDeal,bare){
   var ppm=ppmOf(r,isRent);
   var isBest=best&&ppm===best;
   var flag=(r.scrape_status&&r.scrape_status!=="ok")?"<span class=\"flag\">sin leer</span>":"";
@@ -514,7 +534,8 @@ function card(r,best,isRent,withDeal){
   var vd=r.visit_date?esc(r.visit_date):"";
   // datetime-local needs YYYY-MM-DDTHH:MM; pad legacy date-only visits with an editable 09:00 default
   var vdInput=(vd&&vd.indexOf("T")<0)?vd+"T09:00":vd;
-  var h="<div class=\"apt\" id=\"apt-"+r.id+"\">";
+  // bare: the modal copy of a card must not repeat the table row's #apt- anchor id
+  var h="<div class=\"apt\""+(bare?"":" id=\"apt-"+r.id+"\"")+">";
   if(r.image_url)h+="<img class=\"photo\" src=\""+esc(r.image_url)+"\" loading=\"lazy\" alt=\"\" onerror=\"this.remove()\">";
   // our own visit photos: the ad's og:image shows the best angle, these show the truth.
   // ?s=t = mid-size rendition for the 72px squares; the tap-through opens full resolution.
@@ -529,7 +550,7 @@ function card(r,best,isRent,withDeal){
     }
     h+="</div>";
   }
-  h+="<div class=\"head\"><div class=\"loc\">"+esc(aptName(r))+flag+(r.tag?tagChip(r.tag):"")+sub+"</div>";
+  h+="<div class=\"head\"><div class=\"loc\"><span class=\"aptid\">#"+r.id+"</span> "+esc(aptName(r))+flag+(r.tag?tagChip(r.tag):"")+sub+"</div>";
   if(isRent&&r.price!=null){
     var total=Number(r.price)+Number(r.admin_fee||0);
     h+="<div class=\"price\">"+mny(total)+"<span class=\"per\">/mes</span>";
@@ -569,13 +590,15 @@ function card(r,best,isRent,withDeal){
   h+="</div></div>";
   return h;
 }
-// one condensed, whole-row-tappable line per apartment (phones' list mode)
+// one condensed, whole-row-tappable entry per apartment (list mode, both viewports).
+// Carries the full identity set — id, price, area, address, agent, visit (in the stage chip) —
+// so two listings in the same location stay distinguishable without expanding the card.
 function listRow(r,isRent,open,withDeal){
-  var total=(isRent&&r.price!=null)?Number(r.price)+Number(r.admin_fee||0):r.price;
-  var l2=[];
-  if(total!=null)l2.push(mny(total)+(isRent?"/mes":""));
+  var l2=priceAreaBits(r);
   if(r.bedrooms!=null)l2.push(r.bedrooms+" hab");
-  if(r.area_m2!=null)l2.push(r.area_m2+" m²");
+  var l3=[];
+  if(r.address)l3.push("📍 "+r.address);
+  if(r.agent_name)l3.push("👤 "+r.agent_name);
   var pills="";
   if(r.scrape_status&&r.scrape_status!=="ok")pills+="<span class=\"flag\">sin leer</span>";
   if(r.created_at&&Date.now()-Date.parse(r.created_at)<48*3600*1000)pills+="<span class=\"flag new\">nuevo</span>";
@@ -588,27 +611,25 @@ function listRow(r,isRent,open,withDeal){
   var th=r.image_url?"<img class=\"thumb\" src=\""+esc(r.image_url)+"\" loading=\"lazy\" alt=\"\" onerror=\"this.className='thumb noimg';this.removeAttribute('src')\">":"<span class=\"thumb noimg\"></span>";
   // collapsed rows own the #apt- anchor; expanded ones cede it to the full card below
   var h="<div class=\"lrow\""+(open?"":" id=\"apt-"+r.id+"\"")+" data-id=\""+r.id+"\">"+th;
-  h+="<div class=\"lmid\"><div class=\"lname\">"+esc(aptName(r))+(r.tag?tagChip(r.tag):"")+"</div>";
-  h+="<div class=\"lsub\">"+esc(l2.join(" · ")||"—")+"</div></div>";
-  h+="<div class=\"lright\">"+pills+"</div>";
+  h+="<div class=\"lmid\"><div class=\"lname\"><span class=\"lid\">#"+r.id+"</span> "+esc(aptName(r))+(r.tag?tagChip(r.tag):"")+"</div>";
+  h+="<div class=\"lsub\">"+esc(l2.join(" · ")||"—")+"</div>";
+  if(l3.length)h+="<div class=\"lsub\">"+esc(l3.join(" · "))+"</div>";
+  h+="</div><div class=\"lright\">"+pills+"</div>";
   h+="<span class=\"chev\">"+(open?"⌄":"›")+"</span></div>";
   return h;
 }
-// list mode swaps each card for a row, expanding the full card in place for the open one.
+// list mode: one row per apartment, expanding the full card in place for the open one.
 // All card actions keep working there — every handler is delegated on class + data-id.
 function cardOrRow(r,best,isRent,withDeal){
-  if(effView()==="list"){
-    var open=OPEN_ROW===r.id;
-    var h=listRow(r,isRent,open,withDeal);
-    if(open)h+="<div class=\"lexp\">"+card(r,best,isRent,withDeal)+"</div>";
-    return h;
-  }
-  return card(r,best,isRent,withDeal);
+  var open=OPEN_ROW===r.id;
+  var h=listRow(r,isRent,open,withDeal);
+  if(open)h+="<div class=\"lexp\">"+card(r,best,isRent,withDeal)+"</div>";
+  return h;
 }
-function gridOpen(){return "<div class=\"grid"+(effView()==="list"?" listmode":"")+"\">";}
+function gridOpen(){return "<div class=\"grid listmode\">";}
 function section(title,list,isRent){
   if(!list.length)return "";
-  // default: best value first, cards without enough data last; a chosen Orden overrides it.
+  // default: best value first, rows without enough data last; a chosen Orden overrides it.
   // Mutual favorites (💚) float to the top of the section either way.
   var cmp=activeSorter()||function(a,b){
     var pa=ppmOf(a,isRent),pb=ppmOf(b,isRent);
@@ -645,9 +666,10 @@ function ppmCmpMixed(a,b){
 }
 // ---- desktop table view ----
 // every listing field is editable in place; edit=type drives both the input widget and server coercion
-var SORT={key:"ppm",dir:1}; // default: best $/m² first, like the cards
+var SORT={key:"ppm",dir:1}; // default: best $/m² first, like the list
 var COLS=[
   {k:"thumb",label:""},
+  {k:"id",label:"#",type:"n"},
   {k:"tag",label:"Etiqueta",type:"s",field:"tag",edit:"text"},
   {k:"name",label:"Apto",type:"s",field:"location",edit:"text"},
   {k:"type",label:"Tipo",type:"s",field:"deal_type",edit:"deal"},
@@ -691,7 +713,8 @@ function cellDisplay(r,c){
   if(c.k==="thumb"){
     var th=r.image_url?"<img class=\"thumb\" src=\""+esc(r.image_url)+"\" loading=\"lazy\" alt=\"\" onerror=\"this.className='thumb noimg';this.removeAttribute('src')\">":"<span class=\"thumb noimg\"></span>";
     if(r.photos&&r.photos.length)th+="<span class=\"pcount\">📸 "+r.photos.length+"</span>";
-    return th;
+    // tapping the thumbnail opens the full card in a modal (the card gallery view is gone)
+    return "<span class=\"thopen\" data-id=\""+r.id+"\" title=\"Ver tarjeta\">"+th+"</span>";
   }
   if(c.k==="tag")return r.tag?tagChip(r.tag):"";
   if(c.k==="name")return esc(aptName(r));
@@ -721,7 +744,7 @@ function tableRow(r){
       var cls="ec"+(c.k==="name"?" nm":"")+(c.type==="n"?" num":"");
       h+="<td class=\""+cls+"\" data-id=\""+r.id+"\" data-field=\""+c.field+"\" data-type=\""+c.edit+"\">"+(disp===""?"<span class=\"mut\">—</span>":disp)+"</td>";
     }else{
-      h+="<td"+(c.k==="ppm"?" class=\"num\"":"")+">"+disp+"</td>";
+      h+="<td"+(c.k==="ppm"||c.k==="id"?" class=\"num\"":"")+">"+disp+"</td>";
     }
   }
   return h+"</tr>";
@@ -778,16 +801,16 @@ function tableView(rows){
   for(var j=0;j<sorted.length;j++)h+=tableRow(sorted[j]);
   return h+"</tbody></table></div>";
 }
-// two independent view prefs: desktop picks cards|table, phones pick cards|list —
-// so a phone never gets the table and a desktop never gets the compact list
-var VIEW=localStorage.getItem("aptView")||"table";
-var VIEWM=localStorage.getItem("aptViewM")||"cards";
-// cards grouping: by deal type (historic default) or by pipeline stage; opt-in, persisted
+function isDesktop(){return window.innerWidth>=760;}
+// one view pref: list|table, both viewports (the card-gallery view is gone — cards now live in
+// the list expansion and the table-thumbnail modal). Legacy stored "cards" falls back per device.
+var VIEW=localStorage.getItem("aptView");
+if(VIEW!=="list"&&VIEW!=="table")VIEW=isDesktop()?"table":"list";
+// list grouping: by deal type (historic default) or by pipeline stage; opt-in, persisted
 var GROUP=localStorage.getItem("aptGroup")||"tipo";
 // list mode: id of the row currently expanded in place (survives re-renders after saves)
 var OPEN_ROW=null;
-function isDesktop(){return window.innerWidth>=760;}
-function effView(){return isDesktop()?VIEW:VIEWM;}
+function effView(){return VIEW;}
 // ---- edit sheet (address / agent / phone / tag), shared by cards + table ----
 var EDIT_ID=null;
 function findApt(id){var all=(DATA.apartments||[]).concat(DATA.ruledOut||[]);for(var i=0;i<all.length;i++)if(all[i].id===id)return all[i];return null;}
@@ -804,7 +827,7 @@ function closeEdit(){EDIT_ID=null;document.getElementById("editModal").classList
 var NOTE_ID=null,RO_ID=null;
 function openNote(id){
   var r=findApt(id);if(!r)return;NOTE_ID=id;
-  document.getElementById("n_title").textContent="Nota — "+aptName(r);
+  document.getElementById("n_title").textContent="Nota — "+aptLabel(r);
   document.getElementById("n_text").value="";
   document.getElementById("noteModal").classList.add("show");
   document.getElementById("n_text").focus();
@@ -812,7 +835,7 @@ function openNote(id){
 function closeNote(){NOTE_ID=null;document.getElementById("noteModal").classList.remove("show");}
 function openRo(id){
   var r=findApt(id);if(!r)return;RO_ID=id;
-  document.getElementById("r_title").textContent="¿Descartar "+aptName(r)+"?";
+  document.getElementById("r_title").textContent="¿Descartar "+aptLabel(r)+"?";
   document.getElementById("r_reason").value="";
   var ch=document.getElementById("r_chips").getElementsByTagName("button");
   for(var i=0;i<ch.length;i++)ch[i].className="chip";
@@ -820,6 +843,22 @@ function openRo(id){
   document.getElementById("r_reason").focus();
 }
 function closeRo(){RO_ID=null;document.getElementById("roModal").classList.remove("show");}
+// ---- card-detail modal: the table thumbnail opens the apartment's full card here ----
+var CARD_ID=null;
+function openCard(id){
+  if(!findApt(id))return;
+  CARD_ID=id;renderCardModal();
+  document.getElementById("cardModal").classList.add("show");
+}
+function closeCard(){CARD_ID=null;document.getElementById("cardModal").classList.remove("show");}
+// (re)build the open modal's card from DATA — called on open and after every re-render, so an
+// edit/vote/note made inside the modal shows its result without closing it
+function renderCardModal(){
+  if(CARD_ID==null)return;
+  var r=findApt(CARD_ID);
+  if(!r){closeCard();return;}
+  document.getElementById("cardBox").innerHTML=card(r,null,r.deal_type==="rent",true,true);
+}
 // ---- photo lightbox: view a visit photo full-size in-app instead of downloading it ----
 function openPhoto(src,cap){
   document.getElementById("lb_img").src=src;
@@ -905,10 +944,12 @@ function visitCalendar(rows){
       if(ruled)h+="<div class=\"vclash\"><span class=\"flag disc\">🚫 descartado</span></div>";
       if(clash[r.id])h+="<div class=\"vclash\"><span class=\"flag\">⚠️ choque de horario</span></div>";
       h+="<div class=\"vloc\">";
-      if(r.url)h+="<a href=\""+esc(r.url)+"\" target=\"_blank\" rel=\"noopener\">"+esc(aptName(r))+"<span class=\"ext\">↗</span></a>";
-      else h+=esc(aptName(r));
+      if(r.url)h+="<a href=\""+esc(r.url)+"\" target=\"_blank\" rel=\"noopener\">"+esc(aptLabel(r))+"<span class=\"ext\">↗</span></a>";
+      else h+=esc(aptLabel(r));
       h+="</div>";
       var m=[];
+      var pa=priceAreaBits(r);
+      if(pa.length)m.push(esc(pa.join(" · ")));
       if(r.address)m.push("📍 <a href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\">"+esc(r.address)+"</a>");
       if(r.agent_name)m.push("👤 "+esc(r.agent_name));
       if(r.agent_phone)m.push("💬 <a href=\""+esc(waLink(r.agent_phone))+"\" target=\"_blank\" rel=\"noopener\">"+esc(r.agent_phone)+"</a>");
@@ -961,8 +1002,10 @@ function heroLabel(r,now,todayStr){
 function heroCard(r,now,todayStr,clash){
   var ruled=r.status==="ruled_out";
   var h="<div class=\"hero"+(ruled?" xout":"")+"\"><div class=\"hlabel\">"+esc(heroLabel(r,now,todayStr))+(ruled?" <span class=\"flag disc\">🚫 descartado</span>":"")+(clash?" <span class=\"flag\">⚠️ choque de horario</span>":"")+"</div>";
-  h+="<div class=\"hname\"><a href=\"#apt-"+r.id+"\">"+esc(aptName(r))+"</a></div>";
+  h+="<div class=\"hname\"><a href=\"#apt-"+r.id+"\">"+esc(aptLabel(r))+"</a></div>";
   var m=[];
+  var pa=priceAreaBits(r);
+  if(pa.length)m.push(esc(pa.join(" · ")));
   if(r.address)m.push("📍 <a href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\">"+esc(r.address)+"</a>");
   if(r.agent_name)m.push("👤 "+esc(r.agent_name));
   if(r.agent_phone)m.push("📞 <a class=\"tel\" href=\"tel:"+esc(r.agent_phone)+"\">"+esc(r.agent_phone)+"</a> · 💬 <a href=\""+esc(waLink(r.agent_phone))+"\" target=\"_blank\" rel=\"noopener\">WhatsApp</a>");
@@ -979,7 +1022,7 @@ function agendaRow(r,clash){
   var ruled=r.status==="ruled_out";
   var timed=r.visit_date.length>10,t=timed?r.visit_date.slice(11,16):"";
   var h="<div class=\"arow"+(ruled?" xout":"")+"\">"+(t?"<span class=\"atime\">"+esc(t)+"</span>":"<span class=\"atime tbd\">hora por definir</span>");
-  h+="<a class=\"aname\" href=\"#apt-"+r.id+"\">"+esc(aptName(r))+(ruled?" <span class=\"flag disc\">🚫</span>":"")+(clash&&clash[r.id]?" <span class=\"flag\">⚠️</span>":"")+"</a>";
+  h+="<a class=\"aname\" href=\"#apt-"+r.id+"\">"+esc(aptLabel(r))+(ruled?" <span class=\"flag disc\">🚫</span>":"")+(clash&&clash[r.id]?" <span class=\"flag\">⚠️</span>":"")+"</a>";
   if(r.address)h+="<span class=\"aloc\"><a href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\" aria-label=\"Cómo llegar\">🗺</a></span>";
   return h+"</div>";
 }
@@ -1041,8 +1084,12 @@ function followupBlock(rows){
   var h="<h2 class=\"sect\">🗣 Visitadas — ¿cómo les fue? <span class=\"count\">"+due.length+"</span></h2><div class=\"fublock\">";
   for(var j=0;j<due.length;j++){var r=due[j];
     h+="<div class=\"furow\"><div class=\"fuinfo\">";
-    h+="<a class=\"funame\" href=\"#apt-"+r.id+"\">"+esc(aptName(r))+"</a>";
+    h+="<a class=\"funame\" href=\"#apt-"+r.id+"\">"+esc(aptLabel(r))+"</a>";
     h+="<span class=\"fuwhen\">"+esc(fmtVisit(r.visit_date))+"</span></div>";
+    var fb=priceAreaBits(r);
+    if(r.address)fb.push("📍 "+r.address);
+    if(r.agent_name)fb.push("👤 "+r.agent_name);
+    if(fb.length)h+="<div class=\"fumeta\">"+esc(fb.join(" · "))+"</div>";
     h+="<div class=\"fuact\">";
     h+="<button class=\"act sm fbup\" data-id=\""+r.id+"\">👍 Nos gustó</button>";
     h+="<button class=\"act sm fbdn\" data-id=\""+r.id+"\">👎 No</button>";
@@ -1059,13 +1106,14 @@ function ruledSection(list){
   for(var i=0;i<list.length;i++){var r=list[i];
     var deal=r.deal_type==="rent"?"arriendo":r.deal_type==="buy"?"compra":"";
     var pr=mny(r.price)+(r.deal_type==="rent"&&r.price?"/mes":"");
-    var bits=[deal,pr!=="—"?pr:"",r.area_m2?(r.area_m2+" m²"):"",r.price_per_m2?("≈"+mny(r.price_per_m2)+"/m²"):""].filter(Boolean).join(" · ");
+    var bits=[deal,pr!=="—"?pr:"",r.area_m2?(r.area_m2+" m²"):"",r.price_per_m2?("≈"+mny(r.price_per_m2)+"/m²"):"",
+      r.visit_date?("📅 "+fmtVisitShort(r.visit_date)):"",r.address?("📍 "+r.address):"",r.agent_name?("👤 "+r.agent_name):""].filter(Boolean).join(" · ");
     var reason=r.ruled_out_reason?"<span class=\"reason\">"+esc(r.ruled_out_reason)+"</span>":"";
     var when=ruledDate(r.ruled_out_at)?("descartado "+ruledDate(r.ruled_out_at)):"";
     // verdicts survive the rule-out — context for "reconsiderar"
     var vv=r.votes||{},vb=[];
     for(var vk in vv)if(vv.hasOwnProperty(vk))vb.push(voterName(vk)+" "+(vv[vk]==="up"?"👍":"👎"));
-    h+="<div class=\"rrow xout\" id=\"apt-"+r.id+"\"><span class=\"rloc\">"+esc(aptName(r))+"</span>"+reason;
+    h+="<div class=\"rrow xout\" id=\"apt-"+r.id+"\"><span class=\"rloc\">"+esc(aptLabel(r))+"</span>"+reason;
     h+="<span class=\"rmeta\">"+esc(bits)+"</span>";
     if(vb.length)h+="<span class=\"rmeta\">"+esc(vb.join(" · "))+"</span>";
     h+="<span class=\"grow\"></span>";
@@ -1087,13 +1135,11 @@ function mapRows(){
   return out;
 }
 function mapPopup(r){
-  var isRent=r.deal_type==="rent";
-  var total=(isRent&&r.price!=null)?Number(r.price)+Number(r.admin_fee||0):r.price;
-  var bits=[];
-  if(total!=null)bits.push(mny(total)+(isRent?"/mes":""));
+  var bits=priceAreaBits(r);
   if(r.bedrooms!=null)bits.push(r.bedrooms+" hab");
-  if(r.area_m2!=null)bits.push(r.area_m2+" m²");
-  var h="<div class=\"mpop\"><div class=\"mname\">"+esc(aptName(r))+(r.status==="ruled_out"?" · 🚫 descartado":"")+"</div>";
+  if(r.visit_date)bits.push("📅 "+fmtVisitShort(r.visit_date));
+  if(r.agent_name)bits.push("👤 "+r.agent_name);
+  var h="<div class=\"mpop\"><div class=\"mname\">"+esc(aptLabel(r))+(r.status==="ruled_out"?" · 🚫 descartado":"")+"</div>";
   if(bits.length)h+="<div class=\"mmeta\">"+esc(bits.join(" · "))+"</div>";
   // pins sit on the street crossing the address names, so they are block-accurate, not door-accurate
   h+="<div class=\"mmeta\">📍 "+esc(r.address)+"</div>";
@@ -1163,7 +1209,7 @@ function jumpToHash(){
 }
 function render(){
   var rows=DATA.apartments||[];var ruled=DATA.ruledOut||[];
-  // filters narrow the cards/table only — the agenda, follow-up block and Descartados always
+  // filters narrow the list/table only — the agenda, follow-up block and Descartados always
   // see every active row (a filter must never hide an upcoming visit); the agenda also always
   // sees ruled-out rows with a visit_date, crossed out rather than hidden (see visRows below)
   var shown=applyFilters(rows);
@@ -1180,20 +1226,19 @@ function render(){
   var visRows=rows.concat(ruled);
   document.getElementById("visits").innerHTML=isDesktop()?visitCalendar(visRows):agendaMobile(visRows);
   if(isDesktop())snapCalendar();
-  // post-visit follow-up sits between the agenda and the cards/table, in both views
+  // post-visit follow-up sits between the agenda and the list/table, in both views
   document.getElementById("followup").innerHTML=followupBlock(rows);
-  // the view toggle offers Tabla on desktop and Lista on phones — rebuild it per viewport
-  var vopts=isDesktop()?[["cards","▦ Tarjetas"],["table","▤ Tabla"]]:[["cards","▦ Tarjetas"],["list","☰ Lista"]];
-  var vcur=isDesktop()?VIEW:VIEWM;
+  // the view toggle: Lista or Tabla, on every viewport (the table scrolls sideways on phones)
+  var vopts=[["list","☰ Lista"],["table","▤ Tabla"]];
   document.getElementById("viewtoggle").innerHTML=vopts.map(function(o){
-    return "<button class=\"vt-btn"+(o[0]===vcur?" on":"")+"\" data-view=\""+o[0]+"\">"+o[1]+"</button>";
+    return "<button class=\"vt-btn"+(o[0]===VIEW?" on":"")+"\" data-view=\""+o[0]+"\">"+o[1]+"</button>";
   }).join("");
-  // grouping toggle only makes sense over cards; hide it while the table is showing
+  // grouping toggle only makes sense over the list; hide it while the table is showing
   var gt=document.getElementById("grouptoggle");
   gt.style.display=effView()==="table"?"none":"";
   var gb=gt.getElementsByTagName("button");
   for(var g=0;g<gb.length;g++)gb[g].className="gr-btn"+(gb[g].getAttribute("data-group")===GROUP?" on":"");
-  // let the table use the full screen width; cards keep the centered column
+  // let the table use the full screen width; the list keeps the centered column
   document.querySelector(".wrap").classList.toggle("wide",effView()==="table");
   if(!rows.length&&!ruled.length){document.getElementById("root").innerHTML="<div class=\"empty\">Aún no hay apartamentos. Envía un link al grupo de Telegram para empezar.</div>";document.getElementById("ruledRoot").innerHTML="";updateMap();return;}
   if(rows.length&&!shown.length){
@@ -1216,6 +1261,7 @@ function render(){
   }
   document.getElementById("ruledRoot").innerHTML=ruledSection(ruled);
   updateMap();
+  renderCardModal();
   jumpToHash();
 }
 function load(){return fetch("apartments-data.json").then(function(r){if(!r.ok)throw 0;return r.json();}).then(function(d){DATA=d;render();});}
@@ -1236,6 +1282,9 @@ document.addEventListener("click",function(e){
   // navigate to the raw image (checked before the generic anchor handling below, which bails out)
   var pv=el.closest?el.closest("a.pview"):null;
   if(pv){e.preventDefault();openPhoto(pv.getAttribute("href"),pv.getAttribute("data-cap"));return;}
+  // table thumbnail → the apartment's full card in a modal
+  var to=el.closest?el.closest(".thopen"):null;
+  if(to){openCard(Number(to.getAttribute("data-id")));return;}
   // links inside editable cells (e.g. the 🗺 maps anchor) must navigate, not begin an edit.
   // Exception: in list mode an in-page #apt- link (hero/agenda) expands its row before scrolling.
   var an=el.closest?el.closest("a"):null;
@@ -1256,9 +1305,7 @@ document.addEventListener("click",function(e){
   var lr=el.closest?el.closest(".lrow"):null;
   if(lr){var lid=Number(lr.getAttribute("data-id"));OPEN_ROW=OPEN_ROW===lid?null:lid;render();return;}
   if(el.classList.contains("vt-btn")){
-    var nv=el.getAttribute("data-view");
-    if(isDesktop()){VIEW=nv;localStorage.setItem("aptView",VIEW);}
-    else{VIEWM=nv;localStorage.setItem("aptViewM",VIEWM);}
+    VIEW=el.getAttribute("data-view");localStorage.setItem("aptView",VIEW);
     render();return;
   }
   if(el.classList.contains("gr-btn")){GROUP=el.getAttribute("data-group");localStorage.setItem("aptGroup",GROUP);render();return;}
@@ -1423,12 +1470,18 @@ document.getElementById("r_save").onclick=function(){
     closeRo();return load();
   }).catch(function(){toast("Error de red");}).then(function(){btn.disabled=false;});
 };
+// card-detail modal: close on backdrop tap
+document.getElementById("cardModal").addEventListener("click",function(e){if(e.target.id==="cardModal")closeCard();});
 // photo lightbox: close on the ✕, on any tap outside the image, or on Escape
 document.getElementById("lb_close").onclick=closePhoto;
 document.getElementById("photoLb").addEventListener("click",function(e){if(e.target.id!=="lb_img")closePhoto();});
-document.addEventListener("keydown",function(e){if(e.key==="Escape"&&document.getElementById("photoLb").classList.contains("show"))closePhoto();});
+document.addEventListener("keydown",function(e){
+  if(e.key!=="Escape")return;
+  if(document.getElementById("photoLb").classList.contains("show"))closePhoto();
+  else if(document.getElementById("cardModal").classList.contains("show"))closeCard();
+});
 load().catch(showRetry);
-// re-render only when crossing the mobile/desktop line, so a phone never gets the table
+// re-render only when crossing the mobile/desktop line (the agenda/calendar layout differs)
 var wasDesktop=isDesktop();
 window.addEventListener("resize",function(){var d=isDesktop();if(d!==wasDesktop){wasDesktop=d;if(DATA)render();}});
 // refresh when the tab/app regains focus (data changes a few times a day, not per minute)
