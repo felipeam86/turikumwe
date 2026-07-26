@@ -72,7 +72,13 @@ wrangler + typescript only. HTML screens are static files imported as text.
    and Telegram first names onto `felipe`/`lucia` (unknowns fall back to the
    normalized first token). Web vote/note authorship always comes from the
    `cf-access-authenticated-user-email` header — never from the request body.
-9. **External services are treated as donated.** Overpass geocoding runs as a
+9. **Apartment references are self-identifying.** Location alone is ambiguous
+   (two listings can share a neighborhood), so wherever an apartment is named —
+   web rows, agenda entries, map popups, modal titles, Telegram acks/digests —
+   the reference carries the row `#id` (via `aptRef` in index.ts / `aptLabel`
+   in apartments.html) and, where the layout allows, the disambiguating
+   fields: price, area, visit date, address, agent name.
+10. **External services are treated as donated.** Overpass geocoding runs as a
    background backfill of ≤2 rows per data load, spaced 2 s, each address
    looked up once and cached forever (`geo_address` remembers the exact
    string the coords came from; a changed address re-geocodes). Photo bytes
@@ -91,7 +97,9 @@ src/
                      Telegram send/callback/typing, Claude client, apartment
                      ingest/scrape/extract/rescrape, summary, digest, crons,
                      update handling (ops parser prompt lives here), web routes
-  apartments.html    apartment screen: cards, inline edits, map (OSM tiles), photo strip
+  apartments.html    apartment screen: list + table views (a row tap or the table
+                     thumbnail opens the full card — inline or in a modal; no card
+                     gallery), inline edits, map (OSM tiles), photo strip
   dashboard.html     household overview, ✓ buttons ({{SECTIONS}}/{{UPDATED}} placeholders)
   home.html          home screen: pick Household or Apartamentos ({{…}} placeholders)
   icons.ts           PWA icons as base64 (data URIs — see manifest note in §4)
@@ -116,7 +124,7 @@ webhook (secret header) and `/mcp` (bearer token).
 | `GET /` | Access | Home screen with live counts |
 | `GET /dashboard.html` | Access | Household items by category, ✓ to complete |
 | `POST /items-action` | Access | `complete` (monthly items roll forward); echoes to Telegram except groceries |
-| `GET /apartments.html` | Access | Apartment cards + map (static HTML, data via XHR) |
+| `GET /apartments.html` | Access | Apartment list/table + map (static HTML, data via XHR) |
 | `GET /apartments-data.json` | Access | Active + ruled-out rows, photos, votes, `me`; kicks off geocode backfill |
 | `GET /apt-photo/<id>` | Access | Streams a visit photo from Telegram by stored `file_id` (`?s=t` = thumb) |
 | `POST /apartments-action` | Access | `set_visit` / `invite` / `rule_out` / `reactivate` / `rescrape` / `set_fields` / `edit` (allowlisted single field) / `vote` / `apt_note` / `apt_note_del`; most echo to Telegram |
