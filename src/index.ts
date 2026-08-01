@@ -230,6 +230,12 @@ const mdEscape = (s: unknown) => String(s ?? '').replace(/([_*`\[])/g, '\\$1');
 function mdLink(label: string, url: string): string {
   return '[' + String(label).replace(/[\[\]]/g, '') + '](' + String(url).replace(/\(/g, '%28').replace(/\)/g, '%29') + ')';
 }
+// the agent bit of any Telegram text line, one idiom everywhere: with a phone the name itself
+// deep-links to WhatsApp; without one it's just the plain 👤 name. '' when neither is stored.
+function agentBit(r: any): string {
+  if (r.agent_phone) return `💬 ${mdLink(r.agent_name || r.agent_phone, waLink(r.agent_phone))}`;
+  return r.agent_name ? `👤 ${mdEscape(r.agent_name)}` : '';
+}
 
 // ---- calendar invites (iCalendar over the Email Routing send_email binding) ----
 // visit_date is wall-clock Bogota ("YYYY-MM-DD" or "YYYY-MM-DDTHH:MM"); Bogota has no DST,
@@ -262,14 +268,22 @@ function icsWindow(vd: string): { start: string; end: string; allDay: boolean } 
   return { start: f(d), end: f(d + 86400000), allDay: true };
 }
 const inviteTos = (env: Env) => env.INVITE_TO.split(',').map((s) => s.trim()).filter(Boolean);
-function visitIcs(env: Env, row: any, method: 'REQUEST' | 'CANCEL', vd: string): string {
-  const w = icsWindow(vd);
-  const desc = [
+// the visit fact sheet shared by the invite DESCRIPTION and the mail body. The Mapa/WhatsApp
+// URLs are the point: calendar apps linkify them, so on visit day the event itself navigates
+// to the door and opens the chat with the agent.
+function visitInfoLines(row: any): string[] {
+  return [
     row.address ? 'Dirección: ' + row.address : '',
+    row.address ? 'Mapa: ' + mapsLink(row.address) : '',
     row.agent_name ? 'Agente: ' + row.agent_name : '',
     row.agent_phone ? 'Tel: ' + row.agent_phone : '',
+    row.agent_phone ? 'WhatsApp: ' + waLink(row.agent_phone) : '',
     row.url ? 'Link: ' + row.url : '',
-  ].filter(Boolean).join('\n');
+  ].filter(Boolean);
+}
+function visitIcs(env: Env, row: any, method: 'REQUEST' | 'CANCEL', vd: string): string {
+  const w = icsWindow(vd);
+  const desc = visitInfoLines(row).join('\n');
   const lines = [
     'BEGIN:VCALENDAR',
     'PRODID:-//turikumwe//visitas//ES',
@@ -313,11 +327,8 @@ async function sendInviteMail(env: Env, row: any, method: 'REQUEST' | 'CANCEL', 
   const text = [
     (method === 'CANCEL' ? 'Visita cancelada: ' : 'Visita programada: ') + aptName(row),
     'Fecha: ' + fmtDate(vd) + hhmm(vd),
-    row.address ? 'Dirección: ' + row.address : '',
-    row.agent_name ? 'Agente: ' + row.agent_name : '',
-    row.agent_phone ? 'Tel: ' + row.agent_phone : '',
-    row.url ? 'Link: ' + row.url : '',
-  ].filter(Boolean).join('\n');
+    ...visitInfoLines(row),
+  ].join('\n');
   const tos = inviteTos(env);
   const boundary = 'turikumwe-' + row.id + '-' + Date.now().toString(36);
   const raw = [
@@ -689,8 +700,8 @@ async function buildAptSummary(env: Env): Promise<string> {
       let pr = money(v.price);
       if (v.deal_type === 'rent' && pr) pr += '/mes';
       const bits = [pr, v.area_m2 ? v.area_m2 + ' m²' : ''].filter(Boolean).join(' · ');
-      let s = `• ${aptRef(v)} — ${wdShort(v.visit_date)} ${fmtDate(v.visit_date)}${hhmm(v.visit_date)}${bits ? ' · ' + bits : ''}`;
-      const contact = [v.address ? `📍 ${mdLink(v.address, mapsLink(v.address))}` : '', v.agent_name ? `👤 ${mdEscape(v.agent_name)}` : ''].filter(Boolean).join(' · ');
+      let s = `• ${mdEscape(aptRef(v))} — ${wdShort(v.visit_date)} ${fmtDate(v.visit_date)}${hhmm(v.visit_date)}${bits ? ' · ' + bits : ''}`;
+      const contact = [v.address ? `📍 ${mdLink(v.address, mapsLink(v.address))}` : '', agentBit(v)].filter(Boolean).join(' · ');
       if (contact) s += '\n   ' + contact;
       return s;
     }).join('\n'));
@@ -701,7 +712,7 @@ async function buildAptSummary(env: Env): Promise<string> {
       let pr = money(r.price);
       if (r.deal_type === 'rent' && pr) pr += '/mes';
       const bits = [pr, r.area_m2 ? r.area_m2 + ' m²' : ''].filter(Boolean).join(' · ');
-      return `• ${aptRef(r)}${bits ? ' — ' + bits : ''}`;
+      return `• ${mdEscape(aptRef(r))}${bits ? ' — ' + bits : ''}`;
     });
     if (toSchedule.length > 8) shown.push(`… y ${toSchedule.length - 8} más`);
     out.push('⏳ *Por agendar visita:*\n' + shown.join('\n'));
@@ -716,14 +727,14 @@ async function buildAptSummary(env: Env): Promise<string> {
       // rent shows the all-in monthly (price+admin) so the price matches the ranked $/m²
       const total = dt === 'rent' ? Number(r.price) + Number(r.admin_fee || 0) : r.price;
       const bits = [money(ppm) + '/m²', money(total) + (dt === 'rent' ? '/mes' : ''), r.area_m2 ? r.area_m2 + ' m²' : ''].filter(Boolean).join(' · ');
-      return `• ${aptRef(r)} — ${bits}`;
+      return `• ${mdEscape(aptRef(r))} — ${bits}`;
     }).join('\n'));
   }
   const notes: { d: string; line: string }[] = [];
   for (const r of rows) {
     for (const ln of String(r.notes || '').split('\n')) {
       const m = ln.match(NOTE_LINE_RE);
-      if (m) notes.push({ d: m[1], line: `• ${aptRef(r)}${m[2] ? ' (' + m[2] + ')' : ''}: ${m[3]}` });
+      if (m) notes.push({ d: m[1], line: `• ${mdEscape(aptRef(r))}${m[2] ? ' (' + mdEscape(m[2]) + ')' : ''}: ${mdEscape(m[3])}` });
     }
   }
   if (notes.length) {
@@ -766,7 +777,8 @@ async function buildDigestBody(env: Env, td: string, header: string): Promise<st
       const bits = [pr, v.area_m2 ? v.area_m2 + ' m²' : ''].filter(Boolean).join(' · ');
       let s = `• ${mdEscape(aptRef(v))} — ${stripWarn(dueLabel(v.visit_date, td))}${hhmm(v.visit_date)}${bits ? ' · ' + bits : ''}`;
       if (v.address) s += ` · 📍 ${mdLink(v.address, mapsLink(v.address))}`;
-      if (v.agent_phone) s += ` · 💬 ${mdLink(v.agent_name || v.agent_phone, waLink(v.agent_phone))}`;
+      const ab = agentBit(v);
+      if (ab) s += ' · ' + ab;
       return s;
     }).join('\n'));
   }

@@ -67,7 +67,10 @@ wrangler + typescript only. HTML screens are static files imported as text.
 7. **Twinned client/server logic stays in sync**: `mapsLink`/`waLink` and the
    effective-$/m² math (`aptPpm` ↔ `ppmOf`) exist in both `index.ts` and
    `apartments.html`. Rent compares `(price+admin)/m²`; buy uses the stored
-   sale `price_per_m2`.
+   sale `price_per_m2`. Contact info renders through one helper per side —
+   `contactLines` (web) / `agentBit` (Telegram text) — and the idiom is fixed:
+   the address opens Maps, the phone deep-links to WhatsApp (the web adds a
+   plain `tel:` fallback). Don't hand-roll a second contact markup.
 8. **Identity is canonicalized.** `canonVoter` maps Access email local-parts
    and Telegram first names onto `felipe`/`lucia` (unknowns fall back to the
    normalized first token). Web vote/note authorship always comes from the
@@ -252,7 +255,10 @@ only a person explicitly changing the visit date cancels or moves it (the
 web `set_visit` action works on a `ruled_out` row too, on purpose — it's the
 manual override). Stable `UID:visit-<id>@turikumwe.cc` + epoch-seconds
 `SEQUENCE` makes reschedules replace rather than duplicate. RFC 5545 line
-folding is UTF-8-safe; headers use RFC 2047 for accents. `visitMail` never
+folding is UTF-8-safe; headers use RFC 2047 for accents. The DESCRIPTION and
+the plain-text mail body share one fact sheet (`visitInfoLines`) that carries
+Maps and WhatsApp URLs — calendar apps linkify them, so on visit day the
+event itself navigates and opens the agent chat. `visitMail` never
 throws — mail failure becomes a ⚠️ suffix on the ack, not a broken visit
 update.
 
