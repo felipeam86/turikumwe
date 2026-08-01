@@ -38,16 +38,24 @@ wrangler + typescript only. HTML screens are static files imported as text.
    `ctx.waitUntil` and returns `ok` immediately — otherwise Telegram retries
    and duplicates every message. Messages from any chat other than
    `GROUP_CHAT_ID` are dropped.
-2. **One implementation per mutation.** Rule-out, reactivate, notes, and
-   votes (`ruleOutApt`, `reactivateApt`, `appendAptNote`, `upsertVote`) are
-   shared by all three entry points: Claude-parsed ops, inline-button
-   callbacks, and web actions. Concurrency/idempotency lives there too — a
-   status predicate on the `UPDATE` plus a `meta.changes` check means only
-   the tap that actually flips the row announces; stale taps answer "ya
-   estaba hecho". The invite/cancel mail decision (`visitMail`) is separate
+2. **One implementation per mutation.** Rule-out, reactivate, notes, votes,
+   and visit changes (`ruleOutApt`, `reactivateApt`, `appendAptNote`,
+   `upsertVote`, `setVisit`) are shared by every entry point: Claude-parsed
+   ops, inline-button callbacks, web actions (and MCP for notes). Each
+   returns the post-mutation row — callers never re-read it — or null on a
+   miss. Concurrency/idempotency lives there too — a status predicate on
+   the `UPDATE` plus a `meta.changes` check means only the tap that
+   actually flips the row announces; stale taps answer "ya estaba hecho".
+   The invite/cancel mail decision (`visitMail`) lives inside `setVisit`
    and fires only on an explicit `visit_date` change — rule-out and
-   reactivate deliberately never call it, so discarding an apartment never
+   reactivate deliberately never touch it, so discarding an apartment never
    touches its calendar invite; only a person editing the visit date does.
+   `setVisit`'s `activeOnly` option is the policy seam: the Telegram ops
+   path passes it (active rows only), the web omits it — the manual
+   override (§8). The group announcement for any of these mutations is
+   built ONLY by `aptAnnounce`, which owns the emoji, the escaped `aptRef`,
+   and the keyboard; callers pass their attribution suffix (`via`, already
+   Markdown-safe) and only choose the delivery channel.
 3. **Telegram Markdown is legacy mode and hostile.** Free text (addresses,
    names, scraped titles/URLs) is interpolated only through `mdEscape`;
    links through `mdLink`; raw URLs never go bare in text. `tgSend` retries
@@ -62,8 +70,11 @@ wrangler + typescript only. HTML screens are static files imported as text.
    -05:00. Don't introduce real timezone libraries.
 6. **Failures surface, never mask.** Blocked scrape → row saved with
    `scrape_status` + a "Releer" button; Claude parse error → "envíalo otra
-   vez" reply; invite-mail error → "⚠️ no pude enviar el correo" ack suffix;
-   unknown geocode → cached as a miss so it isn't retried every load.
+   vez" reply; a malformed or unimplemented op → "⚠️ No entendí…" ack line
+   (`executeOps`' terminal else — only `{"action":"none"}` is deliberate
+   silence); a missed apartment id → "❓ No encontré…"; invite-mail error →
+   "⚠️ no pude enviar el correo" ack suffix; unknown geocode → cached as a
+   miss so it isn't retried every load.
 7. **Twinned client/server logic stays in sync**: `mapsLink`/`waLink`, the
    effective-$/m² math (`aptPpm` ↔ `ppmOf`), and the price+area line
    (`priceAreaBits` — rent quotes the all-in monthly `price+admin`) exist in
@@ -96,11 +107,12 @@ wrangler.toml        infra: custom domain turikumwe.cc, 3 crons, D1 binding DB,
                      send_email binding INVITE_MAIL, vars (GROUP_CHAT_ID, INVITE_FROM/TO)
 schema.sql           the only schema definition (4 tables) — CREATE TABLE IF NOT EXISTS
 src/
-  index.ts           ALL logic (~1500 lines): date helpers, votes, geocoding,
+  index.ts           ALL logic (~1600 lines): date helpers, votes, geocoding,
                      WhatsApp/maps links, iCalendar invites + MIME mail, db helpers,
                      Telegram send/callback/typing, Claude client, apartment
-                     ingest/scrape/extract/rescrape, summary, digest, crons,
-                     update handling (ops parser prompt lives here), web routes
+                     ingest/scrape/extract/rescrape, shared mutations + aptAnnounce,
+                     summary, digest, crons, ops vocabulary (OP_LINES) + executeOps,
+                     update handling, web routes
   apartments.html    apartment screen: list + table views (a row tap or the table
                      thumbnail opens the full card — inline or in a modal; no card
                      gallery), inline edits, map (OSM tiles), photo strip
@@ -169,9 +181,14 @@ against accidents, not adversaries.
    "envíalo aparte" warning). One ack + keyboard per URL.
 5. Plain text → Claude ops parser (`{"ops":[...]}` against the live OPEN
    ITEMS / APARTMENTS / RULED OUT lists, plus the replied-to apartment when
-   present). Actions: add / complete / remove / query / none / rescrape /
-   set_visit / rule_out / reactivate / apt_note / apt_vote / apt_summary.
-   Unknown categories coerce to `general` so nothing is dropped.
+   present). The op vocabulary is `OP_LINES` — ONE table whose values are
+   the prompt's op-spec lines and whose keys `executeOps` implements:
+   add / complete / remove / query / none / rescrape / set_visit /
+   rule_out / reactivate / apt_note / apt_vote / apt_summary. `executeOps`
+   runs the parsed ops and returns the ack lines (the seam: ops in, ack
+   out). Unknown categories coerce to `general` so nothing is dropped; an
+   op that is malformed or not implemented is acked "no entendí" — never
+   dropped silently (invariant 6).
 
 ### Apartment ingestion pipeline
 
@@ -247,14 +264,16 @@ logs and does nothing (never guess — a wrong guess spams the group).
 
 ## 8. Calendar invites
 
-Setting/clearing a future `visit_date` (from any entry point) emails an
-iCalendar REQUEST/CANCEL to both people via the `send_email` binding
-(recipients must be verified in the zone's Email Routing settings). **Ruling
-out or reactivating an apartment never sends this mail** — a discarded
-apartment keeps its `visit_date` and calendar invite exactly as they were;
-only a person explicitly changing the visit date cancels or moves it (the
-web `set_visit` action works on a `ruled_out` row too, on purpose — it's the
-manual override). Stable `UID:visit-<id>@turikumwe.cc` + epoch-seconds
+Setting/clearing a future `visit_date` (from any entry point, always through
+`setVisit`) emails an iCalendar REQUEST/CANCEL to both people via the
+`send_email` binding (recipients must be verified in the zone's Email
+Routing settings). "Future" means today or later, wall-clock — the
+`visitUpcoming` predicate, the same guard the web "reenviar invitación"
+re-send uses. **Ruling out or reactivating an apartment never sends this
+mail** — a discarded apartment keeps its `visit_date` and calendar invite
+exactly as they were; only a person explicitly changing the visit date
+cancels or moves it (the web omits `setVisit`'s `activeOnly` option on
+purpose — it's the manual override and works on a `ruled_out` row too). Stable `UID:visit-<id>@turikumwe.cc` + epoch-seconds
 `SEQUENCE` makes reschedules replace rather than duplicate. RFC 5545 line
 folding is UTF-8-safe; headers use RFC 2047 for accents. The DESCRIPTION and
 the plain-text mail body share one fact sheet (`visitInfoLines`) that carries

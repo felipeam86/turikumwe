@@ -65,8 +65,16 @@ means the change is incomplete.
   raw URLs never go bare in message text. Links belong in inline url buttons
   when possible (buttons never touch the parser).
 - **Shared mutations have ONE implementation.** `ruleOutApt` / `reactivateApt`
-  / `appendAptNote` / `upsertVote` / `visitMail` serve the Telegram ops loop,
-  the callback buttons, AND the web actions. Don't fork a second path.
+  / `appendAptNote` / `upsertVote` / `setVisit` serve the Telegram ops loop,
+  the callback buttons, the web actions (and MCP for notes). Each returns the
+  post-mutation row — don't re-read it, don't fork a second path. Their group
+  announcements are built ONLY by `aptAnnounce` (it owns the emoji, `aptRef`
+  escaping, and the keyboard); the invite/cancel mail decision (`visitMail`)
+  lives inside `setVisit`.
+- **Telegram ops have ONE vocabulary.** `OP_LINES` drives both the parser
+  prompt and `executeOps`' dispatch; a malformed or unimplemented op is acked
+  «no entendí», never dropped silently. New op → one `OP_LINES` entry + one
+  `executeOps` branch.
 - **Some logic is deliberately twinned across server and web page** —
   `mapsLink`/`waLink`, the $/m² math, and `priceAreaBits` (all-in monthly
   for rent) exist in both `index.ts` and `apartments.html`. Change one →
