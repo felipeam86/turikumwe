@@ -790,10 +790,7 @@ function beginEdit(td){
 }
 function saveField(id,field,type,val){
   var body=(type==="visit")?{action:"set_visit",id:id,visit_date:val||null}:{action:"edit",id:id,field:field,value:val};
-  action(body).then(function(res){
-    if(res&&res.ok){toast("Guardado ✓");}else{toast("Error al guardar");}
-    return load();
-  }).catch(function(){toast("Error de red");render();});
+  saveAction(body,"Guardado ✓");
 }
 function tableView(rows){
   if(!rows.length)return "<div class=\"empty\">Sin apartamentos activos.</div>";
@@ -820,7 +817,10 @@ var OPEN_ROW=null;
 function effView(){return VIEW;}
 // ---- edit sheet (address / agent / phone / tag), shared by cards + table ----
 var EDIT_ID=null;
-function findApt(id){var all=(DATA.apartments||[]).concat(DATA.ruledOut||[]);for(var i=0;i<all.length;i++)if(all[i].id===id)return all[i];return null;}
+// the activos+descartados union — lookups, map pins and the sin-geo counter must all see the
+// same set (the DATA.apartments-only sites elsewhere are active-only on purpose)
+function allRows(){return (DATA.apartments||[]).concat(DATA.ruledOut||[]);}
+function findApt(id){var all=allRows();for(var i=0;i<all.length;i++)if(all[i].id===id)return all[i];return null;}
 function openEdit(id){
   var r=findApt(id);if(!r)return;EDIT_ID=id;
   document.getElementById("e_address").value=r.address||"";
@@ -1132,7 +1132,7 @@ function ruledSection(list){
 // against showing a stale pin while a freshly edited address is still being looked up
 var MAP=null,MAP_LAYER=null,MAP_KEY="";
 function mapRows(){
-  var out=[],rows=(DATA.apartments||[]).concat(DATA.ruledOut||[]);
+  var out=[],rows=allRows();
   for(var i=0;i<rows.length;i++){var r=rows[i];
     if(r.address&&r.geo_lat!=null&&r.geo_lng!=null&&r.geo_address===r.address)out.push(r);
   }
@@ -1157,7 +1157,7 @@ function updateMap(){
   var rows=mapRows();
   if(!rows.length){sect.style.display="none";return;}
   // addresses the geocoder hasn't placed (yet, or not found) — say so instead of silently missing pins
-  var all=(DATA.apartments||[]).concat(DATA.ruledOut||[]),noGeo=0;
+  var all=allRows(),noGeo=0;
   for(var i=0;i<all.length;i++){var r=all[i];
     if(r.address&&!(r.geo_lat!=null&&r.geo_lng!=null&&r.geo_address===r.address))noGeo++;
   }
@@ -1272,13 +1272,20 @@ function load(){return fetch("apartments-data.json").then(function(r){if(!r.ok)t
 // a full-page reload (href="") lets Cloudflare Access run its login redirect, which fetch cannot follow
 function showRetry(){document.getElementById("sub").innerHTML="No se pudo cargar · <a href=\"\" style=\"color:var(--accent)\">Reintentar</a>";}
 function action(body){return fetch("apartments-action",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json();});}
+// THE quick-action tail: ok → toast + reload; server said no → failMsg (still reloads, so the row
+// shows the real state); network died (incl. offline) → "Error de red" + re-render from cached DATA,
+// so a failed tap in an elevator reverts visibly instead of lying. Actions that read extra fields
+// off the response (vo, rs, iv, the modal saves) keep their own tails.
+function saveAction(body,okMsg,failMsg){
+  return action(body).then(function(res){
+    toast(res&&res.ok?okMsg:(failMsg||"Error al guardar"));
+    return load();
+  }).catch(function(){toast("Error de red");render();});
+}
 document.addEventListener("change",function(e){
   var el=e.target;if(!el.classList||!el.classList.contains("vd"))return;
   var id=Number(el.getAttribute("data-id"));
-  action({action:"set_visit",id:id,visit_date:el.value||null}).then(function(res){
-    if(res&&res.ok){toast(el.value?"Visita fijada":"Visita borrada");}else{toast("Error al guardar");}
-    return load(); // success → refresh the visits strip
-  }).catch(function(){toast("Error de red");render();}); // failure (incl. offline) → revert input from cached DATA
+  saveAction({action:"set_visit",id:id,visit_date:el.value||null},el.value?"Visita fijada":"Visita borrada");
 });
 document.addEventListener("click",function(e){
   var el=e.target;if(!el.classList)return;
@@ -1364,11 +1371,8 @@ document.addEventListener("click",function(e){
     var note=up?"👍 nos gustó":"👎 no nos gustó";
     el.disabled=true;
     action({action:"vote",id:id,vote:up?"up":"down",quiet:true}).catch(function(){}).then(function(){
-      return action({action:"apt_note",id:id,note:note});
-    }).then(function(res){
-      if(res&&res.ok){toast("Guardado ✓");}else{toast("Error al guardar");}
-      return load();
-    }).catch(function(){toast("Error de red");render();});
+      return saveAction({action:"apt_note",id:id,note:note},"Guardado ✓");
+    });
     return;
   }
   if(el.classList.contains("vo")){
@@ -1392,10 +1396,7 @@ document.addEventListener("click",function(e){
   if(el.classList.contains("ntdel")){
     var raw;try{raw=unb64u(el.getAttribute("data-line")||"");}catch(err){return;}
     el.disabled=true;
-    action({action:"apt_note_del",id:Number(el.getAttribute("data-id")),line:raw}).then(function(res){
-      if(res&&res.ok){toast("Nota borrada");}else{toast("Error al borrar");}
-      return load();
-    }).catch(function(){toast("Error de red");render();});
+    saveAction({action:"apt_note_del",id:Number(el.getAttribute("data-id")),line:raw},"Nota borrada","Error al borrar");
     return;
   }
   if(el.classList.contains("chip")){
@@ -1426,10 +1427,7 @@ document.addEventListener("click",function(e){
   if(el.classList.contains("re")){
     var id=Number(el.getAttribute("data-id"));
     el.disabled=true;el.textContent="…";
-    action({action:"reactivate",id:id}).then(function(res){
-      if(res&&res.ok){toast("De vuelta en la lista ↩️");}else{toast("Error");}
-      return load();
-    }).catch(function(){toast("Error de red");render();});
+    saveAction({action:"reactivate",id:id},"De vuelta en la lista ↩️","Error");
     return;
   }
 });

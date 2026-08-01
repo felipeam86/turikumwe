@@ -660,7 +660,10 @@ function apartmentAck(rec: any): string {
   if (f.bedrooms != null) specs.push('🛏 ' + f.bedrooms + ' hab');
   if (f.bathrooms != null) specs.push('🛁 ' + f.bathrooms + ' baños');
   if (f.area_m2 != null) specs.push('📐 ' + f.area_m2 + ' m²');
-  if (rec.ppm) specs.push('≈' + money(rec.ppm) + '/m²');
+  // effective $/m² via aptPpm (all-in for rent) — the raw rec.ppm would disagree with the
+  // web card and the 🏆 ranking, the numbers this ack gets compared against
+  const ppmShown = aptPpm({ deal_type: dt, price: f.price, admin_fee: f.admin_fee, area_m2: f.area_m2, price_per_m2: rec.ppm });
+  if (ppmShown) specs.push('≈' + money(ppmShown) + '/m²');
   if (specs.length) lines.push(specs.join(' · '));
   const extra: string[] = [];
   if (f.admin_fee != null) extra.push('🏢 Admin ' + money(f.admin_fee));
@@ -682,6 +685,13 @@ function aptPpm(r: any): number | null {
   }
   return (r.price_per_m2 && r.price_per_m2 > 0) ? r.price_per_m2 : null;
 }
+// price + area line — twin of priceAreaBits in apartments.html: rent shows the all-in monthly
+// (price+admin), so every Telegram line quotes the same number as the web card headline
+function priceAreaBits(r: any): string {
+  const isRent = r.deal_type === 'rent';
+  const total = (isRent && r.price != null) ? Number(r.price) + Number(r.admin_fee || 0) : r.price;
+  return [total != null ? money(total) + (isRent ? '/mes' : '') : '', r.area_m2 ? r.area_m2 + ' m²' : ''].filter(Boolean).join(' · ');
+}
 // "mar" for a YYYY-MM-DD(THH:MM) wall-clock date — UTC-anchored so the date never shifts
 const wdShort = (iso: string) => new Intl.DateTimeFormat('es-CO', { timeZone: 'UTC', weekday: 'short' }).format(new Date(iso.slice(0, 10) + 'T00:00:00Z'));
 // note lines are "YYYY-MM-DD: text" or "YYYY-MM-DD [Autor]: text"
@@ -697,9 +707,7 @@ async function buildAptSummary(env: Env): Promise<string> {
     .sort((a: any, b: any) => String(a.visit_date) < String(b.visit_date) ? -1 : 1).slice(0, 5);
   if (visits.length) {
     out.push('📅 *Próximas visitas:*\n' + visits.map((v: any) => {
-      let pr = money(v.price);
-      if (v.deal_type === 'rent' && pr) pr += '/mes';
-      const bits = [pr, v.area_m2 ? v.area_m2 + ' m²' : ''].filter(Boolean).join(' · ');
+      const bits = priceAreaBits(v);
       let s = `• ${mdEscape(aptRef(v))} — ${wdShort(v.visit_date)} ${fmtDate(v.visit_date)}${hhmm(v.visit_date)}${bits ? ' · ' + bits : ''}`;
       const contact = [v.address ? `📍 ${mdLink(v.address, mapsLink(v.address))}` : '', agentBit(v)].filter(Boolean).join(' · ');
       if (contact) s += '\n   ' + contact;
@@ -709,9 +717,7 @@ async function buildAptSummary(env: Env): Promise<string> {
   const toSchedule = active.filter((r: any) => !r.visit_date);
   if (toSchedule.length) {
     const shown = toSchedule.slice(0, 8).map((r: any) => {
-      let pr = money(r.price);
-      if (r.deal_type === 'rent' && pr) pr += '/mes';
-      const bits = [pr, r.area_m2 ? r.area_m2 + ' m²' : ''].filter(Boolean).join(' · ');
+      const bits = priceAreaBits(r);
       return `• ${mdEscape(aptRef(r))}${bits ? ' — ' + bits : ''}`;
     });
     if (toSchedule.length > 8) shown.push(`… y ${toSchedule.length - 8} más`);
@@ -769,12 +775,10 @@ async function buildDigestBody(env: Env, td: string, header: string): Promise<st
     out.push(`${CAT_EMOJI[cat]} *${CAT_LABEL[cat]}:*\n` + rows.join('\n'));
   }
   // upcoming apartment visits live in the apartments table, not items
-  const visits = await all(env, "SELECT location, title, source_site, id, visit_date, address, agent_name, agent_phone, price, area_m2, deal_type FROM apartments WHERE status='active' AND visit_date>=? ORDER BY visit_date", td);
+  const visits = await all(env, "SELECT location, title, source_site, id, visit_date, address, agent_name, agent_phone, price, admin_fee, area_m2, deal_type FROM apartments WHERE status='active' AND visit_date>=? ORDER BY visit_date", td);
   if (visits.length) {
     out.push('🏢 *Visitas de apartamentos:*\n' + visits.map((v: any) => {
-      let pr = money(v.price);
-      if (v.deal_type === 'rent' && pr) pr += '/mes';
-      const bits = [pr, v.area_m2 ? v.area_m2 + ' m²' : ''].filter(Boolean).join(' · ');
+      const bits = priceAreaBits(v);
       let s = `• ${mdEscape(aptRef(v))} — ${stripWarn(dueLabel(v.visit_date, td))}${hhmm(v.visit_date)}${bits ? ' · ' + bits : ''}`;
       if (v.address) s += ` · 📍 ${mdLink(v.address, mapsLink(v.address))}`;
       const ab = agentBit(v);
@@ -812,8 +816,13 @@ async function sendVisitReminders(env: Env) {
     now, plusMinutes(now, 90));
   for (const r of rows) {
     const lines = [`🔔 *Visita en ~1h — ${String(r.visit_date).slice(11, 16)}* · *${mdEscape(aptName(r))}* #${r.id}`];
+    const bits = priceAreaBits(r); // the asking price in hand when walking in — same number as the web card
+    if (bits) lines.push(`💰 ${bits}`);
     if (r.address) lines.push(`📍 ${mdLink(r.address, mapsLink(r.address))}`);
     if (r.agent_name) lines.push(`👤 ${mdEscape(r.agent_name)}`);
+    // the plain number is the dial fallback: Telegram makes it tap-to-call, and tel: is not
+    // allowed in inline url buttons — the 💬 button below stays the WhatsApp path
+    if (r.agent_phone) lines.push(`📞 ${mdEscape(r.agent_phone)}`);
     // the links live in buttons (url buttons never touch the Markdown parser)
     const row1: TgBtn[] = [];
     if (r.address) row1.push({ text: '🗺 Cómo llegar', url: mapsLink(r.address) });
@@ -838,7 +847,8 @@ async function sendPostVisitFollowup(env: Env) {
     await tgSend(env, `🗣 ¿Cómo les fue en *${mdEscape(aptName(r))}* #${r.id}? Un toque para el veredicto, o respondan a este mensaje y lo guardo como nota.`,
       undefined, kb([
         [{ text: '👍 Nos gustó', callback_data: 'up:' + r.id }, { text: '👎 No', callback_data: 'dn:' + r.id }],
-        [{ text: '🚫 Descartar', callback_data: 'ro:' + r.id }],
+        // the debrief is when the pending question for the agent comes up — one tap to ask it
+        [{ text: '🚫 Descartar', callback_data: 'ro:' + r.id }, ...(r.agent_phone ? [{ text: '💬 Agente', url: waLink(r.agent_phone) }] : [])],
       ]));
   }
 }
@@ -1181,7 +1191,8 @@ async function handleUpdate(env: Env, update: any) {
       lines.unshift('🔄 *Listo — releí ' + rr.updated.length + ' apartamento(s):*\n' + rr.updated.map((u: any) => {
         const loc = (u.f.location || u.f.title || 'apto') + ' #' + u.id;
         let pr = money(u.f.price); if (u.dt === 'rent' && pr) pr += '/mes';
-        const bits = [pr, u.ppm ? ('≈' + money(u.ppm) + '/m²') : '', u.f.area_m2 ? (u.f.area_m2 + ' m²') : ''].filter(Boolean).join(' · ');
+        const ppmShown = aptPpm({ deal_type: u.dt, price: u.f.price, admin_fee: u.f.admin_fee, area_m2: u.f.area_m2, price_per_m2: u.ppm });
+        const bits = [pr, ppmShown ? ('≈' + money(ppmShown) + '/m²') : '', u.f.area_m2 ? (u.f.area_m2 + ' m²') : ''].filter(Boolean).join(' · ');
         return '• ' + loc + (bits ? (' — ' + bits) : '') + priceChangeNote(u.priceChange);
       }).join('\n'));
     }

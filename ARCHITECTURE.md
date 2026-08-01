@@ -64,10 +64,11 @@ wrangler + typescript only. HTML screens are static files imported as text.
    `scrape_status` + a "Releer" button; Claude parse error → "envíalo otra
    vez" reply; invite-mail error → "⚠️ no pude enviar el correo" ack suffix;
    unknown geocode → cached as a miss so it isn't retried every load.
-7. **Twinned client/server logic stays in sync**: `mapsLink`/`waLink` and the
-   effective-$/m² math (`aptPpm` ↔ `ppmOf`) exist in both `index.ts` and
-   `apartments.html`. Rent compares `(price+admin)/m²`; buy uses the stored
-   sale `price_per_m2`. Contact info renders through one helper per side —
+7. **Twinned client/server logic stays in sync**: `mapsLink`/`waLink`, the
+   effective-$/m² math (`aptPpm` ↔ `ppmOf`), and the price+area line
+   (`priceAreaBits` — rent quotes the all-in monthly `price+admin`) exist in
+   both `index.ts` and `apartments.html`. Rent compares `(price+admin)/m²`;
+   buy uses the stored sale `price_per_m2`. Contact info renders through one helper per side —
    `contactLines` (web) / `agentBit` (Telegram text) — and the idiom is fixed:
    the address opens Maps, the phone deep-links to WhatsApp (the web adds a
    plain `tel:` fallback). Don't hand-roll a second contact markup.
@@ -237,7 +238,7 @@ Applied one-off `ALTER`s on `apartments`, in order (a fresh
 | Cron (UTC) | Bogota | What |
 |---|---|---|
 | `30 12 * * *` | 07:30 | `sendDigest` — full pendientes digest to the group |
-| `0 0 * * *` | 19:00 | `sendEveningReminder` (only if something is due/overdue) + `sendPostVisitFollowup` (per visited-today apartment, with 👍/👎/🚫 buttons) |
+| `0 0 * * *` | 19:00 | `sendEveningReminder` (only if something is due/overdue) + `sendPostVisitFollowup` (per visited-today apartment, with 👍/👎/🚫 buttons + a 💬 WhatsApp url button when the agent's phone is stored) |
 | `0 * * * *` | hourly | `sendVisitReminders` — ~1 h before each timed visit; 90-min lookahead + `visit_reminder_sent` guarantees exactly one reminder per scheduled datetime |
 
 At 00:00 UTC the evening and hourly crons both fire as separate invocations —
