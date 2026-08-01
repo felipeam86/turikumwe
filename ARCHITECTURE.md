@@ -259,7 +259,10 @@ manual override). Stable `UID:visit-<id>@turikumwe.cc` + epoch-seconds
 folding is UTF-8-safe; headers use RFC 2047 for accents. The DESCRIPTION and
 the plain-text mail body share one fact sheet (`visitInfoLines`) that carries
 Maps and WhatsApp URLs — calendar apps linkify them, so on visit day the
-event itself navigates and opens the agent chat. `visitMail` never
+event itself navigates and opens the agent chat. LOCATION and the Dirección
+line carry the Bogotá-anchored address (`bogotaAddr`, the same anchor every
+maps link gets): calendar apps geocode LOCATION on tap, and a bare street
+address resolves in whatever city the reader is standing in. `visitMail` never
 throws — mail failure becomes a ⚠️ suffix on the ack, not a broken visit
 update.
 

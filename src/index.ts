@@ -108,11 +108,15 @@ function decodeHtml(s: string): string {
   return s.replace(/&amp;/g, '&').replace(/&#0*38;/g, '&').replace(/&quot;/g, '"').replace(/&#0*39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
 }
 // server-side twins of mapsLink/waLink in apartments.html — keep both pairs in sync.
-// Maps: anchor the query to Bogotá so a bare street address doesn't resolve elsewhere.
+// EVERY address that leaves the system for a geocoder must carry the city anchor — a bare
+// street address resolves to whatever city the reader is standing in. That means maps links
+// AND the ICS LOCATION/Dirección fields (calendar apps geocode LOCATION on tap).
+function bogotaAddr(addr: string): string {
+  const a = String(addr || '').trim();
+  return a && !/bogot[aá]/i.test(a) ? a + ', Bogotá' : a;
+}
 function mapsLink(addr: string): string {
-  let a = String(addr || '').trim();
-  if (a && !/bogot[aá]/i.test(a)) a += ', Bogotá';
-  return 'https://maps.google.com/?q=' + encodeURIComponent(a);
+  return 'https://maps.google.com/?q=' + encodeURIComponent(bogotaAddr(addr));
 }
 // ---- geocoding (OSM/Overpass — keyless, results cached in the row) ----
 // A Bogotá address names a CROSSING, not a point: "Carrera 18 No 82-24" is on Carrera 18 near
@@ -273,7 +277,7 @@ const inviteTos = (env: Env) => env.INVITE_TO.split(',').map((s) => s.trim()).fi
 // to the door and opens the chat with the agent.
 function visitInfoLines(row: any): string[] {
   return [
-    row.address ? 'Dirección: ' + row.address : '',
+    row.address ? 'Dirección: ' + bogotaAddr(row.address) : '',
     row.address ? 'Mapa: ' + mapsLink(row.address) : '',
     row.agent_name ? 'Agente: ' + row.agent_name : '',
     row.agent_phone ? 'Tel: ' + row.agent_phone : '',
@@ -304,7 +308,7 @@ function visitIcs(env: Env, row: any, method: 'REQUEST' | 'CANCEL', vd: string):
     w.allDay ? `DTSTART;VALUE=DATE:${w.start}` : `DTSTART;TZID=${TZ}:${w.start}`,
     w.allDay ? `DTEND;VALUE=DATE:${w.end}` : `DTEND;TZID=${TZ}:${w.end}`,
     'SUMMARY:' + icsEscape('Visita: ' + aptName(row)),
-    ...(row.address ? ['LOCATION:' + icsEscape(row.address)] : []),
+    ...(row.address ? ['LOCATION:' + icsEscape(bogotaAddr(row.address))] : []),
     ...(desc ? ['DESCRIPTION:' + icsEscape(desc)] : []),
     'STATUS:' + (method === 'CANCEL' ? 'CANCELLED' : 'CONFIRMED'),
     'END:VEVENT',
