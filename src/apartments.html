@@ -345,6 +345,20 @@ function priceAreaBits(r){
 function waLink(phone){var d=String(phone||"").replace(/\D/g,"");if(d.length===10&&d.charAt(0)==="3")d="57"+d;return "https://wa.me/"+d;}
 // anchor the query to Bogotá so a bare street address doesn't resolve to the same one in another city
 function mapsLink(addr){var a=String(addr||"").trim();if(a&&!/bogot[aá]/i.test(a))a+=", Bogotá";return "https://maps.google.com/?q="+encodeURIComponent(a);}
+// THE contact block — every surface that prints address/agent/phone uses these lines, so the
+// idiom is identical everywhere: address opens Maps, the number itself opens WhatsApp (how
+// agents actually get reached mid-visit), with a plain dial link as the fallback.
+function contactLines(r){
+  var out=[];
+  if(r.address)out.push("📍 <a class=\"tel\" href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\">"+esc(r.address)+"</a>");
+  if(r.agent_name)out.push("👤 "+esc(r.agent_name));
+  if(r.agent_phone)out.push("💬 <a class=\"tel\" href=\""+esc(waLink(r.agent_phone))+"\" target=\"_blank\" rel=\"noopener\">"+esc(r.agent_phone)+"</a> · <a class=\"tel\" href=\"tel:"+esc(r.agent_phone)+"\">📞 llamar</a>");
+  return out;
+}
+// datetime-local needs YYYY-MM-DDTHH:MM; pad legacy date-only visits with an editable 09:00 default
+function vdVal(vd){var v=vd?String(vd):"";return (v&&v.indexOf("T")<0)?v+"T09:00":v;}
+// og:image thumb with the no-image fallback, shared by the list row and the table cell
+function thumbHtml(r){return r.image_url?"<img class=\"thumb\" src=\""+esc(r.image_url)+"\" loading=\"lazy\" alt=\"\" onerror=\"this.className='thumb noimg';this.removeAttribute('src')\">":"<span class=\"thumb noimg\"></span>";}
 function mny(n){return (n==null||isNaN(Number(n)))?"—":"$"+Number(n).toLocaleString("es-CO");}
 function toast(t){var el=document.getElementById("toast");el.textContent=t;el.classList.add("show");setTimeout(function(){el.classList.remove("show");},1800);}
 function num(v){return v==null?"—":v;}
@@ -483,6 +497,19 @@ function voteFlag(r){
   if(st==="split")return "<span class=\"flag split\">👍/👎</span>";
   return "";
 }
+// the status-pill cluster (sin leer / nuevo / stage / price move / verdict / deal type) shared
+// by the full card and the list row; compact shrinks the agreement pill to the bare 💚
+function pillsOf(r,withDeal,compact){
+  var f=(r.scrape_status&&r.scrape_status!=="ok")?"<span class=\"flag\">sin leer</span>":"";
+  // "nuevo" pill for 48h so a freshly shared listing is findable despite the $/m² sort
+  if(r.created_at&&Date.now()-Date.parse(r.created_at)<48*3600*1000)f+="<span class=\"flag new\">nuevo</span>";
+  f+=stageChip(r); // scheduled chips carry the visit date, so no separate date pill needed
+  f+=priceFlag(r);
+  f+=compact?(voteState(r)==="both"?"<span class=\"flag both\">💚</span>":voteState(r)==="split"?"<span class=\"flag split\">👍/👎</span>":""):voteFlag(r);
+  // Estado grouping mixes rent and buy in one section — say which is which on the row itself
+  if(withDeal&&(r.deal_type==="rent"||r.deal_type==="buy"))f+="<span class=\"flag mut\">"+(r.deal_type==="rent"?"arriendo":"compra")+"</span>";
+  return f;
+}
 // hunt-pipeline stage of an active apartment: no visit set => still to schedule; a set visit is
 // upcoming or already passed (visitCmp pads date-only visits to end-of-day; wall-clock compare)
 function stageOf(r){
@@ -522,18 +549,9 @@ function noteLines(r){
 function card(r,best,isRent,withDeal,bare){
   var ppm=ppmOf(r,isRent);
   var isBest=best&&ppm===best;
-  var flag=(r.scrape_status&&r.scrape_status!=="ok")?"<span class=\"flag\">sin leer</span>":"";
-  // "nuevo" pill for 48h so a freshly shared listing is findable despite the $/m² sort
-  if(r.created_at&&Date.now()-Date.parse(r.created_at)<48*3600*1000)flag+="<span class=\"flag new\">nuevo</span>";
-  flag+=stageChip(r);
-  flag+=priceFlag(r);
-  flag+=voteFlag(r);
-  // Estado grouping mixes rent and buy in one section — say which is which on the card itself
-  if(withDeal&&(r.deal_type==="rent"||r.deal_type==="buy"))flag+="<span class=\"flag mut\">"+(r.deal_type==="rent"?"arriendo":"compra")+"</span>";
+  var flag=pillsOf(r,withDeal,false);
   var sub=(r.title&&r.location)?"<div class=\"sub2\">"+esc(r.title)+"</div>":"";
   var vd=r.visit_date?esc(r.visit_date):"";
-  // datetime-local needs YYYY-MM-DDTHH:MM; pad legacy date-only visits with an editable 09:00 default
-  var vdInput=(vd&&vd.indexOf("T")<0)?vd+"T09:00":vd;
   // bare: the modal copy of a card must not repeat the table row's #apt- anchor id
   var h="<div class=\"apt\""+(bare?"":" id=\"apt-"+r.id+"\"")+">";
   if(r.image_url)h+="<img class=\"photo\" src=\""+esc(r.image_url)+"\" loading=\"lazy\" alt=\"\" onerror=\"this.remove()\">";
@@ -573,15 +591,12 @@ function card(r,best,isRent,withDeal,bare){
   var rn=(r.raw_note||"").replace(/https?:\/\/\S+/g,"").trim();
   if(rn)h+="<div class=\"note\">“"+esc(rn)+"”</div>";
   if(r.notes)h+="<div class=\"note\">"+noteLines(r)+"</div>";
-  var contact=[];
-  if(r.address)contact.push("📍 <a class=\"tel\" href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\">"+esc(r.address)+"</a>");
-  if(r.agent_name)contact.push("👤 "+esc(r.agent_name));
-  if(r.agent_phone)contact.push("📞 <a class=\"tel\" href=\"tel:"+esc(r.agent_phone)+"\">"+esc(r.agent_phone)+"</a>");
+  var contact=contactLines(r);
   if(contact.length)h+="<div class=\"contact\">"+contact.join("<br>")+"</div>";
   h+=voteRow(r);
   // a stored date without T means the time isn't agreed yet — say so instead of showing the padded 09:00 as fact
   var tbd=(vd&&vd.indexOf("T")<0)?"<span class=\"tbd\">hora por definir</span>":"";
-  h+="<div class=\"visit\"><span class=\"k\">Visita"+tbd+"</span><input type=\"datetime-local\" data-id=\""+r.id+"\" class=\"vd\" value=\""+vdInput+"\"></div>";
+  h+="<div class=\"visit\"><span class=\"k\">Visita"+tbd+"</span><input type=\"datetime-local\" data-id=\""+r.id+"\" class=\"vd\" value=\""+vdVal(vd)+"\"></div>";
   h+="<div class=\"ctrl\"><button class=\"act ed\" data-id=\""+r.id+"\">Editar</button>";
   h+="<button class=\"act nt\" data-id=\""+r.id+"\">Nota</button>";
   h+="<button class=\"act rs\" data-id=\""+r.id+"\">Releer</button>";
@@ -599,18 +614,9 @@ function listRow(r,isRent,open,withDeal){
   var l3=[];
   if(r.address)l3.push("📍 "+r.address);
   if(r.agent_name)l3.push("👤 "+r.agent_name);
-  var pills="";
-  if(r.scrape_status&&r.scrape_status!=="ok")pills+="<span class=\"flag\">sin leer</span>";
-  if(r.created_at&&Date.now()-Date.parse(r.created_at)<48*3600*1000)pills+="<span class=\"flag new\">nuevo</span>";
-  pills+=stageChip(r); // scheduled chips carry the visit date, so no separate date pill needed
-  pills+=priceFlag(r);
-  var vst=voteState(r);
-  if(vst==="both")pills+="<span class=\"flag both\">💚</span>";
-  else if(vst==="split")pills+="<span class=\"flag split\">👍/👎</span>";
-  if(withDeal&&(r.deal_type==="rent"||r.deal_type==="buy"))pills+="<span class=\"flag mut\">"+(r.deal_type==="rent"?"arriendo":"compra")+"</span>";
-  var th=r.image_url?"<img class=\"thumb\" src=\""+esc(r.image_url)+"\" loading=\"lazy\" alt=\"\" onerror=\"this.className='thumb noimg';this.removeAttribute('src')\">":"<span class=\"thumb noimg\"></span>";
+  var pills=pillsOf(r,withDeal,true);
   // collapsed rows own the #apt- anchor; expanded ones cede it to the full card below
-  var h="<div class=\"lrow\""+(open?"":" id=\"apt-"+r.id+"\"")+" data-id=\""+r.id+"\">"+th;
+  var h="<div class=\"lrow\""+(open?"":" id=\"apt-"+r.id+"\"")+" data-id=\""+r.id+"\">"+thumbHtml(r);
   h+="<div class=\"lmid\"><div class=\"lname\"><span class=\"lid\">#"+r.id+"</span> "+esc(aptName(r))+(r.tag?tagChip(r.tag):"")+"</div>";
   h+="<div class=\"lsub\">"+esc(l2.join(" · ")||"—")+"</div>";
   if(l3.length)h+="<div class=\"lsub\">"+esc(l3.join(" · "))+"</div>";
@@ -711,7 +717,7 @@ function sortRows(rows){
 function cellDisplay(r,c){
   var isRent=r.deal_type==="rent";
   if(c.k==="thumb"){
-    var th=r.image_url?"<img class=\"thumb\" src=\""+esc(r.image_url)+"\" loading=\"lazy\" alt=\"\" onerror=\"this.className='thumb noimg';this.removeAttribute('src')\">":"<span class=\"thumb noimg\"></span>";
+    var th=thumbHtml(r);
     if(r.photos&&r.photos.length)th+="<span class=\"pcount\">📸 "+r.photos.length+"</span>";
     // tapping the thumbnail opens the full card in a modal (the card gallery view is gone)
     return "<span class=\"thopen\" data-id=\""+r.id+"\" title=\"Ver tarjeta\">"+th+"</span>";
@@ -722,8 +728,9 @@ function cellDisplay(r,c){
   if(c.k==="price")return r.price==null?"":mny(r.price)+(isRent?"/mes":"")+priceFlag(r);
   if(c.k==="admin_fee")return r.admin_fee==null?"":mny(r.admin_fee);
   if(c.k==="ppm")return mny(ppmOf(r,isRent));
-  // the cell stays click-to-edit; the small 🗺 anchor rides along (the click handler lets anchors through)
+  // these cells stay click-to-edit; the small 🗺/💬 anchors ride along (the click handler lets anchors through)
   if(c.k==="address")return r.address?esc(r.address)+" <a href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\" aria-label=\"Cómo llegar\">🗺</a>":"";
+  if(c.k==="agent_phone")return r.agent_phone?esc(r.agent_phone)+" <a href=\""+esc(waLink(r.agent_phone))+"\" target=\"_blank\" rel=\"noopener\" aria-label=\"WhatsApp al agente\">💬</a>":"";
   if(c.k==="stage")return stageChip(r);
   if(c.k==="voto")return voteRow(r,true); // compact FL/LU labels; my control stays tappable
   if(c.k==="visit_date")return r.visit_date?esc(fmtVisit(r.visit_date)):"";
@@ -761,7 +768,7 @@ function beginEdit(td){
     input.value=(cur==="buy"||cur==="rent")?cur:"unknown";
   }else if(type==="visit"){
     input=document.createElement("input");input.type="datetime-local";
-    var v=cur?String(cur):"";if(v&&v.indexOf("T")<0)v+="T09:00";input.value=v;
+    input.value=vdVal(cur);
   }else{
     input=document.createElement("input");input.type="text";
     if(type==="int"||type==="real")input.inputMode="decimal";
@@ -783,10 +790,7 @@ function beginEdit(td){
 }
 function saveField(id,field,type,val){
   var body=(type==="visit")?{action:"set_visit",id:id,visit_date:val||null}:{action:"edit",id:id,field:field,value:val};
-  action(body).then(function(res){
-    if(res&&res.ok){toast("Guardado ✓");}else{toast("Error al guardar");}
-    return load();
-  }).catch(function(){toast("Error de red");render();});
+  saveAction(body,"Guardado ✓");
 }
 function tableView(rows){
   if(!rows.length)return "<div class=\"empty\">Sin apartamentos activos.</div>";
@@ -813,7 +817,10 @@ var OPEN_ROW=null;
 function effView(){return VIEW;}
 // ---- edit sheet (address / agent / phone / tag), shared by cards + table ----
 var EDIT_ID=null;
-function findApt(id){var all=(DATA.apartments||[]).concat(DATA.ruledOut||[]);for(var i=0;i<all.length;i++)if(all[i].id===id)return all[i];return null;}
+// the activos+descartados union — lookups, map pins and the sin-geo counter must all see the
+// same set (the DATA.apartments-only sites elsewhere are active-only on purpose)
+function allRows(){return (DATA.apartments||[]).concat(DATA.ruledOut||[]);}
+function findApt(id){var all=allRows();for(var i=0;i<all.length;i++)if(all[i].id===id)return all[i];return null;}
 function openEdit(id){
   var r=findApt(id);if(!r)return;EDIT_ID=id;
   document.getElementById("e_address").value=r.address||"";
@@ -950,9 +957,7 @@ function visitCalendar(rows){
       var m=[];
       var pa=priceAreaBits(r);
       if(pa.length)m.push(esc(pa.join(" · ")));
-      if(r.address)m.push("📍 <a href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\">"+esc(r.address)+"</a>");
-      if(r.agent_name)m.push("👤 "+esc(r.agent_name));
-      if(r.agent_phone)m.push("💬 <a href=\""+esc(waLink(r.agent_phone))+"\" target=\"_blank\" rel=\"noopener\">"+esc(r.agent_phone)+"</a>");
+      m=m.concat(contactLines(r));
       if(m.length)h+="<div class=\"vmeta\">"+m.join("<br>")+"</div>";
       // self-sufficient card: Invitar as-is, plus a compact Reagendar / Nota / Descartar row — a
       // ruled-out apartment drops Invitar (the server only sends invites for status=active) and
@@ -1006,13 +1011,10 @@ function heroCard(r,now,todayStr,clash){
   var m=[];
   var pa=priceAreaBits(r);
   if(pa.length)m.push(esc(pa.join(" · ")));
-  if(r.address)m.push("📍 <a href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\">"+esc(r.address)+"</a>");
-  if(r.agent_name)m.push("👤 "+esc(r.agent_name));
-  if(r.agent_phone)m.push("📞 <a class=\"tel\" href=\"tel:"+esc(r.agent_phone)+"\">"+esc(r.agent_phone)+"</a> · 💬 <a href=\""+esc(waLink(r.agent_phone))+"\" target=\"_blank\" rel=\"noopener\">WhatsApp</a>");
+  m=m.concat(contactLines(r));
   if(m.length)h+="<div class=\"hmeta\">"+m.join("<br>")+"</div>";
   // Reagendar: a prefilled datetime-local with class vd — the delegated change handler saves it and the server re-sends the invite
-  var v=r.visit_date?String(r.visit_date):"";if(v&&v.indexOf("T")<0)v+="T09:00";
-  h+="<div class=\"hresch\"><span class=\"k\">📅 Reagendar</span><input type=\"datetime-local\" class=\"vd\" data-id=\""+r.id+"\" value=\""+esc(v)+"\"></div>";
+  h+="<div class=\"hresch\"><span class=\"k\">📅 Reagendar</span><input type=\"datetime-local\" class=\"vd\" data-id=\""+r.id+"\" value=\""+esc(vdVal(r.visit_date))+"\"></div>";
   h+="<div class=\"hact\"><button class=\"act nt\" data-id=\""+r.id+"\">📝 Nota</button>"+(ruled?"<button class=\"act re\" data-id=\""+r.id+"\">↩️ Reactivar</button>":"<button class=\"act danger ro\" data-id=\""+r.id+"\">🚫 Descartar</button>")+"</div>";
   return h+"</div>";
 }
@@ -1024,6 +1026,7 @@ function agendaRow(r,clash){
   var h="<div class=\"arow"+(ruled?" xout":"")+"\">"+(t?"<span class=\"atime\">"+esc(t)+"</span>":"<span class=\"atime tbd\">hora por definir</span>");
   h+="<a class=\"aname\" href=\"#apt-"+r.id+"\">"+esc(aptLabel(r))+(ruled?" <span class=\"flag disc\">🚫</span>":"")+(clash&&clash[r.id]?" <span class=\"flag\">⚠️</span>":"")+"</a>";
   if(r.address)h+="<span class=\"aloc\"><a href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\" aria-label=\"Cómo llegar\">🗺</a></span>";
+  if(r.agent_phone)h+="<span class=\"aloc\"><a href=\""+esc(waLink(r.agent_phone))+"\" target=\"_blank\" rel=\"noopener\" aria-label=\"WhatsApp al agente\">💬</a></span>";
   return h+"</div>";
 }
 function agendaList(list,now,todayStr,clash){
@@ -1086,10 +1089,11 @@ function followupBlock(rows){
     h+="<div class=\"furow\"><div class=\"fuinfo\">";
     h+="<a class=\"funame\" href=\"#apt-"+r.id+"\">"+esc(aptLabel(r))+"</a>";
     h+="<span class=\"fuwhen\">"+esc(fmtVisit(r.visit_date))+"</span></div>";
-    var fb=priceAreaBits(r);
-    if(r.address)fb.push("📍 "+r.address);
-    if(r.agent_name)fb.push("👤 "+r.agent_name);
-    if(fb.length)h+="<div class=\"fumeta\">"+esc(fb.join(" · "))+"</div>";
+    var fb=[];
+    var pa=priceAreaBits(r);
+    if(pa.length)fb.push(esc(pa.join(" · ")));
+    fb=fb.concat(contactLines(r)); // the WhatsApp link matters here: "¿y el parqueadero?" right after the visit
+    if(fb.length)h+="<div class=\"fumeta\">"+fb.join("<br>")+"</div>";
     h+="<div class=\"fuact\">";
     h+="<button class=\"act sm fbup\" data-id=\""+r.id+"\">👍 Nos gustó</button>";
     h+="<button class=\"act sm fbdn\" data-id=\""+r.id+"\">👎 No</button>";
@@ -1128,7 +1132,7 @@ function ruledSection(list){
 // against showing a stale pin while a freshly edited address is still being looked up
 var MAP=null,MAP_LAYER=null,MAP_KEY="";
 function mapRows(){
-  var out=[],rows=(DATA.apartments||[]).concat(DATA.ruledOut||[]);
+  var out=[],rows=allRows();
   for(var i=0;i<rows.length;i++){var r=rows[i];
     if(r.address&&r.geo_lat!=null&&r.geo_lng!=null&&r.geo_address===r.address)out.push(r);
   }
@@ -1144,7 +1148,7 @@ function mapPopup(r){
   // pins sit on the street crossing the address names, so they are block-accurate, not door-accurate
   h+="<div class=\"mmeta\">📍 "+esc(r.address)+"</div>";
   h+="<div class=\"mapprox\">Ubicación aproximada (al cruce de calles)</div>";
-  h+="<div class=\"mlinks\"><a href=\"#apt-"+r.id+"\">Ver tarjeta</a> · <a href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\">Cómo llegar</a></div></div>";
+  h+="<div class=\"mlinks\"><a href=\"#apt-"+r.id+"\">Ver tarjeta</a> · <a href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\">Cómo llegar</a>"+(r.agent_phone?" · <a href=\""+esc(waLink(r.agent_phone))+"\" target=\"_blank\" rel=\"noopener\">💬 WhatsApp</a>":"")+"</div></div>";
   return h;
 }
 function updateMap(){
@@ -1153,7 +1157,7 @@ function updateMap(){
   var rows=mapRows();
   if(!rows.length){sect.style.display="none";return;}
   // addresses the geocoder hasn't placed (yet, or not found) — say so instead of silently missing pins
-  var all=(DATA.apartments||[]).concat(DATA.ruledOut||[]),noGeo=0;
+  var all=allRows(),noGeo=0;
   for(var i=0;i<all.length;i++){var r=all[i];
     if(r.address&&!(r.geo_lat!=null&&r.geo_lng!=null&&r.geo_address===r.address))noGeo++;
   }
@@ -1268,13 +1272,20 @@ function load(){return fetch("apartments-data.json").then(function(r){if(!r.ok)t
 // a full-page reload (href="") lets Cloudflare Access run its login redirect, which fetch cannot follow
 function showRetry(){document.getElementById("sub").innerHTML="No se pudo cargar · <a href=\"\" style=\"color:var(--accent)\">Reintentar</a>";}
 function action(body){return fetch("apartments-action",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json();});}
+// THE quick-action tail: ok → toast + reload; server said no → failMsg (still reloads, so the row
+// shows the real state); network died (incl. offline) → "Error de red" + re-render from cached DATA,
+// so a failed tap in an elevator reverts visibly instead of lying. Actions that read extra fields
+// off the response (vo, rs, iv, the modal saves) keep their own tails.
+function saveAction(body,okMsg,failMsg){
+  return action(body).then(function(res){
+    toast(res&&res.ok?okMsg:(failMsg||"Error al guardar"));
+    return load();
+  }).catch(function(){toast("Error de red");render();});
+}
 document.addEventListener("change",function(e){
   var el=e.target;if(!el.classList||!el.classList.contains("vd"))return;
   var id=Number(el.getAttribute("data-id"));
-  action({action:"set_visit",id:id,visit_date:el.value||null}).then(function(res){
-    if(res&&res.ok){toast(el.value?"Visita fijada":"Visita borrada");}else{toast("Error al guardar");}
-    return load(); // success → refresh the visits strip
-  }).catch(function(){toast("Error de red");render();}); // failure (incl. offline) → revert input from cached DATA
+  saveAction({action:"set_visit",id:id,visit_date:el.value||null},el.value?"Visita fijada":"Visita borrada");
 });
 document.addEventListener("click",function(e){
   var el=e.target;if(!el.classList)return;
@@ -1344,8 +1355,7 @@ document.addEventListener("click",function(e){
     // vd change handler saves it and reloads. Escape / unchanged blur restores the buttons.
     var id=Number(el.getAttribute("data-id"));var r=findApt(id);if(!r)return;
     var box=el.closest(".vctrls");if(!box)return;
-    var v=r.visit_date?String(r.visit_date):"";if(v&&v.indexOf("T")<0)v+="T09:00";
-    var inp=document.createElement("input");inp.type="datetime-local";inp.className="vd";inp.setAttribute("data-id",String(id));inp.value=v;inp.style.width="100%";
+    var inp=document.createElement("input");inp.type="datetime-local";inp.className="vd";inp.setAttribute("data-id",String(id));inp.value=vdVal(r.visit_date);inp.style.width="100%";
     box.innerHTML="";box.appendChild(inp);inp.focus();
     var dirty=false;
     inp.addEventListener("input",function(){dirty=true;});
@@ -1361,11 +1371,8 @@ document.addEventListener("click",function(e){
     var note=up?"👍 nos gustó":"👎 no nos gustó";
     el.disabled=true;
     action({action:"vote",id:id,vote:up?"up":"down",quiet:true}).catch(function(){}).then(function(){
-      return action({action:"apt_note",id:id,note:note});
-    }).then(function(res){
-      if(res&&res.ok){toast("Guardado ✓");}else{toast("Error al guardar");}
-      return load();
-    }).catch(function(){toast("Error de red");render();});
+      return saveAction({action:"apt_note",id:id,note:note},"Guardado ✓");
+    });
     return;
   }
   if(el.classList.contains("vo")){
@@ -1389,10 +1396,7 @@ document.addEventListener("click",function(e){
   if(el.classList.contains("ntdel")){
     var raw;try{raw=unb64u(el.getAttribute("data-line")||"");}catch(err){return;}
     el.disabled=true;
-    action({action:"apt_note_del",id:Number(el.getAttribute("data-id")),line:raw}).then(function(res){
-      if(res&&res.ok){toast("Nota borrada");}else{toast("Error al borrar");}
-      return load();
-    }).catch(function(){toast("Error de red");render();});
+    saveAction({action:"apt_note_del",id:Number(el.getAttribute("data-id")),line:raw},"Nota borrada","Error al borrar");
     return;
   }
   if(el.classList.contains("chip")){
@@ -1423,10 +1427,7 @@ document.addEventListener("click",function(e){
   if(el.classList.contains("re")){
     var id=Number(el.getAttribute("data-id"));
     el.disabled=true;el.textContent="…";
-    action({action:"reactivate",id:id}).then(function(res){
-      if(res&&res.ok){toast("De vuelta en la lista ↩️");}else{toast("Error");}
-      return load();
-    }).catch(function(){toast("Error de red");render();});
+    saveAction({action:"reactivate",id:id},"De vuelta en la lista ↩️","Error");
     return;
   }
 });

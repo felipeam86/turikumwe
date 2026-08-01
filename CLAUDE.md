@@ -68,8 +68,9 @@ means the change is incomplete.
   / `appendAptNote` / `upsertVote` / `visitMail` serve the Telegram ops loop,
   the callback buttons, AND the web actions. Don't fork a second path.
 - **Some logic is deliberately twinned across server and web page** —
-  `mapsLink`/`waLink` and the $/m² math exist in both `index.ts` and
-  `apartments.html`. Change one → change the other (the comments say so).
+  `mapsLink`/`waLink`, the $/m² math, and `priceAreaBits` (all-in monthly
+  for rent) exist in both `index.ts` and `apartments.html`. Change one →
+  change the other (the comments say so).
 - **All times are Bogota wall-clock strings** (`YYYY-MM-DD` or
   `YYYY-MM-DDTHH:MM`), string-comparable, no DST (UTC-5 fixed). Date math is
   Z-anchored on purpose — don't "fix" it with real timezone handling.
