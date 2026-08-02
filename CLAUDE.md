@@ -5,12 +5,15 @@
 Turikumwe — a household + apartment-hunt assistant for a couple (Felipe &
 Lucía) in Bogotá. A Telegram group is the only input: plain messages become
 tracked household items (Claude parses them into ops), listing URLs become
-scraped + extracted apartments, crons post a morning digest / evening nudges /
-visit reminders, and two Cloudflare-Access-protected web screens
-(`/dashboard.html`, `/apartments.html`) mirror the data. An MCP endpoint
-(`POST /mcp`, bearer token) lets Claude clients ask open-ended questions via
-read-only SQL; its only write is adding an apartment note. Everything
-user-facing is in **Spanish**.
+scraped + extracted apartments, photos and realtor PDFs attach to
+apartments, visits are first-class rows (follow-ups included, with who went
+and how it went), due-diligence documents are tracked per apartment, crons
+post a morning digest / evening nudges / visit reminders, and two
+Cloudflare-Access-protected web screens (`/dashboard.html`,
+`/apartments.html`) mirror the data. An MCP endpoint (`POST /mcp`, bearer
+token) lets Claude clients ask open-ended questions via read-only SQL; its
+only write is adding an apartment note. Everything user-facing is in
+**Spanish**.
 
 ## Status
 
@@ -69,19 +72,25 @@ means the change is incomplete.
   raw URLs never go bare in message text. Links belong in inline url buttons
   when possible (buttons never touch the parser).
 - **Shared mutations have ONE implementation.** `ruleOutApt` / `reactivateApt`
-  / `appendAptNote` / `upsertVote` / `setVisit` serve the Telegram ops loop,
-  the callback buttons, the web actions (and MCP for notes). Each returns the
-  post-mutation row — don't re-read it, don't fork a second path. Their group
-  announcements are built ONLY by `aptAnnounce` (it owns the emoji, `aptRef`
-  escaping, and the keyboard); the invite/cancel mail decision (`visitMail`)
-  lives inside `setVisit`.
+  / `appendAptNote` / `upsertVote` / `setVisit` / `addVisit` / `editVisit` /
+  `setDoc` serve the Telegram ops loop, the callback buttons, the
+  photo/document handlers, the web actions (and MCP for notes). Each returns
+  the post-mutation state — don't re-read it, don't fork a second path. Their
+  group announcements are built ONLY by `aptAnnounce` (it owns the emoji,
+  `aptRef` escaping, and the keyboard); the invite/cancel mail decision
+  (`visitMail`) lives inside the visit mutations. `setVisit` = the NEXT
+  upcoming visit (create/move/cancel); `addVisit` = always a new follow-up
+  row; `editVisit` = one visit row by id. A visit's "hecha" state is derived
+  (non-cancelled + past), never stored.
 - **Telegram ops have ONE vocabulary.** `OP_LINES` drives both the parser
   prompt and `executeOps`' dispatch; a malformed or unimplemented op is acked
   «no entendí», never dropped silently. New op → one `OP_LINES` entry + one
   `executeOps` branch.
 - **Some logic is deliberately twinned across server and web page** —
-  `mapsLink`/`waLink`, the $/m² math, and `priceAreaBits` (all-in monthly
-  for rent) exist in both `index.ts` and `apartments.html`. Change one →
+  `mapsLink`/`waLink`, the $/m² math, `priceAreaBits` (all-in monthly
+  for rent), and the visit end-of-day padding (`visitCmpJs`/`visitCmpSql` ↔
+  the page's `visitCmp`, which also derives the pending/scheduled/visited
+  stage) exist in both `index.ts` and `apartments.html`. Change one →
   change the other (the comments say so).
 - **All times are Bogota wall-clock strings** (`YYYY-MM-DD` or
   `YYYY-MM-DDTHH:MM`), string-comparable, no DST (UTC-5 fixed). Date math is
