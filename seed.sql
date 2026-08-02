@@ -51,7 +51,15 @@ INSERT OR REPLACE INTO apartment_visits (id,apartment_id,visit_date,who,status,n
   (4,2,strftime('%Y-%m-%d','now','-5 hours','+3 days'),'lucia','scheduled',NULL,
    NULL,'Lucía',strftime('%Y-%m-%dT%H:%M','now','-5 hours'),strftime('%Y-%m-%dT%H:%M','now','-5 hours')),
   (5,3,strftime('%Y-%m-%d','now','-5 hours','+2 days')||'T09:00','felipe','cancelled',NULL,
-   NULL,'Felipe',strftime('%Y-%m-%dT%H:%M','now','-5 hours','-2 days'),strftime('%Y-%m-%dT%H:%M','now','-5 hours','-1 day'));
+   NULL,'Felipe',strftime('%Y-%m-%dT%H:%M','now','-5 hours','-2 days'),strftime('%Y-%m-%dT%H:%M','now','-5 hours','-1 day')),
+  -- a packed hunting week: two visits 45 min apart the same morning (the agenda flags the
+  -- «choque de horario») and a visit that survives its apartment's discard (crossed out, visible)
+  (6,5,strftime('%Y-%m-%d','now','-5 hours','+2 days')||'T10:00','felipe','scheduled',NULL,
+   NULL,'Felipe',strftime('%Y-%m-%dT%H:%M','now','-5 hours'),strftime('%Y-%m-%dT%H:%M','now','-5 hours')),
+  (7,3,strftime('%Y-%m-%d','now','-5 hours','+2 days')||'T10:45','both','scheduled',NULL,
+   NULL,'Lucía',strftime('%Y-%m-%dT%H:%M','now','-5 hours'),strftime('%Y-%m-%dT%H:%M','now','-5 hours')),
+  (8,4,strftime('%Y-%m-%d','now','-5 hours','+4 days')||'T15:00',NULL,'scheduled',NULL,
+   NULL,'Lucía',strftime('%Y-%m-%dT%H:%M','now','-5 hours','-8 days'),strftime('%Y-%m-%dT%H:%M','now','-5 hours','-8 days'));
 
 -- docs: apt 3 (compra) mid due-diligence; apt 1 (arriendo) has the reglamento pending.
 -- No tg_file_id in seed — local dev has no BOT_TOKEN, a fake id would just 502 on tap.
