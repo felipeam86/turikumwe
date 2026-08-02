@@ -80,15 +80,34 @@ caps-labels 10–11 with `.08–.09em` tracking, uppercase. Prices always
 ## 5. Component inventory
 
 - **Masthead** — italic wordmark + subtitle; ⌂/Hogar links.
-- **Tabs** (`.tabs`, sticky) — «Diario» / «Índice», ink underline for the
-  active one. The apartment page counts as Diario.
+- **Tabs** (`.tabs`, sticky) — «Diario» / «Agenda» / «Índice», ink underline
+  for the active one. The apartment page counts as Diario.
 - **Roster** (`.rcard`) — compact apartment cards: thumb, `#id`, name, price
   in millions (`$3,2 M`, full figure in `title`), stage dot, `docs n/m`, 💚.
   Order: mutual favorites, then best $/m².
 - **Stage dot** (`.sdot`) — pendiente = hollow, agendada = brass, visitada =
   ink. Used in roster and Índice rows.
 - **Próxima-visita banner** (`.nextv`) — quiet card, brass left rule: when
-  (HOY/MAÑANA + hora + countdown), `#id · lugar`, quién va, dirección.
+  (HOY/MAÑANA + hora + countdown), `#id · lugar`, quién va, dirección. It
+  opens the Agenda («ver la agenda →»), where the visit sits in its week.
+- **Agenda spread** (`#agenda`) — the week's page in a paper planner: one
+  Mon–Sun week at a time, ‹ hoy › navigation, an italic serif headline that
+  always names the dates («Semana del 3 al 9 de agosto»). Days flow down the
+  spine, every day present — an empty day is a quiet rule (dim node + italic
+  «libre»); today's header is brass, past days/entries muted (`.agpast`).
+  One entry = one scheduled visit row (active AND ruled-out apartments;
+  follow-ups are their own entries): the node is quién va, the serif time
+  leads (italic «hora por definir» when date-only), then `#id · lugar`
+  linking to the story, price/area, and the fixed contact idiom (Maps
+  address, WhatsApp + «llamar»). Actions per entry: 📅 Reprogramar (inline
+  `datetime-local`, per-visit `visit_edit`), Cancelar (confirm sheet), 📧
+  Invitación only on an active apartment's next upcoming visit; ruled-out
+  entries render struck through with a `descartado` pill and «↩
+  Reconsiderar» — never hidden. A past visit swaps the actions for «✎
+  Impresión». **Clash rule:** same-day timed visits whose starts are <60 min
+  apart BOTH get «⚠️ choque de horario» (warn pill); date-only visits never
+  clash. A visit-less week shows the empty state with the count of
+  apartments por agendar, linking to the Índice.
 - **Journal entry** (`.ev` inside `.evs`) — spine + node + one-line text +
   meta; optional serif quote and photo strip. Nodes: `F` / `L` /
   split `F·L` discs for people; `$` price, `✕` discard (err), `✦` photos,
@@ -120,8 +139,8 @@ caps-labels 10–11 with `.08–.09em` tracking, uppercase. Prices always
   Docs n/m / ✕ Descartar (↩ Reconsiderar when ruled out).
 - **Sheets** (`.sheet`) — bottom sheets on phones, centered dialogs ≥760px:
   nota, impresión de visita, visitas (reschedule/quién/cancel/invite + new),
-  documentos, descartar (reason chips + free text), ficha (all editable
-  fields).
+  documentos, descartar (reason chips + free text), cancelar visita (the
+  agenda's confirm), ficha (all editable fields).
 - **Índice** — filter chips (tipo/hab/precio/estado/tag + orden, persisted
   in `localStorage.bitFilters`), comparable rows with serif $/m², descartados
   section with reasons + Reconsiderar, Leaflet map (CARTO `light_all` tiles,
@@ -155,7 +174,8 @@ day (`bogDay`).
 
 ## 7. Interaction patterns
 
-- **The hash is the page**: `` `#` ``=Diario, `#indice`, `#apt-<id>` — so
+- **The hash is the page**: `` `#` ``=Diario, `#agenda`, `#indice`,
+  `#apt-<id>` — so
   Telegram deep links land directly on an apartment's story; arrival flashes
   the title block (`--flash` fading over ~2s) and scrolls to top.
 - Every mutation goes through `saveAction`: POST → toast (ok message, or the
