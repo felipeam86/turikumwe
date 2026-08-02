@@ -60,7 +60,7 @@
   .rcard .rthumb{width:100%;height:64px;object-fit:cover;display:block;background:var(--paper2);border-bottom:1px solid var(--line);}
   .rcard .rthumb.noimg{display:flex;align-items:center;justify-content:center;color:var(--line2);font-family:var(--serif);font-size:20px;}
   .rcard .rbody{padding:7px 9px 9px;}
-  .rcard .rid{font-size:11px;font-weight:700;color:var(--faint);letter-spacing:.03em;}
+  .rcard .rid{font-size:11px;font-weight:700;color:var(--faint);letter-spacing:.03em;margin-right:4px;}
   .rcard .rname{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .rcard .rprice{font-family:var(--serif);font-size:16px;margin-top:2px;font-variant-numeric:tabular-nums;display:block;}
   .rcard .rprice .u{font-family:var(--sans);font-size:10px;color:var(--faint);}
@@ -1255,6 +1255,7 @@ function closePhoto(){
 }
 // ---- routing (the hash IS the page: #apt-<id> deep links land on the story directly) ----
 var VIEWSTATE={name:"diario",id:null},FLASH_ID=null;
+var FEED_SCROLL={diario:0,indice:0}; // your place in each list view survives a story detour
 function parseHash(){
   var m=(location.hash||"").match(/^#apt-(\d+)$/);
   if(m)return {name:"apt",id:Number(m[1])};
@@ -1263,10 +1264,12 @@ function parseHash(){
 }
 function route(){
   var nv=parseHash();
+  if(VIEWSTATE.name!=="apt")FEED_SCROLL[VIEWSTATE.name]=window.scrollY; // leaving a list view
   if(nv.name==="apt")FLASH_ID=nv.id; // arriving flashes the title (Telegram deep links)
   VIEWSTATE=nv;
   if(DATA)render();
-  if(nv.name==="apt")window.scrollTo(0,0);
+  // stories start at the top; coming back to a list view lands where you left it
+  window.scrollTo(0,nv.name==="apt"?0:(FEED_SCROLL[nv.name]||0));
 }
 function render(){
   if(!DATA)return;
