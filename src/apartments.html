@@ -1,372 +1,440 @@
 <!DOCTYPE html>
 <html lang="es"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0e1013">
+<meta name="theme-color" content="#0a0d10">
 <link rel="manifest" href="/manifest.json" crossorigin="use-credentials">
 <link rel="icon" href="/icon.png">
 <title>Apartamentos</title>
-<!-- Leaflet (keyless map lib; SRI-pinned). If the CDN is unreachable the map section simply stays hidden. -->
+<!-- Display face: Barlow Condensed (signage/DIN lineage — the departure-board voice of the HOY
+     hero). Degrades to the system condensed stack if the fonts CDN is unreachable. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&display=swap">
+<!-- Leaflet (keyless map lib; SRI-pinned). If the CDN is unreachable the map chip simply never shows. -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <style>
+  /* ---- Radar design tokens (see DESIGN.md) ---- */
   :root{
-    --bg:#0e1013;--bg-raised:#171a20;--fg:#e8eaed;--muted:#8b919c;--border:#272c35;
-    --accent:#7aa2ff;--ok:#4ade80;--warn:#fbbf24;--err:#f87171;
+    --bg0:#0a0d10;      /* page — tarmac black, blue-shifted */
+    --bg1:#10151b;      /* raised card */
+    --bg2:#151c24;      /* sheet / elevated */
+    --bg3:#1b232d;      /* pressed / input */
+    --line:#232c36;     /* hairline */
+    --fg:#e8eef4;
+    --mut:#8c97a3;
+    --dim:#5c6773;
+    --now:#56cce8;      /* «señal» — reserved for now/next/live */
+    --now-dim:rgba(86,204,232,.13);
+    --ok:#4fd08a;--warn:#efb454;--err:#ef6e6e;   /* semantic only: verdict / missing / discard */
+    --ok-dim:rgba(79,208,138,.12);--warn-dim:rgba(239,180,84,.12);--err-dim:rgba(239,110,110,.12);
+    --font-d:"Barlow Condensed","Arial Narrow","Roboto Condensed",-apple-system,sans-serif;
     --font-ui:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --r-card:14px;--r-sheet:18px;--r-ctl:10px;
     color-scheme:dark;
   }
-  *{box-sizing:border-box;}
-  body{font-family:var(--font-ui);background:var(--bg);color:var(--fg);margin:0;padding:18px 14px calc(34px + env(safe-area-inset-bottom));-webkit-font-smoothing:antialiased;}
-  .wrap{max-width:1040px;margin:0 auto;}
-  nav{display:flex;gap:8px;margin-bottom:12px;}
-  nav a{color:var(--muted);text-decoration:none;font-size:13px;font-weight:600;padding:0 14px;min-height:44px;display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:999px;white-space:nowrap;}
-  nav a:active{border-color:var(--accent);color:var(--accent);}
-  nav a.on{color:var(--fg);border-color:var(--accent);background:rgba(122,162,255,.12);}
-  .sub{color:var(--muted);font-size:13px;margin-bottom:16px;}
-  /* sticky filter/sort bar: one thumb-friendly chip row, scrolls horizontally like .caldays */
-  .fbar{position:sticky;top:0;z-index:30;background:var(--bg);display:flex;gap:8px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:8px 0 10px;margin-bottom:6px;}
-  .fbar:empty{display:none;}
-  .fchip{flex:0 0 auto;font-family:inherit;font-size:12px;font-weight:600;min-height:38px;background:var(--bg-raised);color:var(--muted);border:1px solid var(--border);border-radius:999px;padding:6px 12px;cursor:pointer;white-space:nowrap;}
-  .fchip.on{color:var(--accent);border-color:var(--accent);background:rgba(122,162,255,.12);}
-  .fchip.tagf.on{color:#12151b;} /* active tag chip gets its own hue as bg (inline style) */
-  .fclearlink{background:none;border:none;color:var(--accent);font:inherit;cursor:pointer;padding:0;text-decoration:underline;}
-  /* weekly visits calendar */
-  .cal{background:var(--bg-raised);border:1px solid var(--accent);border-radius:14px;padding:12px 14px;margin-bottom:6px;}
-  .calhead{display:flex;align-items:center;gap:8px;margin-bottom:10px;}
-  .calhead .vt{font-size:13px;font-weight:600;color:var(--accent);}
-  .calnav{margin-left:auto;display:flex;align-items:center;gap:6px;}
-  .calnav button{font-family:inherit;font-size:16px;font-weight:600;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:10px;min-width:42px;min-height:42px;cursor:pointer;padding:0;}
-  .calnav button:active{border-color:var(--accent);color:var(--accent);}
-  .calweek{font-size:12px;font-weight:600;color:var(--muted);text-align:center;min-width:104px;white-space:nowrap;}
-  /* phones: 2–3 day columns visible, swipe right for the rest */
-  .caldays{display:flex;gap:8px;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;padding-bottom:2px;}
-  .calday{flex:0 0 40vw;max-width:190px;min-height:96px;scroll-snap-align:start;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:8px;}
-  /* desktop: the full week side by side */
-  @media(min-width:760px){.caldays{overflow-x:visible;}.calday{flex:1 1 0;max-width:none;min-width:0;}}
-  .calday .dh{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;white-space:nowrap;}
-  .calday.today{border-color:var(--accent);}
-  .calday.today .dh{color:var(--accent);}
-  .calday.past{opacity:.55;}
-  .vcard{background:var(--bg-raised);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:8px;padding:7px 8px;margin-top:6px;font-size:12px;overflow-wrap:break-word;}
-  .vcard .vtime{font-weight:700;color:var(--accent);font-size:11px;}
-  .vcard .vloc{font-weight:700;font-size:13px;line-height:1.3;margin:1px 0 2px;}
-  .vcard .vloc a{color:inherit;text-decoration:none;}
-  .vcard .vloc a .ext{color:var(--accent);font-size:11px;font-weight:600;margin-left:3px;vertical-align:baseline;}
-  .vcard .vmeta{color:var(--muted);line-height:1.5;}
-  .vcard .vmeta a{color:var(--accent);text-decoration:none;}
-  .vcard .vclash{margin:2px 0 1px;}
-  .vcard .vclash .flag{margin-left:0;}
-  .vcard .vctrls{margin-top:6px;}
-  .vcard .vctrls .iv{width:100%;}
-  .vcard .vact{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:4px;}
-  .vcard .vact .act{padding:5px 0;}
-  h2.sect{font-size:15px;margin:20px 2px 10px;font-weight:600;display:flex;align-items:center;gap:8px;}
-  .count{color:var(--muted);font-weight:400;font-size:12px;}
-  .grid{display:grid;gap:12px;grid-template-columns:1fr;}
-  .apt{background:var(--bg-raised);border:1px solid var(--border);border-radius:14px;padding:14px;}
-  .apt img.photo{width:100%;max-height:180px;object-fit:cover;border-radius:10px;margin-bottom:10px;display:block;}
-  .head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;}
-  .loc{font-size:15px;font-weight:700;line-height:1.3;min-width:0;}
-  .sub2{color:var(--muted);font-size:12px;font-weight:400;margin-top:2px;}
-  .price{text-align:right;font-size:16px;font-weight:700;white-space:nowrap;}
-  .price .per{color:var(--muted);font-size:12px;font-weight:400;}
-  .price .adm{display:block;color:var(--muted);font-size:11px;font-weight:400;margin-top:2px;}
-  .flag{display:inline-block;font-size:11px;color:var(--warn);border:1px solid var(--warn);border-radius:999px;padding:1px 7px;margin-left:6px;vertical-align:middle;}
-  .flag.new{color:var(--accent);border-color:var(--accent);}
-  /* pipeline-stage chips: scheduled = accent, visited / deal-type = muted */
-  .flag.sched{color:var(--accent);border-color:var(--accent);}
-  .flag.mut{color:var(--muted);border-color:var(--border);}
-  /* per-person verdict: agreement = green, split = warn */
-  .flag.both{color:var(--ok);border-color:var(--ok);}
-  .flag.split{color:var(--warn);border-color:var(--warn);}
-  /* price moved on a rescrape: a drop is good news (green); a rise keeps the warn default */
-  .flag.drop{color:var(--ok);border-color:var(--ok);}
-  .votes{display:flex;align-items:center;gap:8px;margin-top:12px;flex-wrap:wrap;font-size:12px;color:var(--muted);}
-  .votes .vo{font-family:inherit;font-size:12px;font-weight:600;min-height:36px;background:var(--bg);color:var(--fg);border:1px solid var(--accent);border-radius:999px;padding:4px 12px;cursor:pointer;}
-  .votes .vo:disabled{opacity:.5;}
-  .votes .vopill{display:inline-flex;align-items:center;font-size:12px;color:var(--muted);border:1px solid var(--border);border-radius:999px;padding:5px 12px;}
-  .apttable .votes{margin-top:0;flex-wrap:nowrap;gap:5px;}
-  .apttable .votes .vo{min-height:0;padding:3px 8px;}
-  .apttable .votes .vopill{padding:3px 8px;}
-  .specs{display:grid;grid-template-columns:repeat(3,1fr);gap:10px 8px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);}
-  .spec .k{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:1px;}
-  .xtra{color:var(--muted);font-size:12px;margin-top:10px;line-height:1.45;}
-  .note{color:var(--muted);font-size:12px;margin-top:8px;padding-left:10px;border-left:2px solid var(--border);white-space:pre-line;line-height:1.5;}
-  .spec .v{font-size:13px;font-weight:600;}
-  .spec .v.best{color:var(--ok);}
-  .visit{display:flex;align-items:center;gap:10px;margin-top:12px;}
-  .visit .k{color:var(--muted);font-size:12px;white-space:nowrap;}
-  input[type=datetime-local]{flex:1;min-width:0;font-family:inherit;font-size:14px;min-height:42px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:10px;padding:6px 10px;}
-  .ctrl{display:flex;gap:8px;margin-top:10px;}
-  button.act{font-family:inherit;font-size:13px;min-height:42px;flex:1;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:10px;padding:6px 10px;cursor:pointer;}
-  button.act:active{border-color:var(--accent);color:var(--accent);}
-  button.act:disabled{opacity:.5;cursor:default;}
-  button.act.danger:active{border-color:var(--err);color:var(--err);}
-  a.link{color:var(--accent);text-decoration:none;font-size:13px;display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:6px 12px;border:1px solid var(--border);border-radius:10px;}
-  .empty{color:var(--muted);text-align:center;padding:30px 0;}
-  .foot{color:var(--muted);font-size:11px;text-align:center;margin-top:18px;line-height:1.5;}
-  .toast{position:fixed;left:50%;bottom:calc(22px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:8px 16px;border-radius:999px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none;}
-  .toast.show{opacity:.95;}
-  /* ruled-out (descartados) */
-  details.ruled{background:transparent;border:1px dashed var(--border);border-radius:14px;padding:4px 14px 10px;margin-top:20px;}
-  details.ruled summary{font-size:14px;font-weight:600;color:var(--muted);cursor:pointer;padding:10px 2px;list-style:none;display:flex;align-items:center;gap:8px;}
-  details.ruled summary::-webkit-details-marker{display:none;}
-  details.ruled summary .count{color:var(--muted);}
-  details.ruled .rlist{margin-top:6px;}
-  .rrow{display:flex;align-items:center;gap:10px;padding:10px 4px;border-top:1px solid var(--border);opacity:.72;flex-wrap:wrap;}
-  .rrow .rloc{font-weight:600;text-decoration:line-through;text-decoration-color:var(--muted);}
-  .rrow .rmeta{color:var(--muted);font-size:12px;}
-  .rrow .reason{font-size:11px;color:var(--warn);border:1px solid var(--warn);border-radius:999px;padding:1px 8px;}
-  .rrow .grow{flex:1;}
-  .rrow button.act{flex:0 0 auto;min-height:44px;}
-  .rrow a.link{min-height:44px;padding:4px 10px;}
-  /* descartado, still visible: a thin center line crosses the item without hiding anything under
-     it (pointer-events:none so buttons/inputs underneath stay usable) — used on agenda entries
-     (vcard/hero/arow) for a ruled-out apartment's untouched visit, and on the Descartados rows */
-  .xout{position:relative;}
-  .xout::after{content:"";position:absolute;left:8px;right:8px;top:50%;border-top:2px solid var(--err);opacity:.5;pointer-events:none;}
-  /* named .disc, not .ro — .ro is the delegated click-handler class for the Descartar action
-     (matched directly on the click target, not via closest()), so a purely decorative badge must
-     not share that class name or a tap on the badge would try to open the discard sheet */
-  .flag.disc{color:var(--err);border-color:var(--err);}
-  /* tag: same label => same color everywhere (hue derived from the text) */
-  .tag{display:inline-block;font-size:11px;font-weight:700;color:#12151b;border-radius:999px;padding:1px 9px;margin-left:6px;vertical-align:middle;}
-  .contact{color:var(--muted);font-size:12px;margin-top:10px;line-height:1.7;}
-  .tel{color:var(--accent);text-decoration:none;}
-  .ctrl{flex-wrap:wrap;}
-  .act.prim{border-color:var(--accent);color:var(--accent);}
-  /* toolbar: view toggle (Lista/Tabla, both viewports) + grouping toggle */
-  .toolbar{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-bottom:10px;}
-  .tlabel{font-size:11px;font-weight:600;color:var(--muted);display:inline-flex;align-items:center;padding-left:12px;}
-  /* compact list mode: one row per apartment, tap to expand the full card below */
-  .grid.listmode{gap:6px;}
-  .lrow{display:flex;align-items:center;gap:10px;background:var(--bg-raised);border:1px solid var(--border);border-radius:12px;padding:9px 10px;cursor:pointer;}
-  .lrow .lmid{flex:1;min-width:0;}
-  .lrow .lname{font-weight:700;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  .lrow .lsub{color:var(--muted);font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  /* the row id: the one identifier two same-neighborhood listings can never share */
-  .lid,.aptid{color:var(--muted);font-weight:600;}
-  .lrow .lright{display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex:0 0 auto;}
-  .lrow .lright .flag{margin-left:0;}
-  .lrow .chev{color:var(--muted);font-size:18px;flex:0 0 auto;}
-  .lexp{margin:-2px 0 4px;}
-  .viewtoggle{display:inline-flex;border:1px solid var(--border);border-radius:999px;overflow:hidden;}
-  .viewtoggle button{font-family:inherit;font-size:13px;font-weight:600;background:transparent;color:var(--muted);border:none;padding:9px 15px;cursor:pointer;}
-  .viewtoggle button.on{background:rgba(122,162,255,.14);color:var(--fg);}
-  .tablewrap{overflow-x:auto;border:1px solid var(--border);border-radius:12px;}
-  table.apttable{border-collapse:collapse;width:100%;font-size:13px;white-space:nowrap;}
-  .apttable th,.apttable td{padding:8px 10px;border-bottom:1px solid var(--border);text-align:left;vertical-align:middle;}
-  .apttable tbody tr:last-child td{border-bottom:none;}
-  .apttable thead th{position:sticky;top:0;background:var(--bg-raised);color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em;font-weight:600;}
-  .apttable th.sortable{cursor:pointer;user-select:none;}
-  .apttable th.sortable:hover{color:var(--fg);}
-  .apttable td.num{text-align:right;font-variant-numeric:tabular-nums;}
-  .apttable td.nm{font-weight:600;white-space:normal;min-width:150px;}
-  .apttable tbody tr:hover{background:rgba(255,255,255,.03);}
-  .apttable .tag{margin-left:0;}
-  .apttable .flag{margin-left:0;}
-  .thumb{width:46px;height:46px;object-fit:cover;border-radius:8px;display:block;}
-  .thumb.noimg{background:var(--bg);border:1px solid var(--border);}
-  /* table thumbnail opens the full card in a modal */
-  .thopen{cursor:zoom-in;display:inline-block;}
-  .rowact{display:flex;gap:6px;align-items:center;}
-  a.link.sm,button.act.sm{min-height:0;padding:4px 9px;font-size:12px;flex:0 0 auto;}
-  /* table view uses the whole screen width */
-  @media(min-width:760px){.wrap.wide{max-width:none;}}
-  /* click-to-edit cells */
-  .apttable td.ec{cursor:text;}
-  .apttable td.ec:hover{background:rgba(122,162,255,.09);}
-  .ec .mut{color:var(--muted);}
-  .cellin{font-family:inherit;font-size:13px;width:100%;min-width:120px;box-sizing:border-box;background:var(--bg);color:var(--fg);border:1px solid var(--accent);border-radius:6px;padding:4px 6px;}
-  .ec.num .cellin{min-width:74px;text-align:right;}
-  select.cellin{min-width:104px;}
-  /* edit sheet (shared by cards + table) */
-  .modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:50;align-items:center;justify-content:center;padding:16px;}
-  .modal.show{display:flex;}
-  .sheet{background:var(--bg-raised);border:1px solid var(--border);border-radius:16px;padding:18px;width:100%;max-width:420px;}
-  /* card-detail modal: the .apt card brings its own chrome, the sheet just sizes and scrolls it */
-  .sheet.cardsheet{background:transparent;border:none;padding:0;max-width:480px;max-height:calc(100vh - 40px);overflow-y:auto;}
-  .sheet .mh{font-size:16px;font-weight:700;margin-bottom:14px;}
-  .sheet label{display:block;font-size:12px;color:var(--muted);margin-bottom:12px;}
-  .sheet input{display:block;width:100%;margin-top:4px;font-family:inherit;font-size:16px;min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:10px;padding:6px 10px;}
-  .mctrl{display:flex;gap:8px;margin-top:4px;}
-  .mctrl .act{flex:1;}
-  .sheet textarea{display:block;width:100%;margin-top:4px;font-family:inherit;font-size:16px;min-height:88px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:10px;padding:8px 10px;resize:vertical;}
-  .msub{color:var(--muted);font-size:12px;margin:-8px 0 14px;}
-  .chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;}
-  .chip{font-family:inherit;font-size:13px;min-height:38px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:999px;padding:6px 13px;cursor:pointer;}
-  .chip.on{border-color:var(--accent);color:var(--accent);}
-  .act.dgr{border-color:var(--err);color:var(--err);}
-  /* phones: modals become bottom sheets */
-  @media(max-width:759px){
-    .modal{align-items:flex-end;padding:0;}
-    .modal .sheet{max-width:none;border-radius:16px 16px 0 0;padding-bottom:calc(18px + env(safe-area-inset-bottom));animation:sheetup .18s ease-out;}
+  *{box-sizing:border-box;min-width:0;}
+  /* the view switch toggles [hidden] on blocks that carry their own display:flex/grid,
+     which would silently win over the UA's [hidden]{display:none} */
+  [hidden]{display:none!important;}
+  html,body{overflow-x:hidden;}
+  body{font-family:var(--font-ui);background:var(--bg0);color:var(--fg);margin:0;
+    padding:14px 14px calc(30px + env(safe-area-inset-bottom));-webkit-font-smoothing:antialiased;}
+  .wrap{max-width:1120px;margin:0 auto;}
+  .num{font-variant-numeric:tabular-nums;}
+  b{font-weight:600;}
+  a{color:var(--fg);}
+  button{font-family:inherit;color:inherit;}
+  :focus-visible{outline:2px solid var(--now);outline-offset:2px;border-radius:4px;}
+  @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;}}
+
+  /* ---- top bar ---- */
+  .top{display:flex;align-items:baseline;gap:12px;margin-bottom:2px;}
+  .brand{font-family:var(--font-d);font-weight:700;font-size:30px;letter-spacing:.02em;text-transform:uppercase;line-height:1;margin:0;}
+  .navlinks{margin-left:auto;display:flex;gap:6px;}
+  .navlinks a{color:var(--mut);text-decoration:none;font-size:12px;font-weight:600;min-height:44px;display:inline-flex;align-items:center;padding:0 12px;border:1px solid var(--line);border-radius:999px;white-space:nowrap;}
+  .navlinks a:active{color:var(--fg);background:var(--bg1);}
+  .status{color:var(--mut);font-size:12px;margin:4px 2px 14px;min-height:15px;}
+  .rlink{color:var(--fg);text-decoration:underline;}
+
+  /* ---- eyebrow labels (section voice) ---- */
+  .eyebrow{font-family:var(--font-d);font-weight:600;font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--mut);}
+  .eyebrow .cnt{color:var(--dim);margin-left:4px;letter-spacing:0;}
+
+  /* ---- HOY hero: the signature. Accent lives here. ---- */
+  .hero{background:var(--bg1);border:1px solid var(--line);border-radius:var(--r-card);padding:16px 16px 14px;margin-bottom:12px;position:relative;overflow:hidden;}
+  .hero::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--now);}
+  .hero .eyebrow{color:var(--now);display:flex;align-items:center;gap:8px;}
+  .sdot{width:7px;height:7px;border-radius:999px;background:var(--now);animation:pulse 1.6s ease-in-out infinite;flex:0 0 auto;}
+  .sdot.off{background:var(--dim);animation:none;}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.35;}}
+  .hclock{font-family:var(--font-d);font-weight:700;font-size:clamp(52px,17vw,76px);line-height:.95;letter-spacing:.01em;margin:8px 0 0;font-variant-numeric:tabular-nums;}
+  .hclock.far{font-size:clamp(34px,10vw,46px);}
+  .hcount{color:var(--now);font-size:15px;font-weight:600;margin-top:2px;font-variant-numeric:tabular-nums;}
+  .htbd{color:var(--mut);font-size:13px;font-style:italic;margin-top:2px;}
+  .hname{font-size:17px;font-weight:700;margin-top:10px;line-height:1.3;cursor:pointer;}
+  .hname .rid{color:var(--mut);font-weight:600;}
+  .hmeta{color:var(--mut);font-size:13px;margin-top:3px;line-height:1.6;}
+  .htiles{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;}
+  .tile{flex:1 1 auto;min-height:46px;background:var(--bg2);border:1px solid var(--line);border-radius:var(--r-ctl);
+    display:inline-flex;align-items:center;justify-content:center;gap:6px;font-size:13px;font-weight:600;color:var(--fg);
+    text-decoration:none;padding:8px 10px;cursor:pointer;transition:background .14s;}
+  .tile:active{background:var(--bg3);}
+  .tile .bdg{background:var(--warn-dim);color:var(--warn);border-radius:999px;font-size:12px;padding:1px 8px;font-variant-numeric:tabular-nums;}
+  .herowait{padding:20px 16px;}
+  .herowait::before{background:var(--dim);}
+  .herowait .eyebrow{color:var(--mut);}
+  .hwaittxt{font-size:14px;color:var(--mut);margin:10px 0 0;line-height:1.5;}
+  .hbtn{margin-top:12px;}
+
+  /* ---- filter chips: quiet, one scrolling row ---- */
+  .fbar{display:flex;gap:8px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:2px 0 10px;scrollbar-width:none;}
+  .fbar::-webkit-scrollbar{display:none;}
+  .chip{flex:0 0 auto;font-size:12px;font-weight:600;min-height:44px;background:transparent;color:var(--mut);
+    border:1px solid var(--line);border-radius:999px;padding:6px 13px;cursor:pointer;white-space:nowrap;transition:color .14s,border-color .14s;}
+  .chip.on{color:var(--fg);border-color:var(--mut);background:var(--bg1);}
+  .chip.tagc.on{color:#0d1114;}
+
+  /* ---- pipeline segments ---- */
+  .segs{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:2px 0 12px;}
+  .seg{font-family:var(--font-d);font-weight:600;font-size:15px;letter-spacing:.08em;text-transform:uppercase;
+    min-height:46px;background:transparent;color:var(--mut);border:1px solid var(--line);border-radius:var(--r-ctl);
+    cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;padding:4px 6px;transition:color .14s,border-color .14s;}
+  .seg .n{font-size:14px;color:var(--dim);font-variant-numeric:tabular-nums;letter-spacing:0;}
+  .seg.on{color:var(--fg);border-color:var(--fg);background:var(--bg1);}
+  .seg.on .n{color:var(--fg);}
+
+  /* ---- view switch: Lista (stage axis) / Agenda (time axis) — underline tabs, a different
+     shape than the boxed segments because it's a different question ---- */
+  .vsws{display:flex;gap:2px;border-bottom:1px solid var(--line);margin:0 0 12px;}
+  .vsw{font-family:var(--font-d);font-weight:600;font-size:15px;letter-spacing:.08em;text-transform:uppercase;
+    background:none;border:none;border-bottom:2px solid transparent;margin-bottom:-1px;color:var(--mut);
+    min-height:46px;padding:4px 14px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;
+    transition:color .14s,border-color .14s;}
+  .vsw.on{color:var(--fg);border-bottom-color:var(--fg);}
+  .vsw .n{font-size:14px;color:var(--dim);letter-spacing:0;font-variant-numeric:tabular-nums;}
+  .vsw.on .n{color:var(--fg);}
+
+  /* ---- agenda: one week (lun–dom) of visits (see DESIGN.md) ---- */
+  .aghead{display:flex;align-items:center;gap:8px;margin:2px 0 10px;flex-wrap:wrap;}
+  .agnav{margin-left:auto;display:flex;align-items:center;gap:6px;}
+  .agnav button{font-family:inherit;font-size:17px;font-weight:600;min-width:44px;min-height:44px;background:var(--bg1);
+    color:var(--fg);border:1px solid var(--line);border-radius:var(--r-ctl);cursor:pointer;padding:0;transition:background .14s;}
+  .agnav button:active{background:var(--bg3);}
+  .agweek{font-family:var(--font-d);font-weight:600;font-size:16px;letter-spacing:.06em;text-transform:uppercase;
+    text-align:center;min-width:108px;white-space:nowrap;font-variant-numeric:tabular-nums;}
+  .agdays{display:flex;gap:8px;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;
+    padding-bottom:4px;scrollbar-width:none;}
+  .agdays::-webkit-scrollbar{display:none;}
+  .agday{flex:0 0 74vw;max-width:310px;min-height:132px;scroll-snap-align:start;background:var(--bg1);
+    border:1px solid var(--line);border-radius:12px;padding:10px 11px;}
+  .agday.today{border-color:var(--now);}
+  .agday.past{opacity:.55;}
+  .agdh{font-family:var(--font-d);font-weight:600;font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--mut);white-space:nowrap;}
+  .agday.today .agdh{color:var(--now);}
+  .agfree{color:var(--dim);font-size:12.5px;font-style:italic;padding:10px 0 2px;}
+  .ag{padding:10px 0 6px;}
+  .ag+.ag{border-top:1px solid var(--line);}
+  .agtime{font-family:var(--font-d);font-weight:700;font-size:27px;line-height:1;font-variant-numeric:tabular-nums;}
+  .agtime.next{color:var(--now);}
+  .agtbd{color:var(--mut);font-size:13px;font-style:italic;padding:6px 0 2px;}   /* same voice as .htbd */
+  .agflags{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;}
+  .agname{display:block;width:100%;text-align:left;background:none;border:none;padding:8px 0 2px;min-height:44px;
+    font-size:14px;font-weight:600;line-height:1.35;cursor:pointer;overflow-wrap:break-word;}
+  .agx .agname{text-decoration:line-through;text-decoration-color:var(--dim);color:var(--mut);}
+  .agx .agtime{color:var(--dim);}
+  .agmeta{color:var(--mut);font-size:12px;line-height:1.5;font-variant-numeric:tabular-nums;}
+  .ag .contactb{font-size:12px;margin-top:6px;line-height:1.7;}
+  /* desktop: the full week side by side while browsing; opening a ficha docks the sheet right
+     and the week compresses back to snap-scrolling columns */
+  @media(min-width:760px){
+    html:not(.sheet-open) .cols.agview{grid-template-columns:minmax(0,1fr);}
+    html:not(.sheet-open) .cols.agview .colR{display:none;}
+    html:not(.sheet-open) .cols.agview .agdays{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));overflow:visible;}
+    html:not(.sheet-open) .cols.agview .agday{max-width:none;}
+    html.sheet-open .agday{flex-basis:250px;}
   }
-  @keyframes sheetup{from{transform:translateY(28px);opacity:.6;}to{transform:none;opacity:1;}}
-  /* per-line notes with delete */
-  .ntline{display:flex;align-items:baseline;gap:6px;}
-  .ntline .nmeta{color:var(--muted);font-size:11px;white-space:nowrap;}
-  .ntline .ntxt{flex:1;min-width:0;color:var(--fg);}
-  .ntline .ntdel{background:none;border:none;color:var(--muted);font-size:12px;cursor:pointer;padding:2px 6px;flex:0 0 auto;}
-  /* date-only visit: the time isn't agreed yet */
-  .visit .k .tbd{display:block;font-size:10px;font-weight:400;font-style:italic;color:var(--muted);}
-  .vcard .vtime.tbd{color:var(--muted);font-weight:400;font-style:italic;}
-  /* deep-link target flash (#apt-<id> from Telegram acks) */
-  .hilite{animation:hilite 1.8s ease-out;}
-  @keyframes hilite{from{outline:3px solid var(--accent);outline-offset:2px;}to{outline:3px solid transparent;outline-offset:2px;}}
-  /* mobile agenda: next-visit hero + day-grouped list of the rest */
-  .hero{background:var(--bg-raised);border:1px solid var(--accent);border-radius:14px;padding:14px;margin-bottom:6px;}
-  .hero.empty2{border-color:var(--border);color:var(--muted);font-size:13px;text-align:center;padding:22px 14px;}
-  .hero .hlabel{font-size:12px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.04em;line-height:1.5;}
-  .hero .hname{font-size:19px;font-weight:700;line-height:1.25;margin:5px 0 2px;}
-  .hero .hname a{color:var(--fg);text-decoration:none;}
-  .hero .hmeta{color:var(--muted);font-size:13px;line-height:1.8;margin-top:5px;}
-  .hero .hmeta a{color:var(--accent);text-decoration:none;}
-  .hero .hresch{display:flex;align-items:center;gap:10px;margin-top:12px;}
-  .hero .hresch .k{color:var(--muted);font-size:12px;white-space:nowrap;}
-  .hero .hact{display:flex;gap:8px;margin-top:10px;}
-  .hero .hact .act{flex:1;}
-  .agrp{margin-top:14px;}
-  .agrp .gh{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin:0 2px 6px;}
-  .agrp .arow+.gh{margin-top:12px;} /* space before each new dated day header within "Después" */
-  .arow{display:flex;align-items:baseline;gap:10px;padding:9px 11px;background:var(--bg-raised);border:1px solid var(--border);border-radius:10px;margin-bottom:6px;}
-  .arow .atime{font-weight:700;color:var(--accent);font-size:12px;white-space:nowrap;min-width:44px;}
-  .arow .atime.tbd{color:var(--muted);font-weight:400;font-style:italic;font-size:11px;min-width:0;}
-  .arow .aname{font-weight:600;font-size:14px;color:var(--fg);text-decoration:none;flex:1;min-width:0;overflow-wrap:break-word;}
-  .arow .aloc a{color:var(--accent);text-decoration:none;font-size:15px;}
-  /* visit-photo thumb strip (photos taken by us, under the listing's own og:image) */
-  .pstrip{display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;margin-bottom:10px;}
-  .pstrip a{flex:0 0 auto;cursor:zoom-in;}
-  .pstrip img{width:72px;height:72px;object-fit:cover;border-radius:8px;display:block;border:1px solid var(--border);}
-  /* full-screen photo lightbox — tapping a thumb opens the full-res photo here (z above the
-     other modals/sheets at 50, and well above the clamped Leaflet panes) */
-  .lb{display:none;position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:60;flex-direction:column;align-items:center;justify-content:center;padding:16px;cursor:zoom-out;}
-  .lb.show{display:flex;}
-  .lb img{max-width:100%;max-height:calc(100vh - 96px);object-fit:contain;border-radius:8px;cursor:default;}
-  .lb .lb-cap{color:#fff;font-size:13px;line-height:1.4;margin-top:12px;text-align:center;max-width:640px;}
-  .lb .lb-cap:empty{display:none;}
-  .lb .lb-close{position:absolute;top:calc(12px + env(safe-area-inset-top));right:16px;width:40px;height:40px;border-radius:999px;border:none;background:rgba(0,0,0,.55);color:#fff;font-size:20px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;}
-  .pcount{display:block;font-size:10px;color:var(--muted);text-align:center;margin-top:2px;white-space:nowrap;}
-  /* post-visit follow-up block */
-  .fublock{display:flex;flex-direction:column;gap:8px;}
-  .furow{background:var(--bg-raised);border:1px solid var(--border);border-radius:12px;padding:12px;}
-  .furow .fuinfo{display:flex;align-items:baseline;gap:8px;justify-content:space-between;flex-wrap:wrap;margin-bottom:10px;}
-  .furow .funame{font-weight:700;font-size:14px;color:var(--fg);text-decoration:none;}
-  .furow .fuwhen{color:var(--muted);font-size:12px;}
-  .furow .fumeta{color:var(--muted);font-size:12px;margin:-4px 0 10px;line-height:1.5;}
-  .furow .fuact{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
-  .furow .fuact .act{min-height:42px;}
-  @media(min-width:760px){.furow .fuact{display:flex;}.furow .fuact .act{flex:0 0 auto;}}
-  /* map: pins for every apartment with a geocoded address. z-index:0 makes a stacking context
-     so Leaflet's internal panes (z up to ~800) stay under the modals/sheets (z 50) */
-  #map{height:380px;border:1px solid var(--border);border-radius:14px;position:relative;z-index:0;}
-  .leaflet-container{background:var(--bg);font-family:var(--font-ui);}
-  #map .leaflet-popup-content-wrapper,#map .leaflet-popup-tip{background:var(--bg-raised);color:var(--fg);box-shadow:0 3px 14px rgba(0,0,0,.5);}
-  #map .leaflet-popup-close-button{color:var(--muted);}
-  #map .leaflet-control-attribution{background:rgba(14,16,19,.72);color:var(--muted);}
-  #map .leaflet-control-attribution a{color:var(--muted);}
-  #map .leaflet-bar a{background:var(--bg-raised);color:var(--fg);border-color:var(--border);}
+
+  /* ---- apartment rows ---- */
+  .rows{display:flex;flex-direction:column;gap:8px;}
+  .row{display:flex;gap:11px;align-items:center;background:var(--bg1);border:1px solid var(--line);border-radius:12px;
+    padding:10px 11px;cursor:pointer;min-height:64px;transition:background .14s;}
+  .row:active{background:var(--bg2);}
+  .rthumb{width:52px;height:52px;object-fit:cover;border-radius:9px;flex:0 0 auto;display:block;background:var(--bg2);}
+  .rthumb.noimg{border:1px solid var(--line);}
+  .rmid{flex:1;min-width:0;}
+  .rname{font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .rid{color:var(--mut);font-weight:600;}
+  .rsub{color:var(--mut);font-size:12.5px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums;}
+  .rfact{font-size:12px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .fnext{color:var(--now);font-weight:600;}
+  .fmut{color:var(--mut);}
+  .fdim{color:var(--dim);}
+  .rside{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex:0 0 auto;}
+
+  /* ---- pills: meaning-only color ---- */
+  .pill{display:inline-flex;align-items:center;font-size:11px;font-weight:600;border-radius:999px;padding:2px 8px;white-space:nowrap;font-variant-numeric:tabular-nums;}
+  .pill.now{color:var(--now);background:var(--now-dim);}
+  .pill.ok{color:var(--ok);background:var(--ok-dim);}
+  .pill.warn{color:var(--warn);background:var(--warn-dim);}
+  .pill.err{color:var(--err);background:var(--err-dim);}
+  .pill.mut{color:var(--mut);background:var(--bg2);}
+  .tag{display:inline-block;font-size:11px;font-weight:700;color:#0d1114;border-radius:999px;padding:1px 9px;vertical-align:middle;}
+
+  /* ---- empty / loading states ---- */
+  .empty{color:var(--mut);text-align:center;padding:34px 16px;font-size:14px;line-height:1.6;
+    border:1px dashed var(--line);border-radius:var(--r-card);}
+  .empty .btn{margin-top:10px;}
+  .skel{border-radius:12px;background:linear-gradient(100deg,var(--bg1) 40%,var(--bg2) 50%,var(--bg1) 60%);
+    background-size:200% 100%;animation:shimmer 1.2s linear infinite;}
+  @keyframes shimmer{to{background-position:-200% 0;}}
+
+  /* ---- descartadas ---- */
+  details.ruled{border:1px dashed var(--line);border-radius:var(--r-card);padding:2px 12px 8px;margin-top:18px;}
+  details.ruled summary{cursor:pointer;padding:12px 2px;list-style:none;display:flex;align-items:center;gap:8px;min-height:44px;}
+  details.ruled summary::-webkit-details-marker{display:none;}
+  details.ruled summary .eyebrow{color:var(--dim);}
+  .rrow{display:flex;align-items:center;gap:10px;padding:11px 2px;border-top:1px solid var(--line);cursor:pointer;flex-wrap:wrap;}
+  .rrloc{font-weight:600;font-size:14px;text-decoration:line-through;text-decoration-color:var(--dim);}
+  .rrmeta{color:var(--dim);font-size:12px;}
+  .rrreason{font-size:11px;color:var(--err);background:var(--err-dim);border-radius:999px;padding:2px 8px;}
+  .rrow .grow{flex:1;}
+
+  /* ---- map (lazy, behind a chip) ---- */
+  #mapbox{margin:0 0 12px;}
+  #map{height:340px;border:1px solid var(--line);border-radius:var(--r-card);position:relative;z-index:0;}
+  .leaflet-container{background:var(--bg0);font-family:var(--font-ui);}
+  #map .leaflet-popup-content-wrapper,#map .leaflet-popup-tip{background:var(--bg2);color:var(--fg);box-shadow:0 3px 14px rgba(0,0,0,.5);}
+  #map .leaflet-popup-close-button{color:var(--mut);}
+  #map .leaflet-control-attribution{background:rgba(10,13,16,.72);color:var(--mut);}
+  #map .leaflet-control-attribution a{color:var(--mut);}
+  #map .leaflet-bar a{background:var(--bg2);color:var(--fg);border-color:var(--line);}
   .mpop{font-size:12px;line-height:1.5;}
   .mpop .mname{font-weight:700;font-size:13px;margin-bottom:2px;}
-  .mpop .mmeta{color:var(--muted);}
-  .mpop .mapprox{color:var(--muted);font-size:10px;font-style:italic;margin-top:2px;}
-  .mpop .mlinks{margin-top:4px;}
-  .mpop a{color:var(--accent);text-decoration:none;}
+  .mpop .mmeta{color:var(--mut);}
+  .mpop .mapprox{color:var(--dim);font-size:10px;font-style:italic;margin-top:2px;}
+  .mpop a{color:var(--fg);}
+
+  /* ---- two-column layout ≥760px: pipeline left, detail docked right ---- */
+  .cols{display:block;}
+  .colR{display:block;}
+  @media(min-width:760px){
+    .cols{display:grid;grid-template-columns:minmax(0,10fr) minmax(330px,9fr);gap:18px;align-items:start;}
+    .hclock{font-size:64px;}
+    .hclock.far{font-size:40px;}
+  }
+
+  /* ---- detail: bottom sheet on phones, docked panel on desktop ---- */
+  #shade{position:fixed;inset:0;background:rgba(4,6,8,.6);z-index:40;opacity:0;pointer-events:none;transition:opacity .18s;}
+  html.sheet-open #shade{opacity:1;pointer-events:auto;}
+  #detail{background:var(--bg2);border:1px solid var(--line);z-index:50;}
+  @media(max-width:759px){
+    #detail{position:fixed;left:0;right:0;bottom:0;max-height:90vh;max-height:90dvh;border-radius:var(--r-sheet) var(--r-sheet) 0 0;
+      transform:translateY(103%);transition:transform .2s cubic-bezier(.32,.72,.28,1);
+      display:flex;flex-direction:column;overflow:hidden;}
+    html.sheet-open #detail{transform:none;}
+    html.sheet-open,html.sheet-open body{overflow:hidden;}
+    .dscroll{overflow-y:auto;-webkit-overflow-scrolling:touch;}
+    .dphold{display:none;}
+  }
+  @media(min-width:760px){
+    #shade{display:none;}
+    #detail{position:sticky;top:12px;border-radius:var(--r-sheet);max-height:calc(100vh - 24px);display:flex;flex-direction:column;overflow:hidden;}
+    .dscroll{overflow-y:auto;}
+    .grab{display:none;}
+  }
+  .dhead{flex:0 0 auto;display:flex;align-items:center;justify-content:center;position:relative;padding:8px 0 2px;}
+  .grab{width:38px;height:4px;border-radius:999px;background:var(--line);}
+  .dx{position:absolute;right:6px;top:0;width:44px;height:44px;border:none;background:none;color:var(--mut);font-size:19px;cursor:pointer;border-radius:10px;}
+  .dscroll{flex:1 1 auto;padding:4px 16px 0;}
+  .dphold{color:var(--dim);font-size:13px;text-align:center;padding:60px 20px;}
+  .cover{width:100%;max-height:190px;object-fit:cover;border-radius:12px;display:block;margin-bottom:10px;}
+  .strip{display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;margin-bottom:12px;scrollbar-width:none;}
+  .strip::-webkit-scrollbar{display:none;}
+  .strip a{flex:0 0 auto;cursor:zoom-in;}
+  .strip img{width:66px;height:66px;object-fit:cover;border-radius:8px;display:block;border:1px solid var(--line);}
+  .dtitle{font-size:19px;font-weight:700;line-height:1.3;}
+  .dsub{color:var(--mut);font-size:12.5px;margin-top:3px;}
+  .dpills{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
+  .dprice{margin:12px 0 2px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;}
+  .dprice .big{font-family:var(--font-d);font-weight:700;font-size:32px;line-height:1;font-variant-numeric:tabular-nums;}
+  .dprice .per{color:var(--mut);font-size:13px;}
+  .dpricesub{color:var(--mut);font-size:12.5px;margin-top:4px;font-variant-numeric:tabular-nums;}
+  .dlinks{display:flex;gap:8px;margin:12px 0 2px;flex-wrap:wrap;}
+  .facts{display:grid;grid-template-columns:repeat(3,1fr);gap:10px 8px;margin:14px 0 0;padding-top:12px;border-top:1px solid var(--line);}
+  .fact .k{display:block;color:var(--dim);font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;margin-bottom:2px;}
+  .fact .v{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;}
+  .contactb{color:var(--mut);font-size:13px;margin-top:12px;line-height:1.9;}
+  .contactb a{color:var(--fg);text-decoration:underline;text-underline-offset:2px;}
+  .sect{margin-top:20px;padding-top:14px;border-top:1px solid var(--line);}
+  .sect-h{display:flex;align-items:baseline;gap:8px;margin-bottom:10px;}
+  .sect-h .eyebrow{color:var(--mut);}
+  .sect-h .mini{margin-left:auto;}
+  .dmeta{color:var(--dim);font-size:11.5px;margin:16px 0 14px;line-height:1.6;}
+  .quote{color:var(--mut);font-size:12.5px;border-left:2px solid var(--line);padding-left:10px;margin:10px 0 0;line-height:1.5;}
+
+  /* ---- controls ---- */
+  .btn{font-size:13px;font-weight:600;min-height:44px;background:var(--bg3);color:var(--fg);border:1px solid var(--line);
+    border-radius:var(--r-ctl);padding:8px 13px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px;
+    text-decoration:none;transition:background .14s;}
+  .btn:active{background:var(--bg1);}
+  .btn:disabled{opacity:.5;cursor:default;}
+  .btn.prim{border-color:var(--fg);}
+  .btn.dgr{color:var(--err);border-color:rgba(239,110,110,.4);}
+  .btn.sm{min-height:44px;font-size:12px;padding:6px 11px;}
+  .btn.ghost{background:none;border-color:transparent;color:var(--mut);text-decoration:underline;text-underline-offset:2px;}
+  .in{font-family:inherit;font-size:16px;min-height:44px;background:var(--bg3);color:var(--fg);border:1px solid var(--line);
+    border-radius:var(--r-ctl);padding:8px 11px;width:100%;}
+  input[type=datetime-local].in{font-variant-numeric:tabular-nums;}
+  .inrow{display:flex;gap:8px;align-items:center;}
+  .inrow .in{flex:1;}
+  .inrow .btn{flex:0 0 auto;}
+
+  /* ---- visitas ---- */
+  .visit{display:flex;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);}
+  .visit:last-of-type{border-bottom:none;}
+  .vdot{flex:0 0 auto;width:20px;text-align:center;font-size:13px;line-height:1.6;}
+  .vdot.next{color:var(--now);}
+  .vdot.done{color:var(--mut);}
+  .vdot.off{color:var(--dim);}
+  .vbody{flex:1;min-width:0;}
+  .vwhen{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;}
+  .vwhen.next{color:var(--now);}
+  .vwhen.off{color:var(--dim);text-decoration:line-through;}
+  .vwho{color:var(--mut);font-size:12px;margin-top:1px;}
+  .vctl{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;}
+  .vnotes{margin-top:6px;}
+  .whochips{display:flex;gap:6px;}
+  .wchip{font-size:12px;font-weight:600;min-height:44px;background:transparent;color:var(--mut);border:1px solid var(--line);
+    border-radius:999px;padding:5px 13px;cursor:pointer;}
+  .wchip.on{color:var(--fg);border-color:var(--fg);background:var(--bg3);}
+  .sched{margin-top:12px;display:flex;flex-direction:column;gap:8px;}
+
+  /* ---- documentos ---- */
+  .doc{display:flex;align-items:center;gap:10px;padding:8px 0;min-height:44px;cursor:pointer;border-bottom:1px solid var(--line);}
+  .doc:last-of-type{border-bottom:none;}
+  .dstat{flex:0 0 auto;width:22px;height:22px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;}
+  .dstat.pending{border:1.5px solid var(--warn);color:var(--warn);}
+  .dstat.received{background:var(--ok-dim);color:var(--ok);}
+  .dstat.na{border:1.5px solid var(--line);color:var(--dim);}
+  .dlab{flex:1;font-size:13.5px;line-height:1.35;}
+  .doc.na .dlab{color:var(--dim);text-decoration:line-through;}
+  .dfile{flex:0 0 auto;font-size:12px;color:var(--fg);text-decoration:underline;text-underline-offset:2px;max-width:34%;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .ddel{flex:0 0 auto;background:none;border:none;color:var(--dim);font-size:13px;cursor:pointer;padding:8px;min-width:44px;min-height:44px;}
+  .dbar{height:4px;border-radius:999px;background:var(--bg3);overflow:hidden;margin:2px 0 10px;}
+  .dbar i{display:block;height:100%;background:var(--ok);border-radius:999px;transition:width .2s;}
+  .dhint{color:var(--dim);font-size:11.5px;margin-top:6px;}
+
+  /* ---- notas ---- */
+  .ntline{display:flex;align-items:baseline;gap:6px;padding:3px 0;}
+  .ntline .nmeta{color:var(--dim);font-size:11px;white-space:nowrap;font-variant-numeric:tabular-nums;}
+  .ntline .ntxt{flex:1;min-width:0;font-size:13px;line-height:1.45;overflow-wrap:break-word;}
+  .ntdel{background:none;border:none;color:var(--dim);font-size:12px;cursor:pointer;padding:10px 12px;margin:-8px 0;flex:0 0 auto;}
+
+  /* ---- votes ---- */
+  .votes{display:flex;align-items:center;gap:8px;margin-top:12px;flex-wrap:wrap;}
+  .vo{font-size:12.5px;font-weight:600;min-height:44px;background:var(--bg3);color:var(--fg);border:1px solid var(--mut);
+    border-radius:999px;padding:5px 14px;cursor:pointer;}
+  .vo:disabled{opacity:.5;}
+  .vopill{display:inline-flex;align-items:center;font-size:12.5px;color:var(--mut);border:1px solid var(--line);border-radius:999px;padding:6px 13px;}
+
+  /* ---- sticky thumb-zone bar (inside the sheet) ---- */
+  .bar{flex:0 0 auto;position:sticky;bottom:0;display:grid;grid-template-columns:repeat(4,1fr);gap:8px;
+    background:var(--bg2);border-top:1px solid var(--line);padding:10px 16px calc(10px + env(safe-area-inset-bottom));margin-top:14px;}
+  .bar.c3{grid-template-columns:repeat(3,1fr);}
+  .bbtn{font-size:12px;font-weight:600;min-height:48px;background:var(--bg3);color:var(--fg);border:1px solid var(--line);
+    border-radius:var(--r-ctl);cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;padding:4px 2px;text-decoration:none;}
+  .bbtn .ic{font-size:15px;}
+  .bbtn.dgr{color:var(--err);}
+
+  /* ---- edit form / discard mode ---- */
+  .eform{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;}
+  .eform label{display:block;font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;}
+  .eform label.wide{grid-column:1 / -1;}
+  .eform .in{margin-top:4px;font-size:16px;}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0;}
+  .rchip{font-size:13px;min-height:40px;background:var(--bg3);color:var(--fg);border:1px solid var(--line);border-radius:999px;padding:6px 13px;cursor:pointer;}
+  .rchip.on{border-color:var(--err);color:var(--err);}
+  .mctl{display:flex;gap:8px;margin-top:14px;}
+  .mctl .btn{flex:1;}
+
+  /* ---- lightbox ---- */
+  .lb{display:none;position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:90;flex-direction:column;align-items:center;justify-content:center;padding:16px;cursor:zoom-out;}
+  .lb.show{display:flex;}
+  .lb img{max-width:100%;max-height:calc(100vh - 96px);object-fit:contain;border-radius:8px;cursor:default;}
+  .lbcap{color:#fff;font-size:13px;line-height:1.4;margin-top:12px;text-align:center;max-width:640px;}
+  .lbcap:empty{display:none;}
+  .lbx{position:absolute;top:calc(12px + env(safe-area-inset-top));right:16px;width:44px;height:44px;border-radius:999px;border:none;
+    background:rgba(20,24,28,.7);color:#fff;font-size:20px;cursor:pointer;}
+
+  /* ---- toast ---- */
+  .toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);
+    background:var(--fg);color:var(--bg0);padding:9px 18px;border-radius:999px;font-size:13px;font-weight:600;
+    opacity:0;transition:opacity .18s;pointer-events:none;z-index:100;max-width:88vw;text-align:center;}
+  .toast.show{opacity:.97;}
+
+  /* ---- deep-link flash (#apt-<id> from Telegram acks) ---- */
+  .hilite{animation:hilite 1.8s ease-out;}
+  @keyframes hilite{from{outline:3px solid var(--now);outline-offset:2px;}to{outline:3px solid transparent;outline-offset:2px;}}
+
+  .foot{color:var(--dim);font-size:11px;text-align:center;margin-top:22px;line-height:1.6;}
 </style></head><body>
 <div class="wrap">
-  <nav><a href="/">⌂</a><a href="/dashboard.html">🏠 Hogar</a><a class="on" href="/apartments.html">🏢 Apartamentos</a></nav>
-  <div class="sub" id="sub">Cargando…</div>
+  <div class="top">
+    <h1 class="brand">Apartamentos</h1>
+    <nav class="navlinks"><a href="/">⌂ Inicio</a><a href="/dashboard.html">Hogar</a></nav>
+  </div>
+  <div class="status" id="status">Cargando…</div>
+  <div id="hero"><div class="skel" style="height:150px"></div></div>
   <div class="fbar" id="fbar"></div>
-  <div class="toolbar">
-    <div class="viewtoggle" id="grouptoggle"><span class="tlabel">Agrupar</span>
-      <button class="gr-btn" data-group="tipo">Tipo</button>
-      <button class="gr-btn" data-group="estado">Estado</button>
+  <div id="mapbox" hidden><div id="map"></div></div>
+  <div class="cols">
+    <div class="colL">
+      <div class="vsws" id="vsw"></div>
+      <div class="segs" id="segs"></div>
+      <div class="rows" id="list">
+        <div class="skel" style="height:64px"></div><div class="skel" style="height:64px"></div><div class="skel" style="height:64px"></div>
+      </div>
+      <div id="agendabox" hidden></div>
+      <div id="ruledbox2"></div>
+      <div class="foot">Toca un apartamento para agendar visitas, seguir documentos o descartarlo.<br>
+        También puedes responder al mensaje del apto en Telegram: «visita el martes a las 10am».<br>
+        Al agendar o mover una visita, la invitación de calendario llega al correo de ambos.</div>
     </div>
-    <div class="viewtoggle" id="viewtoggle"></div><!-- buttons rendered per viewport -->
-
+    <aside class="colR"><div id="detail"><div class="dphold">Selecciona un apartamento para ver su ficha.</div></div></aside>
   </div>
-  <div id="visits"></div>
-  <div id="followup"></div>
-  <div id="root"></div>
-  <div id="ruledRoot"></div>
-  <div id="mapsect" style="display:none">
-    <h2 class="sect">🗺 En el mapa <span class="count" id="mapcount"></span></h2>
-    <div id="map"></div>
-  </div>
-  <div class="foot">Fija la fecha y hora de visita, vuelve a leer un link, o descarta un apartamento aquí.<br>También puedes responder al mensaje del apto en Telegram: "visita el martes a las 10am".<br>Al agendar o mover una visita, la invitación de calendario llega al correo de ambos.</div>
+</div>
+<div id="shade" data-act="close"></div>
+<div class="lb" id="lb" role="dialog" aria-modal="true" aria-label="Foto">
+  <button class="lbx" id="lbx" type="button" aria-label="Cerrar">✕</button>
+  <img id="lbimg" alt="">
+  <div class="lbcap" id="lbcap"></div>
 </div>
 <div class="toast" id="toast"></div>
-<div class="modal" id="editModal"><div class="sheet">
-  <div class="mh">Editar apartamento</div>
-  <label>Dirección<input id="e_address" type="text" autocomplete="off"></label>
-  <label>Agente<input id="e_agent" type="text" autocomplete="off"></label>
-  <label>Teléfono<input id="e_phone" type="tel" autocomplete="off"></label>
-  <label>Etiqueta<input id="e_tag" type="text" autocomplete="off" placeholder="p.ej. Chicó, Favorito"></label>
-  <div class="mctrl"><button class="act" id="e_cancel">Cancelar</button><button class="act prim" id="e_save">Guardar</button></div>
-</div></div>
-<div class="modal" id="noteModal"><div class="sheet">
-  <div class="mh" id="n_title">Nota</div>
-  <label>Nota (se agrega a las anteriores, con fecha y autor)<textarea id="n_text"></textarea></label>
-  <div class="mctrl"><button class="act" id="n_cancel">Cancelar</button><button class="act prim" id="n_save">Guardar</button></div>
-</div></div>
-<div class="modal" id="roModal"><div class="sheet">
-  <div class="mh" id="r_title">¿Descartar?</div>
-  <div class="msub">Va a Descartados (reversible).</div>
-  <div class="chips" id="r_chips">
-    <button class="chip">muy caro</button><button class="chip">muy lejos</button><button class="chip">oscuro</button><button class="chip">sin parqueadero</button><button class="chip">ya no disponible</button>
-  </div>
-  <label>Motivo (opcional)<input id="r_reason" type="text" autocomplete="off"></label>
-  <div class="mctrl"><button class="act" id="r_cancel">Cancelar</button><button class="act dgr" id="r_save">Descartar</button></div>
-</div></div>
-<div class="modal" id="cardModal"><div class="sheet cardsheet" id="cardBox"></div></div>
-<div class="lb" id="photoLb" role="dialog" aria-modal="true" aria-label="Foto">
-  <button class="lb-close" id="lb_close" type="button" aria-label="Cerrar">✕</button>
-  <img id="lb_img" alt="">
-  <div class="lb-cap" id="lb_cap"></div>
-</div>
 <script>
-var DATA=null;
-function esc(s){s=(s==null?"":String(s));return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;");}
-function aptName(r){return r.location||r.title||r.source_site||("apto "+r.id);}
-// canonical label: #id · location — two listings in the same neighborhood only differ by the id
-function aptLabel(r){return "#"+r.id+" · "+aptName(r);}
-// price + area: the two numbers that tell twin listings in the same location apart.
-// rent shows the all-in monthly (price+admin), mirroring effPrice/ppmOf.
-function priceAreaBits(r){
-  var isRent=r.deal_type==="rent";
-  var total=(isRent&&r.price!=null)?Number(r.price)+Number(r.admin_fee||0):r.price;
-  var b=[];
-  if(total!=null)b.push(mny(total)+(isRent?"/mes":""));
-  if(r.area_m2!=null)b.push(r.area_m2+" m²");
-  return b;
-}
-// WhatsApp deep link: wa.me needs a full international number, digits only.
-// Bare 10-digit Colombian mobiles (start with 3) get the +57 country code.
-function waLink(phone){var d=String(phone||"").replace(/\D/g,"");if(d.length===10&&d.charAt(0)==="3")d="57"+d;return "https://wa.me/"+d;}
-// anchor the query to Bogotá so a bare street address doesn't resolve to the same one in another city
-function mapsLink(addr){var a=String(addr||"").trim();if(a&&!/bogot[aá]/i.test(a))a+=", Bogotá";return "https://maps.google.com/?q="+encodeURIComponent(a);}
-// THE contact block — every surface that prints address/agent/phone uses these lines, so the
-// idiom is identical everywhere: address opens Maps, the number itself opens WhatsApp (how
-// agents actually get reached mid-visit), with a plain dial link as the fallback.
-function contactLines(r){
-  var out=[];
-  if(r.address)out.push("📍 <a class=\"tel\" href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\">"+esc(r.address)+"</a>");
-  if(r.agent_name)out.push("👤 "+esc(r.agent_name));
-  if(r.agent_phone)out.push("💬 <a class=\"tel\" href=\""+esc(waLink(r.agent_phone))+"\" target=\"_blank\" rel=\"noopener\">"+esc(r.agent_phone)+"</a> · <a class=\"tel\" href=\"tel:"+esc(r.agent_phone)+"\">📞 llamar</a>");
-  return out;
-}
-// datetime-local needs YYYY-MM-DDTHH:MM; pad legacy date-only visits with an editable 09:00 default
-function vdVal(vd){var v=vd?String(vd):"";return (v&&v.indexOf("T")<0)?v+"T09:00":v;}
-// og:image thumb with the no-image fallback, shared by the list row and the table cell
-function thumbHtml(r){return r.image_url?"<img class=\"thumb\" src=\""+esc(r.image_url)+"\" loading=\"lazy\" alt=\"\" onerror=\"this.className='thumb noimg';this.removeAttribute('src')\">":"<span class=\"thumb noimg\"></span>";}
+"use strict";
+const $=(id)=>document.getElementById(id);
+let DATA=null;
+
+/* ================= helpers & client twins ================= */
+function esc(s){s=(s==null?"":String(s));return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
+// unicode-safe base64 so an exact raw note line survives quotes/colons inside an HTML attribute
+function b64u(s){return btoa(unescape(encodeURIComponent(s)));}
+function unb64u(s){return decodeURIComponent(escape(atob(s)));}
 function mny(n){return (n==null||isNaN(Number(n)))?"—":"$"+Number(n).toLocaleString("es-CO");}
-function toast(t){var el=document.getElementById("toast");el.textContent=t;el.classList.add("show");setTimeout(function(){el.classList.remove("show");},1800);}
-function num(v){return v==null?"—":v;}
-function spec(k,v,best){return "<div class=\"spec\"><span class=\"k\">"+k+"</span><span class=\"v"+(best?" best":"")+"\">"+v+"</span></div>";}
-// deterministic hue from the tag text: same label => same color on every card and table row
-function tagColor(t){var s=String(t),h=0,i;for(i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))>>>0;return h%360;}
-function tagChip(t){var hue=tagColor(t);return "<span class=\"tag\" style=\"background:hsl("+hue+" 58% 62%)\">"+esc(t)+"</span>";}
-// ponytail: for rent the number that matters is price+admin; buy keeps the raw sale price
+function num(v){return v==null?"—":esc(v);}
+function aptName(r){return r.location||r.title||r.source_site||("apto "+r.id);}
+// canonical label: #id · location — two listings in the same neighborhood only differ by the id (twin of aptRef in index.ts)
+function aptLabel(r){return "#"+r.id+" · "+aptName(r);}
+// WhatsApp deep link: wa.me needs a full international number, digits only.
+// Bare 10-digit Colombian mobiles (start with 3) get the +57 country code. (twin of waLink in index.ts)
+function waLink(phone){let d=String(phone||"").replace(/\D/g,"");if(d.length===10&&d.charAt(0)==="3")d="57"+d;return "https://wa.me/"+d;}
+// anchor the query to Bogotá so a bare street address doesn't resolve to the same one in another city (twin of mapsLink in index.ts)
+function mapsLink(addr){let a=String(addr||"").trim();if(a&&!/bogot[aá]/i.test(a))a+=", Bogotá";return "https://maps.google.com/?q="+encodeURIComponent(a);}
+// the price a person actually pays: rent compares against price+admin, buy against the sale price (twin of the $/m² math in index.ts)
+function effPrice(r){if(r.price==null)return null;return r.deal_type==="rent"?Number(r.price)+Number(r.admin_fee||0):Number(r.price);}
+// for rent the number that matters is (price+admin)/m²; buy keeps the stored sale $/m² (twin of aptPpm in index.ts)
 function ppmOf(r,isRent){
   if(isRent){
     if(r.price!=null&&r.area_m2>0)return Math.round((Number(r.price)+Number(r.admin_fee||0))/Number(r.area_m2));
@@ -374,1118 +442,1194 @@ function ppmOf(r,isRent){
   }
   return (r.price_per_m2&&r.price_per_m2>0)?r.price_per_m2:null;
 }
-// ---- filter + sort bar ----
-// null = filter off; sort "ppm" = today's default order. Persisted as JSON; unknown keys dropped,
-// a stale tag simply matches nothing (and stays clearable).
-var FILTERS={deal:null,minBeds:null,maxPrice:null,tag:null,stage:null,sort:"ppm"};
-var SORT_LABELS={ppm:"mejor $/m²",price:"precio ↑",recent:"más reciente",visit:"próxima visita"};
-try{
-  var _sf=JSON.parse(localStorage.getItem("aptFilters")||"{}");
-  for(var _fk in FILTERS)if(_sf&&_sf[_fk]!==undefined)FILTERS[_fk]=_sf[_fk];
-  if(!SORT_LABELS[FILTERS.sort])FILTERS.sort="ppm";
-}catch(e){}
-function saveFilters(){try{localStorage.setItem("aptFilters",JSON.stringify(FILTERS));}catch(e){}}
-function filtersActive(){return !!(FILTERS.deal||FILTERS.minBeds||FILTERS.maxPrice!=null||FILTERS.tag||FILTERS.stage);}
-// the price a person actually pays: rent compares against price+admin, buy against the sale price
-function effPrice(r){if(r.price==null)return null;return r.deal_type==="rent"?Number(r.price)+Number(r.admin_fee||0):Number(r.price);}
-// pure: filtered copy of the active rows; feeds both the list sections and the table
-function applyFilters(rows){
-  return rows.filter(function(r){
-    if(FILTERS.deal&&r.deal_type!==FILTERS.deal)return false;
-    if(FILTERS.minBeds&&!(Number(r.bedrooms)>=FILTERS.minBeds))return false;
-    if(FILTERS.maxPrice!=null){var p=effPrice(r);if(p==null||p>FILTERS.maxPrice)return false;}
-    if(FILTERS.tag&&r.tag!==FILTERS.tag)return false;
-    if(FILTERS.stage&&stageOf(r)!==FILTERS.stage)return false;
-    return true;
-  });
+// price + area: the two numbers that tell twin listings apart. Rent shows the all-in monthly
+// (price+admin), mirroring effPrice/ppmOf. (twin of priceAreaBits in index.ts)
+function priceAreaBits(r){
+  const isRent=r.deal_type==="rent";
+  const total=(isRent&&r.price!=null)?Number(r.price)+Number(r.admin_fee||0):r.price;
+  const b=[];
+  if(total!=null)b.push(mny(total)+(isRent?"/mes":""));
+  if(r.area_m2!=null)b.push(r.area_m2+" m²");
+  return b;
 }
-// comparator for the chosen Orden, or null to keep each section's own default order.
-// "~" sorts after any digit, so rows without a visit go last under "próxima visita".
-function activeSorter(){
-  if(FILTERS.sort==="price")return function(a,b){var pa=effPrice(a),pb=effPrice(b);return (pa==null?Infinity:pa)-(pb==null?Infinity:pb);};
-  if(FILTERS.sort==="recent")return function(a,b){return String(b.created_at||"").localeCompare(String(a.created_at||""));};
-  if(FILTERS.sort==="visit")return function(a,b){var va=a.visit_date?visitCmp(a.visit_date):"~",vb=b.visit_date?visitCmp(b.visit_date):"~";return va<vb?-1:va>vb?1:0;};
-  return null;
-}
-// Precio presets: quartile-ish cutoffs from the data, rounded up to friendly COP steps.
-// Derived from the deal-filtered subset when Tipo is set (rent and buy prices don't mix well).
-function niceCut(v){
-  var step=v>=5e8?5e7:v>=1e8?1e7:v>=1e7?1e6:v>=1e6?1e5:1e4;
-  return Math.ceil(v/step)*step;
-}
-function priceCuts(rows){
-  var base=FILTERS.deal?rows.filter(function(r){return r.deal_type===FILTERS.deal;}):rows;
-  var ps=base.map(effPrice).filter(function(p){return p!=null&&p>0;}).sort(function(a,b){return a-b;});
-  if(ps.length<2)return [];
-  var out=[],seen={},qs=[0.25,0.5,0.75];
-  for(var i=0;i<qs.length;i++){
-    var c=niceCut(ps[Math.min(ps.length-1,Math.floor(ps.length*qs[i]))]);
-    if(!seen[c]){seen[c]=1;out.push(c);}
-  }
-  return out;
-}
-function buildFilterBar(rows){
-  if(!rows.length&&!filtersActive())return "";
-  var h="<button class=\"fchip"+(FILTERS.deal?" on":"")+"\" data-f=\"deal\">"
-    +(FILTERS.deal==="rent"?"Arriendo":FILTERS.deal==="buy"?"Compra":"Tipo: todos")+"</button>";
-  h+="<button class=\"fchip"+(FILTERS.minBeds?" on":"")+"\" data-f=\"beds\">"
-    +(FILTERS.minBeds?("Hab: "+FILTERS.minBeds+"+"):"Hab: todas")+"</button>";
-  h+="<button class=\"fchip"+(FILTERS.maxPrice!=null?" on":"")+"\" data-f=\"price\">"
-    +(FILTERS.maxPrice!=null?("≤ "+mny(FILTERS.maxPrice)):"Precio: todos")+"</button>";
-  h+="<button class=\"fchip"+(FILTERS.stage?" on":"")+"\" data-f=\"stage\">"
-    +(FILTERS.stage==="pending"?"⏳ por agendar":FILTERS.stage==="scheduled"?"📅 agendada":FILTERS.stage==="visited"?"✔ visitado":"Estado: todos")+"</button>";
-  var tags=[],tseen={};
-  for(var i=0;i<rows.length;i++){var t=rows[i].tag;if(t&&!tseen[t]){tseen[t]=1;tags.push(t);}}
-  if(FILTERS.tag&&!tseen[FILTERS.tag])tags.push(FILTERS.tag); // stale filter tag must stay clearable
-  tags.sort(function(a,b){return a.localeCompare(b,"es");});
-  for(var j=0;j<tags.length;j++){var tg=tags[j],hue=tagColor(tg),on=FILTERS.tag===tg;
-    h+="<button class=\"fchip tagf"+(on?" on":"")+"\" data-f=\"tag\" data-v=\""+esc(tg)+"\" style=\"border-color:hsl("+hue+" 58% 62%)"+(on?";background:hsl("+hue+" 58% 62%)":"")+"\">"+esc(tg)+"</button>";
-  }
-  h+="<button class=\"fchip"+(FILTERS.sort!=="ppm"?" on":"")+"\" data-f=\"sort\">Orden: "+SORT_LABELS[FILTERS.sort]+"</button>";
-  if(filtersActive())h+="<button class=\"fchip\" data-f=\"clear\">✕ limpiar</button>";
-  return h;
-}
-// «⬇ bajó $X» / «⬆ subió $X» pill while a rescrape-detected price change is fresh (14 days);
-// prev_price/price_changed_at only ever come from rescrapes — manual edits clear them
-function priceFlag(r){
-  if(!r.price_changed_at||r.prev_price==null||r.price==null)return "";
-  var age=Date.now()-Date.parse(r.price_changed_at);
-  if(!(age>=0&&age<=14*86400000))return "";
-  var diff=Number(r.prev_price)-Number(r.price);
-  if(!diff)return "";
-  var tt="de "+mny(r.prev_price)+" a "+mny(r.price)+" ("+noteDate(r.price_changed_at.slice(0,10))+")";
-  return diff>0
-    ? "<span class=\"flag drop\" title=\""+esc(tt)+"\">⬇ bajó "+mny(diff)+"</span>"
-    : "<span class=\"flag\" title=\""+esc(tt)+"\">⬆ subió "+mny(-diff)+"</span>";
-}
-// ---- per-person verdicts (r.votes = {felipe:"up", lucia:"down", ...}; DATA.me = logged-in voter) ----
-function voterName(p){return p==="felipe"?"Felipe":p==="lucia"?"Lucía":p?(p.charAt(0).toUpperCase()+p.slice(1)):"";}
-function shortVoter(p){return p==="felipe"?"FL":p==="lucia"?"LU":String(p).slice(0,2).toUpperCase();}
-// "both" = the two of them 👍, "split" = one up one down; "" otherwise
-function voteState(r){
-  var v=r.votes||{},ups=0,downs=0;
-  for(var k in v){if(!v.hasOwnProperty(k))continue;if(v[k]==="up")ups++;else if(v[k]==="down")downs++;}
-  if(ups>=2)return "both";
-  if(ups&&downs)return "split";
-  return "";
-}
-// funnel rank for the table's Voto column: both-up < one-up < none < any-down
-function voteRank(r){
-  var v=r.votes||{},ups=0,downs=0;
-  for(var k in v){if(!v.hasOwnProperty(k))continue;if(v[k]==="up")ups++;else if(v[k]==="down")downs++;}
-  return downs?3:ups>=2?0:ups?1:2;
-}
-// the verdict row: my control cycles — → 👍 → 👎 → — on tap, the other person's is read-only
-function voteRow(r,compact){
-  var v=r.votes||{},me=DATA&&DATA.me||"";
-  var people=["felipe","lucia"];
-  for(var k in v)if(v.hasOwnProperty(k)&&people.indexOf(k)<0)people.push(k);
-  if(me&&people.indexOf(me)<0)people.push(me);
-  var parts=[];
-  for(var i=0;i<people.length;i++){var p=people[i];
-    var glyph=v[p]==="up"?"👍":v[p]==="down"?"👎":"—";
-    var name=compact?shortVoter(p):voterName(p);
-    if(p===me)parts.push("<button class=\"vo\" data-id=\""+r.id+"\" data-cur=\""+(v[p]||"")+"\" title=\"Toca para cambiar tu veredicto\">"+esc(name)+" "+glyph+"</button>");
-    else parts.push("<span class=\"vopill\">"+esc(name)+" "+glyph+"</span>");
-  }
-  return "<div class=\"votes\">"+parts.join("")+"</div>";
-}
-// head badge: agreement gets the green 💚, a split gets a subtle 👍/👎 indicator
-function voteFlag(r){
-  var st=voteState(r);
-  if(st==="both")return "<span class=\"flag both\">💚 les gustó a los dos</span>";
-  if(st==="split")return "<span class=\"flag split\">👍/👎</span>";
-  return "";
-}
-// the status-pill cluster (sin leer / nuevo / stage / price move / verdict / deal type) shared
-// by the full card and the list row; compact shrinks the agreement pill to the bare 💚
-function pillsOf(r,withDeal,compact){
-  var f=(r.scrape_status&&r.scrape_status!=="ok")?"<span class=\"flag\">sin leer</span>":"";
-  // "nuevo" pill for 48h so a freshly shared listing is findable despite the $/m² sort
-  if(r.created_at&&Date.now()-Date.parse(r.created_at)<48*3600*1000)f+="<span class=\"flag new\">nuevo</span>";
-  f+=stageChip(r); // scheduled chips carry the visit date, so no separate date pill needed
-  f+=priceFlag(r);
-  f+=compact?(voteState(r)==="both"?"<span class=\"flag both\">💚</span>":voteState(r)==="split"?"<span class=\"flag split\">👍/👎</span>":""):voteFlag(r);
-  // Estado grouping mixes rent and buy in one section — say which is which on the row itself
-  if(withDeal&&(r.deal_type==="rent"||r.deal_type==="buy"))f+="<span class=\"flag mut\">"+(r.deal_type==="rent"?"arriendo":"compra")+"</span>";
-  return f;
-}
-// hunt-pipeline stage of an active apartment: no visit set => still to schedule; a set visit is
-// upcoming or already passed (visitCmp pads date-only visits to end-of-day; wall-clock compare)
-function stageOf(r){
-  if(!r.visit_date)return "pending";
-  return visitCmp(r.visit_date)>=nowBogota()?"scheduled":"visited";
-}
-// compact "vie 25 · 10:00" (or just "vie 25") for the scheduled-stage chip
-function fmtVisitShort(s){try{
-  var day=parseDay(s).toLocaleDateString("es-CO",{timeZone:"UTC",weekday:"short",day:"numeric"});
-  var t=s.length>10?s.slice(11,16):"";
-  return t?day+" · "+t:day;
-}catch(e){return s;}}
-function stageChip(r){
-  var st=stageOf(r);
-  if(st==="pending")return "<span class=\"flag\">⏳ por agendar</span>";
-  if(st==="scheduled")return "<span class=\"flag sched\">📅 "+esc(fmtVisitShort(r.visit_date))+"</span>";
-  // the visit date stays visible after the visit — it identifies the apartment ("el del viernes")
-  return "<span class=\"flag mut\">✔ visitado "+esc(fmtVisitShort(r.visit_date))+"</span>";
-}
-// note lines: "YYYY-MM-DD [Autor]: text"; older lines lack the [Autor] part
-var NOTE_RE=/^(\d{4}-\d{2}-\d{2})(?: \[([^\]]+)\])?: (.*)$/;
-// unicode-safe base64 so the exact raw line survives quotes/colons inside an HTML attribute
-function b64u(s){return btoa(unescape(encodeURIComponent(s)));}
-function unb64u(s){return decodeURIComponent(escape(atob(s)));}
-function noteDate(s){try{return parseDay(s).toLocaleDateString("es-CO",{timeZone:"UTC",day:"numeric",month:"short"});}catch(e){return s;}}
-function noteLines(r){
-  var lines=String(r.notes).split("\n"),h="";
-  for(var i=0;i<lines.length;i++){var ln=lines[i];if(!ln.trim())continue;
-    var m=ln.match(NOTE_RE);
-    var meta=m?(noteDate(m[1])+(m[2]?" · "+m[2]:"")):"📝";
-    var text=m?m[3]:ln;
-    h+="<div class=\"ntline\"><span class=\"nmeta\">"+esc(meta)+"</span><span class=\"ntxt\">"+esc(text)+"</span>";
-    h+="<button class=\"ntdel\" data-id=\""+r.id+"\" data-line=\""+b64u(ln)+"\" aria-label=\"Borrar nota\">✕</button></div>";
-  }
-  return h;
-}
-function card(r,best,isRent,withDeal,bare){
-  var ppm=ppmOf(r,isRent);
-  var isBest=best&&ppm===best;
-  var flag=pillsOf(r,withDeal,false);
-  var sub=(r.title&&r.location)?"<div class=\"sub2\">"+esc(r.title)+"</div>":"";
-  var vd=r.visit_date?esc(r.visit_date):"";
-  // bare: the modal copy of a card must not repeat the table row's #apt- anchor id
-  var h="<div class=\"apt\""+(bare?"":" id=\"apt-"+r.id+"\"")+">";
-  if(r.image_url)h+="<img class=\"photo\" src=\""+esc(r.image_url)+"\" loading=\"lazy\" alt=\"\" onerror=\"this.remove()\">";
-  // our own visit photos: the ad's og:image shows the best angle, these show the truth.
-  // ?s=t = mid-size rendition for the 72px squares; the tap-through opens full resolution.
-  if(r.photos&&r.photos.length){
-    h+="<div class=\"pstrip\">";
-    for(var pj=0;pj<r.photos.length;pj++){var ph=r.photos[pj];
-      // href points at the full-res photo (fallback for right-click / no-JS); a normal tap is
-      // intercepted by the delegated click handler, which opens it in the in-app lightbox
-      // instead of navigating to the raw image (which the PWA turns into a download).
-      h+="<a class=\"pview\" href=\"/apt-photo/"+ph.id+"\""+(ph.caption?" data-cap=\""+esc(ph.caption)+"\"":"")+">";
-      h+="<img src=\"/apt-photo/"+ph.id+"?s=t\" loading=\"lazy\" alt=\"\""+(ph.caption?" title=\""+esc(ph.caption)+"\"":"")+" onerror=\"this.parentNode.remove()\"></a>";
-    }
-    h+="</div>";
-  }
-  h+="<div class=\"head\"><div class=\"loc\"><span class=\"aptid\">#"+r.id+"</span> "+esc(aptName(r))+flag+(r.tag?tagChip(r.tag):"")+sub+"</div>";
-  if(isRent&&r.price!=null){
-    var total=Number(r.price)+Number(r.admin_fee||0);
-    h+="<div class=\"price\">"+mny(total)+"<span class=\"per\">/mes</span>";
-    h+="<span class=\"adm\">"+(r.admin_fee?("arriendo "+mny(r.price)+" + admin "+mny(r.admin_fee)):"sin admin reportada")+"</span></div></div>";
-  }else{
-    h+="<div class=\"price\">"+mny(r.price);
-    h+="<span class=\"adm\">Admin "+mny(r.admin_fee)+"</span></div></div>";
-  }
-  h+="<div class=\"specs\">";
-  h+=spec(isRent?"$/m² total":"$/m²",mny(ppm),isBest);
-  h+=spec("Hab",num(r.bedrooms),false);
-  h+=spec("Baños",num(r.bathrooms),false);
-  h+=spec("m²",num(r.area_m2),false);
-  h+=spec("Estr",num(r.stratum),false);
-  h+=spec("Parq",num(r.parking),false);
-  h+="</div>";
-  var xtra=[r.amenities?esc(r.amenities):"",r.year_built?("año "+esc(r.year_built)):""].filter(Boolean).join(" · ");
-  if(xtra)h+="<div class=\"xtra\">"+xtra+"</div>";
-  // what the user typed when sharing, minus the URL itself
-  var rn=(r.raw_note||"").replace(/https?:\/\/\S+/g,"").trim();
-  if(rn)h+="<div class=\"note\">“"+esc(rn)+"”</div>";
-  if(r.notes)h+="<div class=\"note\">"+noteLines(r)+"</div>";
-  var contact=contactLines(r);
-  if(contact.length)h+="<div class=\"contact\">"+contact.join("<br>")+"</div>";
-  h+=voteRow(r);
-  // a stored date without T means the time isn't agreed yet — say so instead of showing the padded 09:00 as fact
-  var tbd=(vd&&vd.indexOf("T")<0)?"<span class=\"tbd\">hora por definir</span>":"";
-  h+="<div class=\"visit\"><span class=\"k\">Visita"+tbd+"</span><input type=\"datetime-local\" data-id=\""+r.id+"\" class=\"vd\" value=\""+vdVal(vd)+"\"></div>";
-  h+="<div class=\"ctrl\"><button class=\"act ed\" data-id=\""+r.id+"\">Editar</button>";
-  h+="<button class=\"act nt\" data-id=\""+r.id+"\">Nota</button>";
-  h+="<button class=\"act rs\" data-id=\""+r.id+"\">Releer</button>";
-  h+="<button class=\"act danger ro\" data-id=\""+r.id+"\">Descartar</button>";
-  if(r.url)h+="<a class=\"link\" href=\""+esc(r.url)+"\" target=\"_blank\">link</a>";
-  h+="</div></div>";
-  return h;
-}
-// one condensed, whole-row-tappable entry per apartment (list mode, both viewports).
-// Carries the full identity set — id, price, area, address, agent, visit (in the stage chip) —
-// so two listings in the same location stay distinguishable without expanding the card.
-function listRow(r,isRent,open,withDeal){
-  var l2=priceAreaBits(r);
-  if(r.bedrooms!=null)l2.push(r.bedrooms+" hab");
-  var l3=[];
-  if(r.address)l3.push("📍 "+r.address);
-  if(r.agent_name)l3.push("👤 "+r.agent_name);
-  var pills=pillsOf(r,withDeal,true);
-  // collapsed rows own the #apt- anchor; expanded ones cede it to the full card below
-  var h="<div class=\"lrow\""+(open?"":" id=\"apt-"+r.id+"\"")+" data-id=\""+r.id+"\">"+thumbHtml(r);
-  h+="<div class=\"lmid\"><div class=\"lname\"><span class=\"lid\">#"+r.id+"</span> "+esc(aptName(r))+(r.tag?tagChip(r.tag):"")+"</div>";
-  h+="<div class=\"lsub\">"+esc(l2.join(" · ")||"—")+"</div>";
-  if(l3.length)h+="<div class=\"lsub\">"+esc(l3.join(" · "))+"</div>";
-  h+="</div><div class=\"lright\">"+pills+"</div>";
-  h+="<span class=\"chev\">"+(open?"⌄":"›")+"</span></div>";
-  return h;
-}
-// list mode: one row per apartment, expanding the full card in place for the open one.
-// All card actions keep working there — every handler is delegated on class + data-id.
-function cardOrRow(r,best,isRent,withDeal){
-  var open=OPEN_ROW===r.id;
-  var h=listRow(r,isRent,open,withDeal);
-  if(open)h+="<div class=\"lexp\">"+card(r,best,isRent,withDeal)+"</div>";
-  return h;
-}
-function gridOpen(){return "<div class=\"grid listmode\">";}
-function section(title,list,isRent){
-  if(!list.length)return "";
-  // default: best value first, rows without enough data last; a chosen Orden overrides it.
-  // Mutual favorites (💚) float to the top of the section either way.
-  var cmp=activeSorter()||function(a,b){
-    var pa=ppmOf(a,isRent),pb=ppmOf(b,isRent);
-    return (pa==null?Infinity:pa)-(pb==null?Infinity:pb);
-  };
-  var sorted=list.slice().sort(function(a,b){
-    var ba=voteState(a)==="both"?0:1,bb=voteState(b)==="both"?0:1;
-    return (ba-bb)||cmp(a,b);
-  });
-  var ppm=sorted.map(function(r){return ppmOf(r,isRent);}).filter(function(v){return v&&v>0;});
-  // "best value" only means something when there is something to compare against
-  var best=ppm.length>1?Math.min.apply(null,ppm):null;
-  var h="<h2 class=\"sect\">"+title+" <span class=\"count\">"+sorted.length+"</span></h2>"+gridOpen();
-  for(var i=0;i<sorted.length;i++)h+=cardOrRow(sorted[i],best,isRent);
-  h+="</div>";return h;
-}
-// Estado grouping: sections are pipeline stages (mixed deal types), each with its own sort.
-// No "best $/m²" highlight — comparing rent vs buy $/m² in one section is meaningless.
-function stageSection(title,list,cmp){
-  if(!list.length)return "";
-  var inner=activeSorter()||cmp;
-  var sorted=list.slice().sort(function(a,b){
-    var ba=voteState(a)==="both"?0:1,bb=voteState(b)==="both"?0:1;
-    return (ba-bb)||inner(a,b);
-  });
-  var h="<h2 class=\"sect\">"+title+" <span class=\"count\">"+sorted.length+"</span></h2>"+gridOpen();
-  for(var i=0;i<sorted.length;i++){var r=sorted[i];h+=cardOrRow(r,null,r.deal_type==="rent",true);}
-  h+="</div>";return h;
-}
-// $/m² ascending with per-row deal type (Estado sections mix rent and buy), nulls last
-function ppmCmpMixed(a,b){
-  var pa=ppmOf(a,a.deal_type==="rent"),pb=ppmOf(b,b.deal_type==="rent");
-  return (pa==null?Infinity:pa)-(pb==null?Infinity:pb);
-}
-// ---- desktop table view ----
-// every listing field is editable in place; edit=type drives both the input widget and server coercion
-var SORT={key:"ppm",dir:1}; // default: best $/m² first, like the list
-var COLS=[
-  {k:"thumb",label:""},
-  {k:"id",label:"#",type:"n"},
-  {k:"tag",label:"Etiqueta",type:"s",field:"tag",edit:"text"},
-  {k:"name",label:"Apto",type:"s",field:"location",edit:"text"},
-  {k:"type",label:"Tipo",type:"s",field:"deal_type",edit:"deal"},
-  {k:"price",label:"Precio",type:"n",field:"price",edit:"int"},
-  {k:"admin_fee",label:"Admin",type:"n",field:"admin_fee",edit:"int"},
-  {k:"ppm",label:"$/m²",type:"n"},
-  {k:"bedrooms",label:"Hab",type:"n",field:"bedrooms",edit:"int"},
-  {k:"bathrooms",label:"Baños",type:"n",field:"bathrooms",edit:"int"},
-  {k:"area_m2",label:"m²",type:"n",field:"area_m2",edit:"real"},
-  {k:"stratum",label:"Estr",type:"n",field:"stratum",edit:"int"},
-  {k:"parking",label:"Parq",type:"n",field:"parking",edit:"int"},
-  {k:"address",label:"Dirección",type:"s",field:"address",edit:"text"},
-  {k:"agent_name",label:"Agente",type:"s",field:"agent_name",edit:"text"},
-  {k:"agent_phone",label:"Teléfono",type:"s",field:"agent_phone",edit:"text"},
-  {k:"stage",label:"Estado",type:"n"},
-  {k:"voto",label:"Voto",type:"n"},
-  {k:"visit_date",label:"Visita",type:"s",field:"visit_date",edit:"visit"},
-  {k:"actions",label:""}
-];
-function cellVal(r,k){
-  if(k==="name")return aptName(r);
-  if(k==="type")return r.deal_type||"";
-  if(k==="ppm")return ppmOf(r,r.deal_type==="rent");
-  if(k==="stage"){var st=stageOf(r);return st==="pending"?0:st==="scheduled"?1:2;} // funnel order
-  if(k==="voto")return voteRank(r); // both-up first
-  return r[k];
-}
-function sortRows(rows){
-  var col=null;for(var i=0;i<COLS.length;i++)if(COLS[i].k===SORT.key)col=COLS[i];
-  return rows.slice().sort(function(a,b){
-    var va=cellVal(a,SORT.key),vb=cellVal(b,SORT.key);
-    var na=(va==null||va===""),nb=(vb==null||vb===""); // blanks last, whichever the direction
-    if(na&&nb)return 0;if(na)return 1;if(nb)return -1;
-    if(col&&col.type==="n")return (Number(va)-Number(vb))*SORT.dir;
-    return String(va).localeCompare(String(vb),"es")*SORT.dir;
-  });
-}
-// formatted (read-only) display for one cell; "" means empty → shown as a clickable dash
-function cellDisplay(r,c){
-  var isRent=r.deal_type==="rent";
-  if(c.k==="thumb"){
-    var th=thumbHtml(r);
-    if(r.photos&&r.photos.length)th+="<span class=\"pcount\">📸 "+r.photos.length+"</span>";
-    // tapping the thumbnail opens the full card in a modal (the card gallery view is gone)
-    return "<span class=\"thopen\" data-id=\""+r.id+"\" title=\"Ver tarjeta\">"+th+"</span>";
-  }
-  if(c.k==="tag")return r.tag?tagChip(r.tag):"";
-  if(c.k==="name")return esc(aptName(r));
-  if(c.k==="type")return isRent?"Arriendo":r.deal_type==="buy"?"Compra":"";
-  if(c.k==="price")return r.price==null?"":mny(r.price)+(isRent?"/mes":"")+priceFlag(r);
-  if(c.k==="admin_fee")return r.admin_fee==null?"":mny(r.admin_fee);
-  if(c.k==="ppm")return mny(ppmOf(r,isRent));
-  // these cells stay click-to-edit; the small 🗺/💬 anchors ride along (the click handler lets anchors through)
-  if(c.k==="address")return r.address?esc(r.address)+" <a href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\" aria-label=\"Cómo llegar\">🗺</a>":"";
-  if(c.k==="agent_phone")return r.agent_phone?esc(r.agent_phone)+" <a href=\""+esc(waLink(r.agent_phone))+"\" target=\"_blank\" rel=\"noopener\" aria-label=\"WhatsApp al agente\">💬</a>":"";
-  if(c.k==="stage")return stageChip(r);
-  if(c.k==="voto")return voteRow(r,true); // compact FL/LU labels; my control stays tappable
-  if(c.k==="visit_date")return r.visit_date?esc(fmtVisit(r.visit_date)):"";
-  if(c.k==="actions"){
-    var a="<div class=\"rowact\">";
-    if(r.url)a+="<a class=\"link sm\" href=\""+esc(r.url)+"\" target=\"_blank\">link</a>";
-    a+="<button class=\"act sm rs\" data-id=\""+r.id+"\">Releer</button>";
-    a+="<button class=\"act sm danger ro\" data-id=\""+r.id+"\">Descartar</button>";
-    return a+"</div>";
-  }
-  return r[c.k]==null?"":esc(r[c.k]);
-}
-function tableRow(r){
-  var h="<tr id=\"apt-"+r.id+"\">";
-  for(var i=0;i<COLS.length;i++){var c=COLS[i];
-    var disp=cellDisplay(r,c);
-    if(c.edit){
-      var cls="ec"+(c.k==="name"?" nm":"")+(c.type==="n"?" num":"");
-      h+="<td class=\""+cls+"\" data-id=\""+r.id+"\" data-field=\""+c.field+"\" data-type=\""+c.edit+"\">"+(disp===""?"<span class=\"mut\">—</span>":disp)+"</td>";
-    }else{
-      h+="<td"+(c.k==="ppm"||c.k==="id"?" class=\"num\"":"")+">"+disp+"</td>";
-    }
-  }
-  return h+"</tr>";
-}
-// swap a cell's text for an input; commit saves that one field, cancel re-renders from DATA
-function beginEdit(td){
-  if(td.getElementsByTagName("input").length||td.getElementsByTagName("select").length)return; // already editing
-  var id=Number(td.getAttribute("data-id")),field=td.getAttribute("data-field"),type=td.getAttribute("data-type");
-  var r=findApt(id);if(!r)return;var cur=r[field];
-  var input;
-  if(type==="deal"){
-    input=document.createElement("select");
-    input.innerHTML="<option value=\"buy\">Compra</option><option value=\"rent\">Arriendo</option><option value=\"unknown\">—</option>";
-    input.value=(cur==="buy"||cur==="rent")?cur:"unknown";
-  }else if(type==="visit"){
-    input=document.createElement("input");input.type="datetime-local";
-    input.value=vdVal(cur);
-  }else{
-    input=document.createElement("input");input.type="text";
-    if(type==="int"||type==="real")input.inputMode="decimal";
-    input.value=(cur==null?"":String(cur));
-  }
-  input.className="cellin";
-  td.textContent="";td.appendChild(input);input.focus();if(input.select)input.select();
-  var done=false;
-  function commit(save){
-    if(done)return;done=true;
-    if(save)saveField(id,field,type,input.value);else render();
-  }
-  input.addEventListener("blur",function(){commit(true);});
-  input.addEventListener("keydown",function(e){
-    if(e.key==="Enter"){e.preventDefault();input.blur();}
-    else if(e.key==="Escape"){commit(false);}
-  });
-  if(type==="deal"||type==="visit")input.addEventListener("change",function(){input.blur();});
-}
-function saveField(id,field,type,val){
-  var body=(type==="visit")?{action:"set_visit",id:id,visit_date:val||null}:{action:"edit",id:id,field:field,value:val};
-  saveAction(body,"Guardado ✓");
-}
-function tableView(rows){
-  if(!rows.length)return "<div class=\"empty\">Sin apartamentos activos.</div>";
-  var sorted=sortRows(rows);
-  var h="<div class=\"tablewrap\"><table class=\"apttable\"><thead><tr>";
-  for(var i=0;i<COLS.length;i++){var c=COLS[i];
-    if(!c.type){h+="<th>"+esc(c.label)+"</th>";continue;}
-    var arrow=SORT.key===c.k?(SORT.dir>0?" ▲":" ▼"):"";
-    h+="<th class=\"sortable\" data-sort=\""+c.k+"\">"+esc(c.label)+arrow+"</th>";
-  }
-  h+="</tr></thead><tbody>";
-  for(var j=0;j<sorted.length;j++)h+=tableRow(sorted[j]);
-  return h+"</tbody></table></div>";
-}
-function isDesktop(){return window.innerWidth>=760;}
-// one view pref: list|table, both viewports (the card-gallery view is gone — cards now live in
-// the list expansion and the table-thumbnail modal). Legacy stored "cards" falls back per device.
-var VIEW=localStorage.getItem("aptView");
-if(VIEW!=="list"&&VIEW!=="table")VIEW=isDesktop()?"table":"list";
-// list grouping: by deal type (historic default) or by pipeline stage; opt-in, persisted
-var GROUP=localStorage.getItem("aptGroup")||"tipo";
-// list mode: id of the row currently expanded in place (survives re-renders after saves)
-var OPEN_ROW=null;
-function effView(){return VIEW;}
-// ---- edit sheet (address / agent / phone / tag), shared by cards + table ----
-var EDIT_ID=null;
-// the activos+descartados union — lookups, map pins and the sin-geo counter must all see the
-// same set (the DATA.apartments-only sites elsewhere are active-only on purpose)
-function allRows(){return (DATA.apartments||[]).concat(DATA.ruledOut||[]);}
-function findApt(id){var all=allRows();for(var i=0;i<all.length;i++)if(all[i].id===id)return all[i];return null;}
-function openEdit(id){
-  var r=findApt(id);if(!r)return;EDIT_ID=id;
-  document.getElementById("e_address").value=r.address||"";
-  document.getElementById("e_agent").value=r.agent_name||"";
-  document.getElementById("e_phone").value=r.agent_phone||"";
-  document.getElementById("e_tag").value=r.tag||"";
-  document.getElementById("editModal").classList.add("show");
-}
-function closeEdit(){EDIT_ID=null;document.getElementById("editModal").classList.remove("show");}
-// ---- nota / descartar bottom sheets (phones slide up from the bottom; desktop keeps the centered dialog) ----
-var NOTE_ID=null,RO_ID=null;
-function openNote(id){
-  var r=findApt(id);if(!r)return;NOTE_ID=id;
-  document.getElementById("n_title").textContent="Nota — "+aptLabel(r);
-  document.getElementById("n_text").value="";
-  document.getElementById("noteModal").classList.add("show");
-  document.getElementById("n_text").focus();
-}
-function closeNote(){NOTE_ID=null;document.getElementById("noteModal").classList.remove("show");}
-function openRo(id){
-  var r=findApt(id);if(!r)return;RO_ID=id;
-  document.getElementById("r_title").textContent="¿Descartar "+aptLabel(r)+"?";
-  document.getElementById("r_reason").value="";
-  var ch=document.getElementById("r_chips").getElementsByTagName("button");
-  for(var i=0;i<ch.length;i++)ch[i].className="chip";
-  document.getElementById("roModal").classList.add("show");
-  document.getElementById("r_reason").focus();
-}
-function closeRo(){RO_ID=null;document.getElementById("roModal").classList.remove("show");}
-// ---- card-detail modal: the table thumbnail opens the apartment's full card here ----
-var CARD_ID=null;
-function openCard(id){
-  if(!findApt(id))return;
-  CARD_ID=id;renderCardModal();
-  document.getElementById("cardModal").classList.add("show");
-}
-function closeCard(){CARD_ID=null;document.getElementById("cardModal").classList.remove("show");}
-// (re)build the open modal's card from DATA — called on open and after every re-render, so an
-// edit/vote/note made inside the modal shows its result without closing it
-function renderCardModal(){
-  if(CARD_ID==null)return;
-  var r=findApt(CARD_ID);
-  if(!r){closeCard();return;}
-  document.getElementById("cardBox").innerHTML=card(r,null,r.deal_type==="rent",true,true);
-}
-// ---- photo lightbox: view a visit photo full-size in-app instead of downloading it ----
-function openPhoto(src,cap){
-  document.getElementById("lb_img").src=src;
-  document.getElementById("lb_cap").textContent=cap||"";
-  document.getElementById("photoLb").classList.add("show");
-}
-function closePhoto(){
-  document.getElementById("photoLb").classList.remove("show");
-  document.getElementById("lb_img").removeAttribute("src"); // stop the download + free the memory
-}
-function fmtVisit(s){try{
-  var day=new Date(s.slice(0,10)+"T00:00:00Z").toLocaleDateString("es-CO",{timeZone:"UTC",weekday:"short",day:"numeric",month:"short"});
-  var t=s.length>10?s.slice(11,16):""; // wall-clock as typed; no TZ math on the time
-  return t?day+" "+t:day+" · hora por definir";
-}catch(e){return s;}}
-// ---- weekly visits calendar ----
-// all date math on YYYY-MM-DD strings anchored at UTC midnight, so the wall-clock dates
-// stored in visit_date never shift with the browser's timezone
-var WEEK_START=null; // Monday shown on screen; first render picks the week of the next visit
+// "now" as a comparable Bogota wall-clock string, same YYYY-MM-DDTHH:MM shape as visit_date
+function nowBogota(){return new Date().toLocaleString("sv-SE",{timeZone:"America/Bogota"}).slice(0,16).replace(" ","T");}
+// a date-only visit stays "upcoming" until the end of its day (twin of visitCmpJs/visitCmpSql in index.ts)
+function visitCmp(vd){return vd.length>10?vd:vd.slice(0,10)+"T23:59";}
+// wall-clock string -> epoch ms, parsed at UTC so only the delta (not the absolute) matters;
+// callers only pass timed (YYYY-MM-DDTHH:MM) values
+function wallMs(s){return Date.parse(s.slice(0,16)+":00Z");}
+// datetime-local needs YYYY-MM-DDTHH:MM; pad legacy date-only visits with an editable 09:00 default
+function vdVal(vd){const v=vd?String(vd):"";return (v&&v.indexOf("T")<0)?v+"T09:00":v;}
+// all date math on YYYY-MM-DD strings anchored at UTC midnight, so wall-clock dates never shift with the browser TZ
 function parseDay(s){return new Date(s.slice(0,10)+"T00:00:00Z");}
-function dayStr(d){return d.toISOString().slice(0,10);}
-function addDays(s,n){var d=parseDay(s);d.setUTCDate(d.getUTCDate()+n);return dayStr(d);}
-function mondayOf(s){var d=parseDay(s);d.setUTCDate(d.getUTCDate()-((d.getUTCDay()+6)%7));return dayStr(d);}
+function addDays(s,n){const d=parseDay(s);d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10);}
+// Monday of the week containing s — the agenda's anchor day
+function mondayOf(s){const d=parseDay(s);d.setUTCDate(d.getUTCDate()-((d.getUTCDay()+6)%7));return d.toISOString().slice(0,10);}
+// agenda day-column header: weekday + day only (the week label already carries the month)
 function fmtDayHead(s){try{return parseDay(s).toLocaleDateString("es-CO",{timeZone:"UTC",weekday:"short",day:"numeric"});}catch(e){return s;}}
+// «3 – 9 ago» — the month (and year) only appear on the side where they disambiguate
 function weekLabel(a,b){try{
-  var da=parseDay(a),db=parseDay(b);
-  var oa={timeZone:"UTC",day:"numeric"},ob={timeZone:"UTC",day:"numeric",month:"short"};
+  const da=parseDay(a),db=parseDay(b);
+  const oa={timeZone:"UTC",day:"numeric"},ob={timeZone:"UTC",day:"numeric",month:"short"};
   if(da.getUTCMonth()!==db.getUTCMonth())oa.month="short";
   if(da.getUTCFullYear()!==db.getUTCFullYear()){oa.year="numeric";ob.year="numeric";}
   return da.toLocaleDateString("es-CO",oa)+" – "+db.toLocaleDateString("es-CO",ob);
 }catch(e){return a+" – "+b;}}
-// double-booking: same-day timed visits whose starts are <60 min apart both get flagged.
-// date-only visits have no comparable time, so they never clash.
+function fmtDay(s){try{return parseDay(s).toLocaleDateString("es-CO",{timeZone:"UTC",weekday:"short",day:"numeric",month:"short"});}catch(e){return s;}}
+function fmtDT(s){const d=fmtDay(s);const t=s.length>10?s.slice(11,16):"";return t?d+" · "+t:d+" · hora por definir";}
+function noteDate(s){try{return parseDay(s).toLocaleDateString("es-CO",{timeZone:"UTC",day:"numeric",month:"short"});}catch(e){return s;}}
+// note lines: "YYYY-MM-DD [Autor]: text"; older lines lack the [Autor] part (twin of stampLine in index.ts)
+const NOTE_RE=/^(\d{4}-\d{2}-\d{2})(?: \[([^\]]+)\])?: (.*)$/;
+// deterministic hue from the tag text: same label => same color everywhere
+function tagColor(t){const s=String(t);let h=0;for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))>>>0;return h%360;}
+function tagChip(t){return '<span class="tag" style="background:hsl('+tagColor(t)+' 58% 62%)">'+esc(t)+"</span>";}
+
+/* ---- visit derivations (twin of nextVisitRow / "hecha" derivation in index.ts):
+   next = earliest non-cancelled visit still upcoming; last = latest non-cancelled already past;
+   stage is DERIVED: upcoming → scheduled, only past → visited, none → pending. ---- */
+function nextVisitOf(r){
+  const now=nowBogota();let best=null;
+  for(const v of (r.visits||[])){
+    if(v.status==="cancelled")continue;
+    if(visitCmp(v.visit_date)<now)continue;
+    if(!best||visitCmp(v.visit_date)<visitCmp(best.visit_date))best=v;
+  }
+  return best;
+}
+function lastVisitOf(r){
+  const now=nowBogota();let best=null;
+  for(const v of (r.visits||[])){
+    if(v.status==="cancelled")continue;
+    if(visitCmp(v.visit_date)>=now)continue;
+    if(!best||visitCmp(v.visit_date)>visitCmp(best.visit_date))best=v;
+  }
+  return best;
+}
+function stageOf(r){return nextVisitOf(r)?"scheduled":(lastVisitOf(r)?"visited":"pending");}
+// double-booking: same-day TIMED visits whose starts are <60 min apart both get flagged;
+// date-only visits have no comparable time, so they never clash. Keyed by visit id.
 function markOverlaps(list){
-  var timed=list.filter(function(r){return r.visit_date&&r.visit_date.length>10;})
-    .sort(function(a,b){return a.visit_date<b.visit_date?-1:1;});
-  var ids={};
-  for(var i=1;i<timed.length;i++){
+  const timed=list.filter((v)=>v.visit_date.length>10).sort((a,b)=>a.visit_date<b.visit_date?-1:1);
+  const ids={};
+  for(let i=1;i<timed.length;i++){
     if(wallMs(timed[i].visit_date)-wallMs(timed[i-1].visit_date)<60*60000){ids[timed[i-1].id]=1;ids[timed[i].id]=1;}
   }
   return ids;
 }
-// group all upcoming visits by day, flag clashes within each day, merge to one id set
-function allOverlaps(list){
-  var byDay={};for(var i=0;i<list.length;i++){var k=list[i].visit_date.slice(0,10);(byDay[k]=byDay[k]||[]).push(list[i]);}
-  var out={};for(var d in byDay){if(!byDay.hasOwnProperty(d))continue;var m=markOverlaps(byDay[d]);for(var id in m)if(m.hasOwnProperty(id))out[id]=1;}
+
+function whoLabel(w){return w==="felipe"?"Felipe":w==="lucia"?"Lucía":w==="both"?"los dos":"";}
+function voterName(p){return p==="felipe"?"Felipe":p==="lucia"?"Lucía":p?(p.charAt(0).toUpperCase()+p.slice(1)):"";}
+
+/* ---- docs: default checklist = doc_types entries whose deals include this deal_type
+   (unknown deal → all), merged with the existing rows; extra rows (otro, off-deal) append. ---- */
+function docTypeLabel(d){
+  if(d.doc_type==="otro")return d.label||"Otro documento";
+  const t=(DATA.doc_types||[]).find((x)=>x.slug===d.doc_type);
+  return t?t.label:String(d.doc_type);
+}
+function docChecklist(r){
+  const deal=(r.deal_type==="rent"||r.deal_type==="buy")?r.deal_type:null;
+  const rows=r.docs||[];
+  const out=[];const used={};
+  for(const t of (DATA.doc_types||[])){
+    if(t.slug==="otro")continue; // 'otro' entries only exist as real rows
+    if(deal&&t.deals.indexOf(deal)<0)continue;
+    const ex=rows.find((d)=>d.doc_type===t.slug);
+    if(ex)used[ex.id]=1;
+    out.push({slug:t.slug,label:t.label,status:ex?ex.status:"pending",id:ex?ex.id:null,
+      has_file:ex?!!ex.has_file:false,file_name:ex?ex.file_name:null,dlabel:null});
+  }
+  for(const d of rows){
+    if(used[d.id])continue;
+    out.push({slug:d.doc_type,label:docTypeLabel(d),status:d.status,id:d.id,
+      has_file:!!d.has_file,file_name:d.file_name,dlabel:d.label||null});
+  }
   return out;
 }
-function visitCalendar(rows){
-  var vis=rows.filter(function(r){return r.visit_date;})
-    .sort(function(a,b){return a.visit_date<b.visit_date?-1:1;});
-  if(!vis.length)return "";
-  var td=(DATA.today||"").slice(0,10);
-  if(!WEEK_START){
-    var next=null;
-    for(var i=0;i<vis.length;i++)if(vis[i].visit_date.slice(0,10)>=td){next=vis[i].visit_date;break;}
-    WEEK_START=mondayOf(next?next.slice(0,10):(td||vis[vis.length-1].visit_date.slice(0,10)));
+function docsProgress(r){
+  const list=docChecklist(r).filter((e)=>e.status!=="na");
+  return {rec:list.filter((e)=>e.status==="received").length,tot:list.length};
+}
+function pendingDocs(r){return docChecklist(r).filter((e)=>e.status==="pending");}
+// «pedir por WhatsApp»: a prefilled Spanish message listing the pending docs
+function waDocsLink(r){
+  const pend=pendingDocs(r).map((e)=>e.label);
+  if(!r.agent_phone||!pend.length)return "";
+  const name=r.agent_name?" "+String(r.agent_name).split(" ")[0]:"";
+  const ref=r.address||aptName(r);
+  const msg="Hola"+name+", ¿nos puedes compartir estos documentos del apartamento en "+ref+"?\n• "+pend.join("\n• ")+"\n¡Gracias!";
+  return waLink(r.agent_phone)+"?text="+encodeURIComponent(msg);
+}
+
+/* ---- votes ---- */
+function voteState(r){
+  const v=r.votes||{};let ups=0,downs=0;
+  for(const k in v){if(!Object.prototype.hasOwnProperty.call(v,k))continue;if(v[k]==="up")ups++;else if(v[k]==="down")downs++;}
+  if(ups>=2)return "both";
+  if(ups&&downs)return "split";
+  return "";
+}
+// the verdict row: my control cycles — → 👍 → 👎 → — on tap, the other person's is read-only
+function voteRow(r){
+  const v=r.votes||{},me=(DATA&&DATA.me)||"";
+  const people=["felipe","lucia"];
+  for(const k in v)if(Object.prototype.hasOwnProperty.call(v,k)&&people.indexOf(k)<0)people.push(k);
+  if(me&&people.indexOf(me)<0)people.push(me);
+  let h='<div class="votes">';
+  for(const p of people){
+    const glyph=v[p]==="up"?"👍":v[p]==="down"?"👎":"—";
+    if(p===me)h+='<button class="vo" data-act="vote" data-id="'+r.id+'" data-cur="'+(v[p]||"")+'" title="Toca para cambiar tu veredicto">'+esc(voterName(p))+" "+glyph+"</button>";
+    else h+='<span class="vopill">'+esc(voterName(p))+" "+glyph+"</span>";
   }
-  var byDay={};
-  for(var j=0;j<vis.length;j++){var k=vis[j].visit_date.slice(0,10);(byDay[k]=byDay[k]||[]).push(vis[j]);}
-  var end=addDays(WEEK_START,6);
-  // day the phone view scrolls to: today if on screen, else the week's first day with a visit
-  var focus=null;
-  if(td>=WEEK_START&&td<=end)focus=td;
-  else for(var f=0;f<7;f++){var fd=addDays(WEEK_START,f);if(byDay[fd]){focus=fd;break;}}
-  var h="<div class=\"cal\"><div class=\"calhead\"><span class=\"vt\">📅 Próximas visitas</span>";
-  h+="<div class=\"calnav\"><button class=\"cal-prev\" aria-label=\"Semana anterior\">‹</button>";
-  h+="<span class=\"calweek\">"+esc(weekLabel(WEEK_START,end))+"</span>";
-  h+="<button class=\"cal-next\" aria-label=\"Semana siguiente\">›</button></div></div>";
-  h+="<div class=\"caldays\" id=\"caldays\">";
-  for(var d=0;d<7;d++){
-    var ds=addDays(WEEK_START,d);
-    var cls="calday"+(ds===td?" today":(td&&ds<td?" past":""))+(ds===focus?" focus":"");
-    h+="<div class=\""+cls+"\"><div class=\"dh\">"+esc(fmtDayHead(ds))+"</div>";
-    var list=byDay[ds]||[];
-    var clash=markOverlaps(list); // ids clashing on this day
-    for(var v=0;v<list.length;v++){var r=list[v];
-      var ruled=r.status==="ruled_out";
-      var t=r.visit_date.length>10?r.visit_date.slice(11,16):"";
-      h+="<div class=\"vcard"+(ruled?" xout":"")+"\">";
-      if(t)h+="<div class=\"vtime\">"+esc(t)+"</div>";
-      else h+="<div class=\"vtime tbd\">hora por definir</div>";
-      if(ruled)h+="<div class=\"vclash\"><span class=\"flag disc\">🚫 descartado</span></div>";
-      if(clash[r.id])h+="<div class=\"vclash\"><span class=\"flag\">⚠️ choque de horario</span></div>";
-      h+="<div class=\"vloc\">";
-      if(r.url)h+="<a href=\""+esc(r.url)+"\" target=\"_blank\" rel=\"noopener\">"+esc(aptLabel(r))+"<span class=\"ext\">↗</span></a>";
-      else h+=esc(aptLabel(r));
-      h+="</div>";
-      var m=[];
-      var pa=priceAreaBits(r);
-      if(pa.length)m.push(esc(pa.join(" · ")));
-      m=m.concat(contactLines(r));
-      if(m.length)h+="<div class=\"vmeta\">"+m.join("<br>")+"</div>";
-      // self-sufficient card: Invitar as-is, plus a compact Reagendar / Nota / Descartar row — a
-      // ruled-out apartment drops Invitar (the server only sends invites for status=active) and
-      // swaps Descartar for Reactivar; Reagendar stays so clearing the date remains a manual,
-      // one-tap action (discarding itself never touches visit_date, see ruleOutApt)
-      h+="<div class=\"vctrls\">"+(ruled?"":"<button class=\"act sm iv\" data-id=\""+r.id+"\">📧 Invitar</button>");
-      h+="<div class=\"vact\">";
-      h+="<button class=\"act sm rvd\" data-id=\""+r.id+"\" title=\"Reagendar\">📅</button>";
-      h+="<button class=\"act sm nt\" data-id=\""+r.id+"\" title=\"Nota\">📝</button>";
-      h+=ruled?"<button class=\"act sm re\" data-id=\""+r.id+"\" title=\"Reactivar\">↩️</button>":"<button class=\"act sm danger ro\" data-id=\""+r.id+"\" title=\"Descartar\">🚫</button>";
-      h+="</div></div>";
-      h+="</div>";
-    }
-    h+="</div>";
+  if(voteState(r)==="both")h+='<span class="pill ok">💚 les gustó a los dos</span>';
+  else if(voteState(r)==="split")h+='<span class="pill warn">👍/👎 divididos</span>';
+  return h+"</div>";
+}
+
+/* ---- status pills: sin leer / nuevo / price move / verdict ---- */
+function priceFlag(r){
+  if(!r.price_changed_at||r.prev_price==null||r.price==null)return "";
+  const age=Date.now()-Date.parse(r.price_changed_at);
+  if(!(age>=0&&age<=14*86400000))return "";
+  const diff=Number(r.prev_price)-Number(r.price);
+  if(!diff)return "";
+  const tt="de "+mny(r.prev_price)+" a "+mny(r.price);
+  return diff>0
+    ? '<span class="pill ok" title="'+esc(tt)+'">⬇ bajó '+mny(diff)+"</span>"
+    : '<span class="pill warn" title="'+esc(tt)+'">⬆ subió '+mny(-diff)+"</span>";
+}
+function pillsOf(r,compact){
+  let f="";
+  if(r.scrape_status&&r.scrape_status!=="ok")f+='<span class="pill mut">sin leer</span>';
+  if(r.created_at&&Date.now()-Date.parse(r.created_at)<48*3600*1000)f+='<span class="pill now">nuevo</span>';
+  f+=priceFlag(r);
+  const st=voteState(r);
+  if(st==="both")f+='<span class="pill ok">💚'+(compact?"":" los dos")+"</span>";
+  else if(st==="split")f+='<span class="pill warn">👍/👎</span>';
+  return f;
+}
+
+/* ================= persisted UI state ================= */
+const SORT_LABELS={auto:"orden: auto",ppm:"mejor $/m²",price:"precio ↑",recent:"más reciente"};
+let FILTERS={deal:null,minBeds:null,maxPrice:null,tag:null,sort:"auto"};
+try{
+  const sf=JSON.parse(localStorage.getItem("radarF")||"{}");
+  for(const k in FILTERS)if(sf&&sf[k]!==undefined)FILTERS[k]=sf[k];
+  if(!SORT_LABELS[FILTERS.sort])FILTERS.sort="auto"; // stale saved value must not crash
+}catch(e){}
+let SEG=localStorage.getItem("radarSeg");
+if(SEG!=="pending"&&SEG!=="scheduled"&&SEG!=="visited")SEG=null; // resolved on first render
+let VIEW=localStorage.getItem("radarView");
+if(VIEW!=="agenda")VIEW="list"; // stale saved value degrades to the list
+let WEEK_START=null; // Monday shown in the agenda; first agenda render picks the week of the next visit
+let AG_WEEK=null;    // week last painted — keeps the reader's day-scroll across quick-action re-renders
+let OPEN=null;      // apartment id shown in the sheet/panel
+let MODE="view";    // 'view' | 'edit' | 'discard'
+let MAP_ON=false;
+function saveFilters(){try{localStorage.setItem("radarF",JSON.stringify(FILTERS));}catch(e){}}
+function saveSeg(){try{localStorage.setItem("radarSeg",SEG);}catch(e){}}
+function saveView(){try{localStorage.setItem("radarView",VIEW);}catch(e){}}
+function filtersActive(){return !!(FILTERS.deal||FILTERS.minBeds||FILTERS.maxPrice!=null||FILTERS.tag);}
+
+function allRows(){return ((DATA&&DATA.apartments)||[]).concat((DATA&&DATA.ruledOut)||[]);}
+function findApt(id){return allRows().find((r)=>r.id===id)||null;}
+
+function applyFilters(rows){
+  return rows.filter((r)=>{
+    if(FILTERS.deal&&r.deal_type!==FILTERS.deal)return false;
+    if(FILTERS.minBeds&&!(Number(r.bedrooms)>=FILTERS.minBeds))return false;
+    if(FILTERS.maxPrice!=null){const p=effPrice(r);if(p==null||p>FILTERS.maxPrice)return false;}
+    if(FILTERS.tag&&r.tag!==FILTERS.tag)return false;
+    return true;
+  });
+}
+// explicit Orden override; "auto" keeps each segment's own mission order
+function activeSorter(){
+  if(FILTERS.sort==="ppm")return (a,b)=>{const pa=ppmOf(a,a.deal_type==="rent"),pb=ppmOf(b,b.deal_type==="rent");return (pa==null?Infinity:pa)-(pb==null?Infinity:pb);};
+  if(FILTERS.sort==="price")return (a,b)=>{const pa=effPrice(a),pb=effPrice(b);return (pa==null?Infinity:pa)-(pb==null?Infinity:pb);};
+  if(FILTERS.sort==="recent")return (a,b)=>String(b.created_at||"").localeCompare(String(a.created_at||""));
+  return null;
+}
+function segSort(list,seg){
+  const s=activeSorter();
+  if(s)return list.slice().sort(s);
+  if(seg==="scheduled")return list.slice().sort((a,b)=>visitCmp(nextVisitOf(a).visit_date)<visitCmp(nextVisitOf(b).visit_date)?-1:1);
+  if(seg==="visited")return list.slice().sort((a,b)=>visitCmp(lastVisitOf(a).visit_date)<visitCmp(lastVisitOf(b).visit_date)?1:-1);
+  // por agendar: mutual favorites first, then best value
+  return list.slice().sort((a,b)=>{
+    const ba=voteState(a)==="both"?0:1,bb=voteState(b)==="both"?0:1;
+    if(ba!==bb)return ba-bb;
+    const pa=ppmOf(a,a.deal_type==="rent"),pb=ppmOf(b,b.deal_type==="rent");
+    return (pa==null?Infinity:pa)-(pb==null?Infinity:pb);
+  });
+}
+// Precio presets: quartile-ish cutoffs from the data, rounded up to friendly COP steps
+function niceCut(v){const step=v>=5e8?5e7:v>=1e8?1e7:v>=1e7?1e6:v>=1e6?1e5:1e4;return Math.ceil(v/step)*step;}
+function priceCuts(rows){
+  const base=FILTERS.deal?rows.filter((r)=>r.deal_type===FILTERS.deal):rows;
+  const ps=base.map(effPrice).filter((p)=>p!=null&&p>0).sort((a,b)=>a-b);
+  if(ps.length<2)return [];
+  const out=[],seen={};
+  for(const q of [0.25,0.5,0.75]){
+    const c=niceCut(ps[Math.min(ps.length-1,Math.floor(ps.length*q))]);
+    if(!seen[c]){seen[c]=1;out.push(c);}
   }
+  return out;
+}
+
+/* ================= HOY hero ================= */
+function nextVisitGlobal(){ // over actives + descartados (a pending visit on a ruled-out apt stays visible, flagged)
+  let best=null;
+  for(const r of allRows()){
+    const v=nextVisitOf(r);
+    if(v&&(!best||visitCmp(v.visit_date)<visitCmp(best.v.visit_date)))best={r,v};
+  }
+  return best;
+}
+function countdownTxt(vd,now){
+  const diff=Math.round((wallMs(vd)-wallMs(now))/60000);
+  if(diff<=0)return "es ahora";
+  if(diff<60)return "en "+diff+" min";
+  const h=Math.floor(diff/60),m=diff%60;
+  return "en "+h+" h"+(m?" "+m+" min":"");
+}
+function heroHtml(){
+  const nx=nextVisitGlobal();
+  const now=nowBogota(),today=(DATA.today||now.slice(0,10)).slice(0,10);
+  if(!nx){
+    const pend=(DATA.apartments||[]).filter((r)=>stageOf(r)==="pending").length;
+    return '<div class="hero herowait"><div class="eyebrow"><span class="sdot off"></span>Sin visitas programadas</div>'
+      +'<div class="hwaittxt">'+(pend
+        ?("Hay <b>"+pend+"</b> apartamento"+(pend===1?"":"s")+" por agendar. Abre uno y fija la fecha.")
+        :"Comparte un link de un apartamento en el grupo de Telegram para empezar.")+"</div>"
+      +(pend?'<button class="btn hbtn" data-act="nav-seg" data-seg="pending">Ver por agendar →</button>':"")
+      +"</div>";
+  }
+  const r=nx.r,v=nx.v,vd=v.visit_date,day=vd.slice(0,10),timed=vd.length>10;
+  const isToday=day===today,isMan=day===addDays(today,1);
+  // date-only + far away: the big clock already shows the day, don't repeat it in the eyebrow
+  const when=isToday?"Hoy":isMan?"Mañana":(timed?fmtDay(day):null);
+  const ruled=r.status==="ruled_out";
+  let h='<div class="hero"><div class="eyebrow"><span class="sdot'+(isToday?"":" off")+'"></span>'
+    +(when?esc(when)+" · ":"")+"próxima visita"
+    +(ruled?' <span class="pill err">🚫 descartado</span>':"")+"</div>";
+  if(timed){
+    h+='<div class="hclock'+(isToday?"":" far")+'">'+esc(vd.slice(11,16))+"</div>";
+    if(isToday){const c=countdownTxt(vd,now);if(c)h+='<div class="hcount" id="hcount">'+esc(c)+"</div>";}
+  }else{
+    h+='<div class="hclock far">'+esc(fmtDay(day))+'</div><div class="htbd">hora por definir</div>';
+  }
+  h+='<div class="hname" data-act="open" data-id="'+r.id+'"><span class="rid">#'+r.id+"</span> "+esc(aptName(r))+"</div>";
+  const m=priceAreaBits(r);
+  if(v.who)m.push("van: "+whoLabel(v.who));
+  if(m.length)h+='<div class="hmeta num">'+esc(m.join(" · "))+"</div>";
+  h+='<div class="htiles" id="htiles">';
+  if(r.address)h+='<a class="tile" href="'+esc(mapsLink(r.address))+'" target="_blank" rel="nofollow noreferrer">📍 Cómo llegar</a>';
+  if(r.agent_phone)h+='<a class="tile" href="'+esc(waLink(r.agent_phone))+'" target="_blank" rel="noopener">💬 Agente</a>';
+  const pd=pendingDocs(r).length;
+  if(pd)h+='<button class="tile" data-act="hero-docs" data-id="'+r.id+'">📄 Docs <span class="bdg">'+pd+"</span></button>";
+  h+='<button class="tile" data-act="visit-when" data-vid="'+v.id+'" data-val="'+esc(vdVal(vd))+'">⏱ Reprogramar</button>';
   h+="</div></div>";
   return h;
 }
-function snapCalendar(){ // phones: bring the focus day into view after each render
-  var wrap=document.getElementById("caldays");
-  if(!wrap||wrap.scrollWidth<=wrap.clientWidth)return;
-  var cell=wrap.querySelector(".calday.focus");
-  if(cell)wrap.scrollLeft+=cell.getBoundingClientRect().left-wrap.getBoundingClientRect().left;
-}
-// ---- mobile agenda: "where do I go next" ----
-// desktop keeps visitCalendar()'s weekly strip; phones get this hero + vertical list.
-// "now" as a comparable Bogota wall-clock string, same YYYY-MM-DDTHH:MM shape as visit_date
-function nowBogota(){return new Date().toLocaleString("sv-SE",{timeZone:"America/Bogota"}).slice(0,16).replace(" ","T");}
-// a date-only visit stays "upcoming" until the end of its day, so pad it for the string compare
-function visitCmp(vd){return vd.length>10?vd:vd.slice(0,10)+"T23:59";}
-// wall-clock string -> epoch ms, parsed at UTC so only the delta (not the absolute) matters
-function wallMs(s){return Date.parse(s.slice(0,16)+":00Z");}
-function heroLabel(r,now,todayStr){
-  var day=r.visit_date.slice(0,10),timed=r.visit_date.length>10,t=timed?r.visit_date.slice(11,16):"";
-  var word;
-  if(day===todayStr)word="HOY";
-  else if(day===addDays(todayStr,1))word="MAÑANA";
-  else word=parseDay(day).toLocaleDateString("es-CO",{timeZone:"UTC",weekday:"short",day:"numeric",month:"short"});
-  var parts=[word,t||"hora por definir"];
-  // countdown only for today's timed visits (computed once per render; the page reloads on visibilitychange)
-  if(day===todayStr&&timed){
-    var diff=Math.round((wallMs(r.visit_date)-wallMs(now))/60000);
-    if(diff>=0)parts.push(diff<60?("en "+diff+" min"):("en "+Math.round(diff/60)+" h"));
+
+/* ================= filter bar / segments / rows ================= */
+function fbarHtml(rows){
+  let h='<button class="chip'+(FILTERS.deal?" on":"")+'" data-act="chip-deal">'
+    +(FILTERS.deal==="rent"?"Arriendo":FILTERS.deal==="buy"?"Compra":"Tipo: todos")+"</button>";
+  h+='<button class="chip'+(FILTERS.minBeds?" on":"")+'" data-act="chip-beds">'
+    +(FILTERS.minBeds?("Hab: "+FILTERS.minBeds+"+"):"Hab: todas")+"</button>";
+  h+='<button class="chip num'+(FILTERS.maxPrice!=null?" on":"")+'" data-act="chip-price">'
+    +(FILTERS.maxPrice!=null?("≤ "+mny(FILTERS.maxPrice)):"Precio: todos")+"</button>";
+  const tags=[],tseen={};
+  for(const r of rows){const t=r.tag;if(t&&!tseen[t]){tseen[t]=1;tags.push(t);}}
+  if(FILTERS.tag&&!tseen[FILTERS.tag])tags.push(FILTERS.tag); // stale filter tag must stay clearable
+  tags.sort((a,b)=>a.localeCompare(b,"es"));
+  for(const tg of tags){
+    const hue=tagColor(tg),on=FILTERS.tag===tg;
+    h+='<button class="chip tagc'+(on?" on":"")+'" data-act="chip-tag" data-v="'+esc(tg)+'" style="border-color:hsl('+hue+" 58% 62%)"+(on?";background:hsl("+hue+" 58% 62%)":"")+'">'+esc(tg)+"</button>";
   }
-  return parts.join(" · ");
+  h+='<button class="chip'+(FILTERS.sort!=="auto"?" on":"")+'" data-act="chip-sort">'+SORT_LABELS[FILTERS.sort]+"</button>";
+  if(filtersActive())h+='<button class="chip" data-act="chip-clear">✕ limpiar</button>';
+  if(window.L&&mapRows().length)h+='<button class="chip'+(MAP_ON?" on":"")+'" data-act="chip-map">🗺 Mapa</button>';
+  return h;
 }
-function heroCard(r,now,todayStr,clash){
-  var ruled=r.status==="ruled_out";
-  var h="<div class=\"hero"+(ruled?" xout":"")+"\"><div class=\"hlabel\">"+esc(heroLabel(r,now,todayStr))+(ruled?" <span class=\"flag disc\">🚫 descartado</span>":"")+(clash?" <span class=\"flag\">⚠️ choque de horario</span>":"")+"</div>";
-  h+="<div class=\"hname\"><a href=\"#apt-"+r.id+"\">"+esc(aptLabel(r))+"</a></div>";
-  var m=[];
-  var pa=priceAreaBits(r);
-  if(pa.length)m.push(esc(pa.join(" · ")));
-  m=m.concat(contactLines(r));
-  if(m.length)h+="<div class=\"hmeta\">"+m.join("<br>")+"</div>";
-  // Reagendar: a prefilled datetime-local with class vd — the delegated change handler saves it and the server re-sends the invite
-  h+="<div class=\"hresch\"><span class=\"k\">📅 Reagendar</span><input type=\"datetime-local\" class=\"vd\" data-id=\""+r.id+"\" value=\""+esc(vdVal(r.visit_date))+"\"></div>";
-  h+="<div class=\"hact\"><button class=\"act nt\" data-id=\""+r.id+"\">📝 Nota</button>"+(ruled?"<button class=\"act re\" data-id=\""+r.id+"\">↩️ Reactivar</button>":"<button class=\"act danger ro\" data-id=\""+r.id+"\">🚫 Descartar</button>")+"</div>";
-  return h+"</div>";
-}
-// weekday + day + month for a day header, matching the uppercase .gh style (e.g. "sáb 26 jul")
-function agendaDayHead(day){try{return parseDay(day).toLocaleDateString("es-CO",{timeZone:"UTC",weekday:"short",day:"numeric",month:"short"});}catch(e){return day;}}
-function agendaRow(r,clash){
-  var ruled=r.status==="ruled_out";
-  var timed=r.visit_date.length>10,t=timed?r.visit_date.slice(11,16):"";
-  var h="<div class=\"arow"+(ruled?" xout":"")+"\">"+(t?"<span class=\"atime\">"+esc(t)+"</span>":"<span class=\"atime tbd\">hora por definir</span>");
-  h+="<a class=\"aname\" href=\"#apt-"+r.id+"\">"+esc(aptLabel(r))+(ruled?" <span class=\"flag disc\">🚫</span>":"")+(clash&&clash[r.id]?" <span class=\"flag\">⚠️</span>":"")+"</a>";
-  if(r.address)h+="<span class=\"aloc\"><a href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\" aria-label=\"Cómo llegar\">🗺</a></span>";
-  if(r.agent_phone)h+="<span class=\"aloc\"><a href=\""+esc(waLink(r.agent_phone))+"\" target=\"_blank\" rel=\"noopener\" aria-label=\"WhatsApp al agente\">💬</a></span>";
-  return h+"</div>";
-}
-function agendaList(list,now,todayStr,clash){
-  var manana=addDays(todayStr,1),weekEnd=addDays(mondayOf(todayStr),6);
-  var groups=[["Hoy",[]],["Mañana",[]],["Esta semana",[]],["Después",[]]];
-  for(var i=0;i<list.length;i++){var r=list[i],day=r.visit_date.slice(0,10),gi;
-    if(day===todayStr)gi=0;else if(day===manana)gi=1;else if(day<=weekEnd)gi=2;else gi=3;
-    groups[gi][1].push(r);
-  }
-  var h="";
-  for(var g=0;g<groups.length;g++){var gl=groups[g][1];if(!gl.length)continue;
-    if(groups[g][0]==="Después"){
-      // "Después" spans many dates, so a single header would hide them — give each day its own
-      // dated header (list is date-sorted, so consecutive items share a day)
-      var curDay=null;h+="<div class=\"agrp\">";
-      for(var k=0;k<gl.length;k++){var d2=gl[k].visit_date.slice(0,10);
-        if(d2!==curDay){curDay=d2;h+="<div class=\"gh\">"+esc(agendaDayHead(d2))+"</div>";}
-        h+=agendaRow(gl[k],clash);
-      }
-      h+="</div>";
-    }else{
-      h+="<div class=\"agrp\"><div class=\"gh\">"+groups[g][0]+"</div>";
-      for(var j=0;j<gl.length;j++)h+=agendaRow(gl[j],clash);
-      h+="</div>";
-    }
+const SEG_LABEL={pending:"Por agendar",scheduled:"Agendadas",visited:"Visitadas"};
+function segsHtml(counts){
+  let h="";
+  for(const s of ["pending","scheduled","visited"]){
+    h+='<button class="seg'+(SEG===s?" on":"")+'" data-act="nav-seg" data-seg="'+s+'">'+SEG_LABEL[s]+' <span class="n">'+counts[s]+"</span></button>";
   }
   return h;
 }
-function agendaMobile(rows){
-  var now=nowBogota(),todayStr=(DATA.today||now.slice(0,10)).slice(0,10);
-  var up=rows.filter(function(r){return r.visit_date&&visitCmp(r.visit_date)>=now;})
-    .sort(function(a,b){return visitCmp(a.visit_date)<visitCmp(b.visit_date)?-1:1;});
-  if(!up.length)return "<div class=\"hero empty2\">Sin visitas programadas — agenda una desde la tarjeta del apartamento.</div>";
-  var clash=allOverlaps(up); // same double-booking flag as the desktop strip
-  return heroCard(up[0],now,todayStr,clash[up[0].id])+agendaList(up.slice(1),now,todayStr,clash);
+function thumbHtml(r){
+  return r.image_url
+    ?'<img class="rthumb" src="'+esc(r.image_url)+'" loading="lazy" alt="" onerror="this.className=\'rthumb noimg\';this.removeAttribute(\'src\')">'
+    :'<span class="rthumb noimg"></span>';
 }
-// ---- post-visit follow-up: «Visitadas — ¿cómo les fue?» ----
-// active apartments whose visit is in the past (within 7 days) and still without feedback.
-// only actives are passed in, so ruled-out ones are excluded automatically; a note stamped
-// on/after the visit day (from web or Telegram) also counts as feedback and hides the row.
-function followupBlock(rows){
-  var now=nowBogota(),todayStr=(DATA.today||now.slice(0,10)).slice(0,10),weekAgo=addDays(todayStr,-7);
-  var due=rows.filter(function(r){
-    if(!r.visit_date)return false;
-    var vd=r.visit_date,day=vd.slice(0,10);
-    var past=vd.length>10?(vd<now):(day<todayStr);
-    if(!past||day<weekAgo)return false; // future, or older than 7 days (no eternal nag)
-    if(r.notes){
-      var lines=String(r.notes).split("\n");
-      for(var i=0;i<lines.length;i++){
-        var m=lines[i].match(NOTE_RE),stamp=m?m[1]:lines[i].slice(0,10);
-        if(/^\d{4}-\d{2}-\d{2}$/.test(stamp)&&stamp>=day)return false; // already noted since the visit
-      }
-    }
-    return true;
-  }).sort(function(a,b){return a.visit_date<b.visit_date?1:-1;}); // most recent visit first
-  if(!due.length)return "";
-  var h="<h2 class=\"sect\">🗣 Visitadas — ¿cómo les fue? <span class=\"count\">"+due.length+"</span></h2><div class=\"fublock\">";
-  for(var j=0;j<due.length;j++){var r=due[j];
-    h+="<div class=\"furow\"><div class=\"fuinfo\">";
-    h+="<a class=\"funame\" href=\"#apt-"+r.id+"\">"+esc(aptLabel(r))+"</a>";
-    h+="<span class=\"fuwhen\">"+esc(fmtVisit(r.visit_date))+"</span></div>";
-    var fb=[];
-    var pa=priceAreaBits(r);
-    if(pa.length)fb.push(esc(pa.join(" · ")));
-    fb=fb.concat(contactLines(r)); // the WhatsApp link matters here: "¿y el parqueadero?" right after the visit
-    if(fb.length)h+="<div class=\"fumeta\">"+fb.join("<br>")+"</div>";
-    h+="<div class=\"fuact\">";
-    h+="<button class=\"act sm fbup\" data-id=\""+r.id+"\">👍 Nos gustó</button>";
-    h+="<button class=\"act sm fbdn\" data-id=\""+r.id+"\">👎 No</button>";
-    h+="<button class=\"act sm nt\" data-id=\""+r.id+"\">📝 Nota</button>";
-    h+="<button class=\"act sm danger ro\" data-id=\""+r.id+"\">🚫 Descartar</button>";
-    h+="</div></div>";
+function rowHtml(r,seg){
+  const l2=priceAreaBits(r);
+  if(r.bedrooms!=null)l2.push(r.bedrooms+" hab");
+  let fact="";
+  if(seg==="scheduled"){
+    const v=nextVisitOf(r);
+    if(v)fact='<span class="fnext">▸ '+esc(fmtDT(v.visit_date))+(v.who?" · "+esc(whoLabel(v.who)):"")+"</span>";
+  }else if(seg==="visited"){
+    const v=lastVisitOf(r);
+    const p=docsProgress(r);
+    if(v)fact='<span class="fmut">✓ '+esc(fmtDay(v.visit_date))+(v.who?" · "+esc(whoLabel(v.who)):"")
+      +((r.docs&&r.docs.length)?(" · docs "+p.rec+"/"+p.tot):"")+"</span>";
+  }else{
+    fact=(r.docs&&r.docs.length)
+      ?'<span class="fmut">docs '+docsProgress(r).rec+"/"+docsProgress(r).tot+"</span>"
+      :'<span class="fdim">sin visita agendada</span>';
+  }
+  let h='<div class="row" data-act="open" data-id="'+r.id+'" id="apt-'+r.id+'">'+thumbHtml(r);
+  h+='<div class="rmid"><div class="rname"><span class="rid">#'+r.id+"</span> "+esc(aptName(r))+(r.tag?" "+tagChip(r.tag):"")+"</div>";
+  h+='<div class="rsub">'+esc(l2.join(" · ")||"—")+"</div>";
+  if(fact)h+='<div class="rfact">'+fact+"</div>";
+  h+='</div><div class="rside">'+pillsOf(r,true)+"</div></div>";
+  return h;
+}
+function listHtml(shown){
+  const bySeg={pending:[],scheduled:[],visited:[]};
+  for(const r of shown)bySeg[stageOf(r)].push(r);
+  const list=segSort(bySeg[SEG]||[],SEG);
+  if(!list.length){
+    const all=(DATA.apartments||[]).length;
+    if(!all)return '<div class="empty">Aún no hay apartamentos.<br>Comparte un link en el grupo de Telegram para empezar.</div>';
+    let msg=SEG==="pending"?"Nada por agendar por aquí.":SEG==="scheduled"?"No hay visitas agendadas.":"Todavía no han visitado ninguno.";
+    if(filtersActive())msg="Nada coincide con los filtros.";
+    return '<div class="empty">'+msg
+      +(filtersActive()?'<br><button class="btn sm" data-act="chip-clear">✕ Limpiar filtros</button>':"")+"</div>";
+  }
+  return list.map((r)=>rowHtml(r,SEG)).join("");
+}
+function ruledDate(s){if(!s)return "";try{return new Date(s).toLocaleDateString("es-CO",{day:"2-digit",month:"short"});}catch(e){return "";}}
+function ruledHtml(list){
+  if(!list.length)return "";
+  let h='<details class="ruled" id="ruledbox"><summary><span class="eyebrow">Descartadas <span class="cnt">'+list.length+"</span></span></summary>";
+  for(const r of list){
+    const bits=priceAreaBits(r);
+    if(r.address)bits.push("📍 "+r.address);
+    h+='<div class="rrow" data-act="open" data-id="'+r.id+'" id="apt-'+r.id+'">';
+    h+='<span class="rrloc"><span class="rid">#'+r.id+"</span> "+esc(aptName(r))+"</span>";
+    if(r.ruled_out_reason)h+='<span class="rrreason">'+esc(r.ruled_out_reason)+"</span>";
+    h+='<span class="rrmeta num">'+esc(bits.join(" · "))+"</span>";
+    h+='<span class="grow"></span>';
+    if(r.ruled_out_at)h+='<span class="rrmeta">'+esc(ruledDate(r.ruled_out_at))+"</span>";
+    h+='<button class="btn sm" data-act="reactivate" data-id="'+r.id+'">↩️ Reconsiderar</button></div>';
+  }
+  return h+"</details>";
+}
+
+/* ================= agenda: the hunting week ================= */
+// the view switch: Lista (pipeline, stage axis) vs Agenda (one week, time axis)
+function upcomingVisitCount(){ // every upcoming scheduled visit, actives + descartados — follow-ups count
+  const now=nowBogota();let n=0;
+  for(const r of allRows())for(const v of (r.visits||[]))if(v.status==="scheduled"&&visitCmp(v.visit_date)>=now)n++;
+  return n;
+}
+function vswHtml(){
+  const n=upcomingVisitCount();
+  return '<button class="vsw'+(VIEW==="list"?" on":"")+'" data-act="view-list">Lista</button>'
+    +'<button class="vsw'+(VIEW==="agenda"?" on":"")+'" data-act="view-agenda">Agenda'+(n?' <span class="n">'+n+"</span>":"")+"</button>";
+}
+// EVERY scheduled visit row across actives + descartados — one apartment can appear several
+// times (follow-ups), and a ruled-out apartment's visit stays visible, crossed out, never hidden
+function agEntries(){
+  const out=[];
+  for(const r of allRows())for(const v of (r.visits||[]))if(v.status==="scheduled")out.push({v:v,r:r});
+  out.sort((a,b)=>a.v.visit_date<b.v.visit_date?-1:1);
+  return out;
+}
+// one agenda entry = one visit row: time, #id · location (opens the ficha), quién va,
+// price/area, contact block, then the per-visit controls
+function agEntryHtml(e,clash,globalNextId,now){
+  const r=e.r,v=e.v;
+  const ruled=r.status==="ruled_out";
+  const timed=v.visit_date.length>10;
+  const past=visitCmp(v.visit_date)<now;
+  const nx=nextVisitOf(r);
+  const isNext=!ruled&&!!nx&&nx.id===v.id; // the visit the server (re)sends the invite for
+  let h='<div class="ag'+(ruled?" agx":"")+'">';
+  // accent discipline: only THE next visit (the one on the HOY board) gets cyan numerals
+  h+=timed
+    ?'<div class="agtime'+(globalNextId===v.id?" next":"")+'">'+esc(v.visit_date.slice(11,16))+"</div>"
+    :'<div class="agtbd">hora por definir</div>';
+  let flags="";
+  if(ruled)flags+='<span class="pill err">🚫 descartado</span>';
+  if(clash[v.id])flags+='<span class="pill warn">⚠️ choque de horario</span>';
+  if(past&&!ruled)flags+='<span class="pill mut">✓ hecha</span>';
+  if(flags)h+='<div class="agflags">'+flags+"</div>";
+  h+='<button class="agname" data-act="ag-open" data-id="'+r.id+'"><span class="rid">#'+r.id+"</span> "+esc(aptName(r))+"</button>";
+  const bits=priceAreaBits(r);
+  if(v.who)bits.push((past?"fueron: ":"van: ")+whoLabel(v.who));
+  if(bits.length)h+='<div class="agmeta num">'+esc(bits.join(" · "))+"</div>";
+  h+=contactHtml(r); // ONE contact idiom: address→Maps, phone→WhatsApp + tel: (§2.7)
+  if(!past){
+    h+='<div class="vctl">'; // class vctl so swapToDateInput finds its box
+    h+='<button class="btn sm" data-act="visit-when" data-vid="'+v.id+'" data-val="'+esc(vdVal(v.visit_date))+'">⏱ Reprogramar</button>';
+    if(isNext)h+='<button class="btn sm" data-act="invite" data-id="'+r.id+'">📧 Invitación</button>';
+    if(ruled)h+='<button class="btn sm" data-act="reactivate" data-id="'+r.id+'">↩️ Reactivar</button>';
+    h+='<button class="btn sm dgr" data-act="visit-cancel" data-vid="'+v.id+'">✕ Cancelar</button>';
+    h+="</div>";
+  }else if(ruled){
+    h+='<div class="vctl"><button class="btn sm" data-act="reactivate" data-id="'+r.id+'">↩️ Reactivar</button></div>';
   }
   return h+"</div>";
 }
-function ruledDate(s){if(!s)return "";try{return new Date(s).toLocaleDateString("es-CO",{day:"2-digit",month:"short"});}catch(e){return "";}}
-function ruledSection(list){
-  if(!list.length)return "";
-  var h="<details class=\"ruled\"><summary>🚫 Descartados <span class=\"count\">"+list.length+"</span> · ya no se tienen en cuenta</summary><div class=\"rlist\">";
-  for(var i=0;i<list.length;i++){var r=list[i];
-    var deal=r.deal_type==="rent"?"arriendo":r.deal_type==="buy"?"compra":"";
-    var pr=mny(r.price)+(r.deal_type==="rent"&&r.price?"/mes":"");
-    var bits=[deal,pr!=="—"?pr:"",r.area_m2?(r.area_m2+" m²"):"",r.price_per_m2?("≈"+mny(r.price_per_m2)+"/m²"):"",
-      r.visit_date?("📅 "+fmtVisitShort(r.visit_date)):"",r.address?("📍 "+r.address):"",r.agent_name?("👤 "+r.agent_name):""].filter(Boolean).join(" · ");
-    var reason=r.ruled_out_reason?"<span class=\"reason\">"+esc(r.ruled_out_reason)+"</span>":"";
-    var when=ruledDate(r.ruled_out_at)?("descartado "+ruledDate(r.ruled_out_at)):"";
-    // verdicts survive the rule-out — context for "reconsiderar"
-    var vv=r.votes||{},vb=[];
-    for(var vk in vv)if(vv.hasOwnProperty(vk))vb.push(voterName(vk)+" "+(vv[vk]==="up"?"👍":"👎"));
-    h+="<div class=\"rrow xout\" id=\"apt-"+r.id+"\"><span class=\"rloc\">"+esc(aptLabel(r))+"</span>"+reason;
-    h+="<span class=\"rmeta\">"+esc(bits)+"</span>";
-    if(vb.length)h+="<span class=\"rmeta\">"+esc(vb.join(" · "))+"</span>";
-    h+="<span class=\"grow\"></span>";
-    h+="<span class=\"rmeta\">"+when+"</span>";
-    if(r.url)h+="<a class=\"link\" href=\""+esc(r.url)+"\" target=\"_blank\">link</a>";
-    h+="<button class=\"act re\" data-id=\""+r.id+"\">Reconsiderar</button></div>";
+function agendaHtml(){
+  const entries=agEntries();
+  const now=nowBogota(),td=(DATA.today||now.slice(0,10)).slice(0,10);
+  if(!WEEK_START){
+    const nx=entries.find((e)=>visitCmp(e.v.visit_date)>=now);
+    WEEK_START=mondayOf(nx?nx.v.visit_date.slice(0,10):td);
   }
-  h+="</div></details>";return h;
+  const end=addDays(WEEK_START,6);
+  const byDay={};
+  for(const e of entries){const k=e.v.visit_date.slice(0,10);(byDay[k]=byDay[k]||[]).push(e);}
+  let wk=0;
+  for(let d=0;d<7;d++)wk+=(byDay[addDays(WEEK_START,d)]||[]).length;
+  const cur=WEEK_START===mondayOf(td);
+  const gn=nextVisitGlobal();
+  let h='<div class="aghead"><span class="eyebrow">'+(cur?"Esta semana":"Semana")
+    +(wk?' <span class="cnt num">'+wk+(wk===1?" visita":" visitas")+"</span>":"")+"</span>";
+  if(!cur)h+='<button class="btn sm ghost" data-act="ag-today">↩ esta semana</button>';
+  h+='<div class="agnav"><button data-act="ag-prev" aria-label="Semana anterior">‹</button>'
+    +'<span class="agweek">'+esc(weekLabel(WEEK_START,end))+"</span>"
+    +'<button data-act="ag-next" aria-label="Semana siguiente">›</button></div></div>';
+  if(!wk){ // a week with nothing booked: say so, and point at the backlog
+    const pend=(DATA.apartments||[]).filter((r)=>stageOf(r)==="pending").length;
+    return h+'<div class="empty">Semana libre — sin visitas.'
+      +(pend?("<br>Hay <b>"+pend+"</b> apartamento"+(pend===1?"":"s")+" por agendar."
+        +'<br><button class="btn sm" data-act="nav-seg" data-seg="pending">Ver por agendar →</button>')
+        :"<br>Comparte un link de un apartamento en el grupo de Telegram para empezar.")
+      +"</div>";
+  }
+  // day the phone view scrolls to: today if on screen, else the week's first day with a visit
+  let focus=null;
+  if(td>=WEEK_START&&td<=end)focus=td;
+  else for(let f=0;f<7;f++){const fd=addDays(WEEK_START,f);if(byDay[fd]){focus=fd;break;}}
+  h+='<div class="agdays" id="agdays">';
+  for(let d=0;d<7;d++){
+    const ds=addDays(WEEK_START,d);
+    const list=byDay[ds]||[];
+    const clash=markOverlaps(list.map((e)=>e.v)); // visit ids clashing on this day
+    h+='<div class="agday'+(ds===td?" today":(td&&ds<td?" past":""))+(ds===focus?" focus":"")+'">';
+    h+='<div class="agdh num">'+esc(fmtDayHead(ds))+(ds===td?" · hoy":"")+"</div>";
+    if(!list.length)h+='<div class="agfree">libre</div>'; // an empty hunting day is information
+    for(const e of list)h+=agEntryHtml(e,clash,gn&&gn.v?gn.v.id:null,now);
+    h+="</div>";
+  }
+  return h+"</div>";
 }
-// ---- map: a pin for every apartment (active + descartado) with a geocoded address ----
-// coords are resolved from the Bogotá street grid and cached server-side; geo_address===address guards
-// against showing a stale pin while a freshly edited address is still being looked up
-var MAP=null,MAP_LAYER=null,MAP_KEY="";
-function mapRows(){
-  var out=[],rows=allRows();
-  for(var i=0;i<rows.length;i++){var r=rows[i];
-    if(r.address&&r.geo_lat!=null&&r.geo_lng!=null&&r.geo_address===r.address)out.push(r);
+function snapAgenda(){ // phones: bring the focus day into view after a fresh week paint
+  const wrap=$("agdays");
+  if(!wrap||wrap.scrollWidth<=wrap.clientWidth)return;
+  const cell=wrap.querySelector(".agday.focus");
+  if(cell)wrap.scrollLeft+=cell.getBoundingClientRect().left-wrap.getBoundingClientRect().left;
+}
+
+/* ================= detail sheet ================= */
+function contactHtml(r){
+  // THE contact idiom (twin of contactLines discipline): address opens Maps, the number itself
+  // opens WhatsApp (how agents actually get reached mid-visit), plain dial link as fallback.
+  const out=[];
+  if(r.address)out.push('📍 <a href="'+esc(mapsLink(r.address))+'" target="_blank" rel="nofollow noreferrer">'+esc(r.address)+"</a>");
+  if(r.agent_name)out.push("👤 "+esc(r.agent_name));
+  if(r.agent_phone)out.push('💬 <a href="'+esc(waLink(r.agent_phone))+'" target="_blank" rel="noopener">'+esc(r.agent_phone)+'</a> · <a href="tel:'+esc(r.agent_phone)+'">llamar</a>');
+  return out.length?'<div class="contactb num">'+out.join("<br>")+"</div>":"";
+}
+function photosHtml(r){
+  let h="";
+  if(r.image_url)h+='<img class="cover" src="'+esc(r.image_url)+'" alt="" onerror="this.remove()">';
+  if(r.photos&&r.photos.length){
+    h+='<div class="strip">';
+    for(const p of r.photos){
+      // href = full-res fallback; a normal tap opens the in-app lightbox instead of navigating
+      // to the raw image (which the PWA turns into a download)
+      h+='<a class="pv" href="/apt-photo/'+p.id+'"'+(p.caption?' data-cap="'+esc(p.caption)+'"':"")+">"
+        +'<img src="/apt-photo/'+p.id+'?s=t" loading="lazy" alt=""'+(p.caption?' title="'+esc(p.caption)+'"':"")+' onerror="this.parentNode.remove()"></a>';
+    }
+    h+="</div>";
   }
-  return out;
+  return h;
+}
+function priceBlock(r){
+  const isRent=r.deal_type==="rent";
+  const ppm=ppmOf(r,isRent);
+  let h='<div class="dprice"><span class="big">'+mny(effPrice(r))+"</span>"
+    +(isRent?'<span class="per">/mes todo incluido</span>':'<span class="per">venta</span>')+"</div>";
+  const sub=[];
+  if(isRent)sub.push(r.admin_fee?("arriendo "+mny(r.price)+" + admin "+mny(r.admin_fee)):"sin admin reportada");
+  else if(r.admin_fee!=null)sub.push("admin "+mny(r.admin_fee));
+  if(ppm)sub.push("≈ "+mny(ppm)+"/m²"+(isRent?" total":""));
+  if(sub.length)h+='<div class="dpricesub">'+esc(sub.join(" · "))+"</div>";
+  return h;
+}
+function factsHtml(r){
+  const f=(k,v)=>'<div class="fact"><span class="k">'+k+'</span><span class="v">'+v+"</span></div>";
+  return '<div class="facts">'
+    +f("Tipo",r.deal_type==="rent"?"Arriendo":r.deal_type==="buy"?"Compra":"—")
+    +f("Hab",num(r.bedrooms))+f("Baños",num(r.bathrooms))
+    +f("m²",num(r.area_m2))+f("Estrato",num(r.stratum))+f("Parqueadero",num(r.parking))
+    +"</div>";
+}
+function noteLinesHtml(id,notes,delAct){
+  let h="";
+  for(const ln of String(notes).split("\n")){
+    if(!ln.trim())continue;
+    const m=ln.match(NOTE_RE);
+    const meta=m?(noteDate(m[1])+(m[2]?" · "+m[2]:"")):"📝";
+    const text=m?m[3]:ln;
+    h+='<div class="ntline"><span class="nmeta">'+esc(meta)+'</span><span class="ntxt">'+esc(text)+"</span>";
+    if(delAct)h+='<button class="ntdel" data-act="'+delAct+'" data-id="'+id+'" data-line="'+b64u(ln)+'" aria-label="Borrar nota">✕</button>';
+    h+="</div>";
+  }
+  return h;
+}
+function visitsHtml(r){
+  const now=nowBogota();
+  const next=nextVisitOf(r);
+  let h='<div class="sect" id="visitsSect"><div class="sect-h"><span class="eyebrow">Visitas</span>';
+  if(next)h+='<span class="pill now mini">▸ '+esc(fmtDT(next.visit_date))+"</span>";
+  h+="</div>";
+  const vs=(r.visits||[]);
+  for(const v of vs){
+    const cancelled=v.status==="cancelled";
+    const past=!cancelled&&visitCmp(v.visit_date)<now;
+    const isNext=next&&next.id===v.id;
+    const dot=cancelled?'<span class="vdot off">✕</span>':past?'<span class="vdot done">✓</span>':'<span class="vdot next">●</span>';
+    h+='<div class="visit">'+dot+'<div class="vbody">';
+    h+='<div class="vwhen'+(cancelled?" off":isNext?" next":"")+'">'+esc(fmtDT(v.visit_date))+"</div>";
+    h+='<div class="vwho">'+(cancelled?"cancelada":past?("hecha"+(v.who?" · fueron: "+esc(whoLabel(v.who)):"")):(v.who?"van: "+esc(whoLabel(v.who)):"¿quién va?"))+"</div>";
+    if(!cancelled&&!past){
+      h+='<div class="whochips" style="margin-top:8px">';
+      for(const w of ["felipe","lucia","both"]){
+        h+='<button class="wchip'+(v.who===w?" on":"")+'" data-act="visit-who" data-vid="'+v.id+'" data-who="'+w+'">'+whoLabel(w)+"</button>";
+      }
+      h+="</div>";
+      h+='<div class="vctl">';
+      h+='<button class="btn sm" data-act="visit-when" data-vid="'+v.id+'" data-val="'+esc(vdVal(v.visit_date))+'">⏱ Reprogramar</button>';
+      if(isNext&&r.status!=="ruled_out")h+='<button class="btn sm" data-act="invite" data-id="'+r.id+'">📧 Invitación</button>';
+      h+='<button class="btn sm dgr" data-act="visit-cancel" data-vid="'+v.id+'">✕ Cancelar</button>';
+      h+="</div>";
+    }
+    if(v.note)h+='<div class="vnotes">'+noteLinesHtml(v.id,v.note,null)+"</div>";
+    if(past){
+      h+='<div class="vctl"><button class="btn sm" data-act="visit-note-open" data-vid="'+v.id+'">📝 ¿Cómo les fue?</button></div>';
+      h+='<div class="inrow" id="vni_'+v.id+'" hidden><input class="in" id="vn_'+v.id+'" type="text" maxlength="300" placeholder="qué tal estuvo…" data-enterbtn="vnb_'+v.id+'">'
+        +'<button class="btn" id="vnb_'+v.id+'" data-act="visit-note-save" data-vid="'+v.id+'">Guardar</button></div>';
+    }
+    h+="</div></div>";
+  }
+  // schedule block: primary when nothing upcoming, a quiet follow-up CTA otherwise
+  const mode=next?"add":"set";
+  h+='<div class="sched" id="schedBlock">';
+  if(next)h+='<button class="btn sm ghost" data-act="visit-new-toggle" id="nvToggle">+ otra visita</button>';
+  h+='<div id="nvBlock"'+(next?" hidden":"")+'>'
+    +(next?"":'<div class="eyebrow" style="margin-bottom:8px">Agendar visita</div>')
+    +'<input type="datetime-local" class="in" id="nv_dt">'
+    +'<div class="whochips" id="nv_who" style="margin-top:8px">'
+    +'<button class="wchip" data-act="who-pick" data-who="felipe">Felipe</button>'
+    +'<button class="wchip" data-act="who-pick" data-who="lucia">Lucía</button>'
+    +'<button class="wchip" data-act="who-pick" data-who="both">los dos</button></div>'
+    +'<button class="btn prim" style="margin-top:8px;width:100%" data-act="visit-new-save" data-id="'+r.id+'" data-mode="'+mode+'">📅 Agendar</button>'
+    +"</div></div>";
+  return h+"</div>";
+}
+const DOC_ST_NEXT={pending:"received",received:"na",na:"pending"};
+const DOC_ST_TOAST={pending:"Pendiente ⏳",received:"Recibido ✓",na:"No aplica"};
+function docsHtml(r){
+  const list=docChecklist(r);
+  const p=docsProgress(r);
+  let h='<div class="sect" id="docsSect"><div class="sect-h"><span class="eyebrow">Documentos <span class="cnt num">'+p.rec+"/"+p.tot+"</span></span></div>";
+  h+='<div class="dbar"><i style="width:'+(p.tot?Math.round(100*p.rec/p.tot):0)+'%"></i></div>';
+  for(const e of list){
+    const ic=e.status==="received"?"✓":e.status==="na"?"–":"○";
+    h+='<div class="doc'+(e.status==="na"?" na":"")+'" data-act="doc-cycle" data-id="'+r.id+'" data-slug="'+esc(e.slug)+'"'
+      +(e.dlabel?' data-dlabel="'+esc(e.dlabel)+'"':"")+' data-status="'+esc(e.status)+'">';
+    h+='<span class="dstat '+esc(e.status)+'">'+ic+"</span>";
+    h+='<span class="dlab">'+esc(e.label)+"</span>";
+    if(e.has_file&&e.id)h+='<a class="dfile" href="/apt-doc/'+e.id+'" target="_blank" rel="noopener">'+esc(e.file_name||"archivo")+" ↗</a>";
+    if(e.id)h+='<button class="ddel" data-act="doc-del" data-did="'+e.id+'" aria-label="Eliminar">✕</button>';
+    h+="</div>";
+  }
+  h+='<div class="inrow" style="margin-top:10px"><input class="in" id="doc_new" type="text" maxlength="80" placeholder="otro documento…" data-enterbtn="doc_add">'
+    +'<button class="btn" id="doc_add" data-act="doc-add" data-id="'+r.id+'">+ Agregar</button></div>';
+  const wa=waDocsLink(r);
+  if(wa)h+='<a class="btn sm" style="margin-top:10px" href="'+esc(wa)+'" target="_blank" rel="noopener">💬 Pedir pendientes por WhatsApp</a>';
+  h+='<div class="dhint">Toca un documento para pasarlo de pendiente → recibido → no aplica. Los PDF que lleguen por Telegram se archivan solos.</div>';
+  return h+"</div>";
+}
+function notesHtml(r){
+  let h='<div class="sect" id="notesSect"><div class="sect-h"><span class="eyebrow">Notas</span></div>';
+  const rn=(r.raw_note||"").replace(/https?:\/\/\S+/g,"").trim();
+  if(rn)h+='<div class="quote">“'+esc(rn)+"”</div>";
+  if(r.notes)h+='<div style="margin-top:8px">'+noteLinesHtml(r.id,r.notes,"note-del")+"</div>";
+  h+='<div class="inrow" style="margin-top:10px"><input class="in" id="nt_new" type="text" maxlength="300" placeholder="escribe una nota…" data-enterbtn="nt_save">'
+    +'<button class="btn" id="nt_save" data-act="note-save" data-id="'+r.id+'">Guardar</button></div>';
+  return h+"</div>";
+}
+function barHtml(r){
+  const ruled=r.status==="ruled_out";
+  let h='<div class="bar'+(r.agent_phone?"":" c3")+'">';
+  h+='<button class="bbtn" data-act="bar-agendar"><span class="ic">📅</span>Agendar</button>';
+  if(r.agent_phone)h+='<a class="bbtn" href="'+esc(waLink(r.agent_phone))+'" target="_blank" rel="noopener"><span class="ic">💬</span>WhatsApp</a>';
+  h+='<button class="bbtn" data-act="bar-note"><span class="ic">📝</span>Nota</button>';
+  h+=ruled
+    ?'<button class="bbtn" data-act="reactivate" data-id="'+r.id+'"><span class="ic">↩️</span>Reactivar</button>'
+    :'<button class="bbtn dgr" data-act="discard-open"><span class="ic">🚫</span>Descartar</button>';
+  return h+"</div>";
+}
+function detailViewHtml(r){
+  let h='<div class="dscroll">'+photosHtml(r);
+  h+='<div class="dtitle"><span class="rid">#'+r.id+"</span> "+esc(aptName(r))+(r.tag?" "+tagChip(r.tag):"")+"</div>";
+  if(r.title&&r.location)h+='<div class="dsub">'+esc(r.title)+"</div>";
+  const pills=pillsOf(r,false)+(r.status==="ruled_out"?'<span class="pill err">🚫 descartado'+(r.ruled_out_reason?" · "+esc(r.ruled_out_reason):"")+"</span>":"");
+  if(pills)h+='<div class="dpills">'+pills+"</div>";
+  h+=priceBlock(r);
+  h+='<div class="dlinks">';
+  if(r.url)h+='<a class="btn sm" href="'+esc(r.url)+'" target="_blank" rel="noopener">Ver aviso ↗</a>';
+  h+='<button class="btn sm" data-act="rescrape" data-id="'+r.id+'">↻ Releer</button>';
+  h+='<button class="btn sm" data-act="edit-open">✎ Editar ficha</button>';
+  h+="</div>";
+  h+=factsHtml(r);
+  const xtra=[r.amenities?esc(r.amenities):"",r.year_built?("año "+esc(r.year_built)):""].filter(Boolean).join(" · ");
+  if(xtra)h+='<div class="dsub" style="margin-top:10px">'+xtra+"</div>";
+  h+=contactHtml(r);
+  h+=voteRow(r);
+  h+=visitsHtml(r);
+  h+=docsHtml(r);
+  h+=notesHtml(r);
+  h+='<div class="dmeta">agregado '+esc(fmtDay(String(r.created_at||"").slice(0,10)))+(r.created_by?" · "+esc(r.created_by):"")+"</div>";
+  h+="</div>"+barHtml(r);
+  return h;
+}
+const EDIT_FIELDS=[
+  ["location","Ubicación","text"],["title","Título","text"],["deal_type","Tipo","deal"],
+  ["price","Precio","num"],["admin_fee","Admin","num"],
+  ["bedrooms","Hab","num"],["bathrooms","Baños","num"],["area_m2","m²","num"],
+  ["stratum","Estrato","num"],["parking","Parqueadero","num"],
+  ["address","Dirección","text"],["agent_name","Agente","text"],["agent_phone","Teléfono","tel"],["tag","Etiqueta","text"],
+];
+function detailEditHtml(r){
+  let h='<div class="dscroll"><div class="dtitle">Editar · <span class="rid">'+esc(aptLabel(r))+"</span></div>";
+  h+='<div class="eform">';
+  for(const [f,label,kind] of EDIT_FIELDS){
+    const cur=r[f]==null?"":String(r[f]);
+    const wide=(f==="location"||f==="title"||f==="address"||f==="agent_name");
+    if(kind==="deal"){
+      h+='<label'+(wide?' class="wide"':"")+">"+label+'<select class="in" id="ef_'+f+'">'
+        +'<option value="rent"'+(cur==="rent"?" selected":"")+">Arriendo</option>"
+        +'<option value="buy"'+(cur==="buy"?" selected":"")+">Compra</option>"
+        +'<option value="unknown"'+(cur!=="rent"&&cur!=="buy"?" selected":"")+">—</option></select></label>";
+    }else{
+      h+='<label'+(wide?' class="wide"':"")+">"+label
+        +'<input class="in" id="ef_'+f+'" type="'+(kind==="tel"?"tel":"text")+'"'+(kind==="num"?' inputmode="decimal"':"")+' value="'+esc(cur)+'" autocomplete="off"></label>';
+    }
+  }
+  h+="</div>";
+  h+='<div class="mctl"><button class="btn" data-act="edit-cancel">Cancelar</button><button class="btn prim" data-act="edit-save" data-id="'+r.id+'">Guardar</button></div>';
+  h+='<div class="dmeta">Los cambios de precio hechos a mano no cuentan como movida del mercado.</div>';
+  return h+"</div>";
+}
+function detailDiscardHtml(r){
+  let h='<div class="dscroll"><div class="dtitle">¿Descartar <span class="rid">'+esc(aptLabel(r))+"</span>?</div>";
+  h+='<div class="dsub" style="margin-top:6px">Va a Descartadas — reversible con «Reconsiderar».</div>';
+  h+='<div class="chips" id="roChips">';
+  for(const c of ["muy caro","muy lejos","oscuro","sin parqueadero","ya no disponible"])
+    h+='<button class="rchip" data-act="chip-reason">'+c+"</button>";
+  h+="</div>";
+  h+='<input class="in" id="ro_reason" type="text" maxlength="120" placeholder="motivo (opcional)" autocomplete="off">';
+  h+='<div class="mctl"><button class="btn" data-act="discard-cancel">Volver</button><button class="btn dgr" data-act="discard-save" data-id="'+r.id+'">🚫 Descartar</button></div>';
+  return h+"</div>";
+}
+function detailHtml(r){
+  let inner;
+  if(MODE==="edit")inner=detailEditHtml(r);
+  else if(MODE==="discard")inner=detailDiscardHtml(r);
+  else inner=detailViewHtml(r);
+  return '<div class="dhead"><span class="grab"></span><button class="dx" data-act="close" aria-label="Cerrar">✕</button></div>'+inner;
+}
+
+/* ================= map ================= */
+let MAP=null,MAP_LAYER=null,MAP_KEY="";
+function mapRows(){
+  return allRows().filter((r)=>r.address&&r.geo_lat!=null&&r.geo_lng!=null&&r.geo_address===r.address);
 }
 function mapPopup(r){
-  var bits=priceAreaBits(r);
+  const bits=priceAreaBits(r);
   if(r.bedrooms!=null)bits.push(r.bedrooms+" hab");
-  if(r.visit_date)bits.push("📅 "+fmtVisitShort(r.visit_date));
-  if(r.agent_name)bits.push("👤 "+r.agent_name);
-  var h="<div class=\"mpop\"><div class=\"mname\">"+esc(aptLabel(r))+(r.status==="ruled_out"?" · 🚫 descartado":"")+"</div>";
-  if(bits.length)h+="<div class=\"mmeta\">"+esc(bits.join(" · "))+"</div>";
-  // pins sit on the street crossing the address names, so they are block-accurate, not door-accurate
-  h+="<div class=\"mmeta\">📍 "+esc(r.address)+"</div>";
-  h+="<div class=\"mapprox\">Ubicación aproximada (al cruce de calles)</div>";
-  h+="<div class=\"mlinks\"><a href=\"#apt-"+r.id+"\">Ver tarjeta</a> · <a href=\""+esc(mapsLink(r.address))+"\" target=\"_blank\" rel=\"nofollow noreferrer\">Cómo llegar</a>"+(r.agent_phone?" · <a href=\""+esc(waLink(r.agent_phone))+"\" target=\"_blank\" rel=\"noopener\">💬 WhatsApp</a>":"")+"</div></div>";
+  const v=nextVisitOf(r);
+  if(v)bits.push("📅 "+fmtDT(v.visit_date));
+  let h='<div class="mpop"><div class="mname">'+esc(aptLabel(r))+(r.status==="ruled_out"?" · 🚫":"")+"</div>";
+  if(bits.length)h+='<div class="mmeta">'+esc(bits.join(" · "))+"</div>";
+  h+='<div class="mmeta">📍 '+esc(r.address)+"</div>";
+  h+='<div class="mapprox">Ubicación aproximada (al cruce de calles)</div>';
+  h+='<div style="margin-top:4px"><a href="#apt-'+r.id+'">Ver ficha</a> · <a href="'+esc(mapsLink(r.address))+'" target="_blank" rel="nofollow noreferrer">Cómo llegar</a>'
+    +(r.agent_phone?' · <a href="'+esc(waLink(r.agent_phone))+'" target="_blank" rel="noopener">💬</a>':"")+"</div></div>";
   return h;
 }
 function updateMap(){
-  var sect=document.getElementById("mapsect");
-  if(!window.L||!DATA){sect.style.display="none";return;} // Leaflet CDN unreachable → no map, no error
-  var rows=mapRows();
-  if(!rows.length){sect.style.display="none";return;}
-  // addresses the geocoder hasn't placed (yet, or not found) — say so instead of silently missing pins
-  var all=allRows(),noGeo=0;
-  for(var i=0;i<all.length;i++){var r=all[i];
-    if(r.address&&!(r.geo_lat!=null&&r.geo_lng!=null&&r.geo_address===r.address))noGeo++;
-  }
-  sect.style.display="";
-  document.getElementById("mapcount").textContent=rows.length+(noGeo?" · "+noGeo+" con dirección que no pude ubicar":"");
+  const box=$("mapbox");
+  if(VIEW==="agenda"){box.hidden=true;return;} // the map is a list companion; MAP_ON survives the switch
+  if(!MAP_ON||!window.L||!DATA){box.hidden=true;return;} // Leaflet CDN unreachable → no map, no error
+  const rows=mapRows();
+  if(!rows.length){box.hidden=true;return;}
+  box.hidden=false;
   if(!MAP){
-    MAP=L.map("map",{scrollWheelZoom:false}); // wheel keeps scrolling the page; zoom via buttons/pinch
+    MAP=L.map("map",{scrollWheelZoom:false});
     L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",{
       subdomains:"abcd",maxZoom:19,
-      attribution:"&copy; <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap</a> &copy; <a href=\"https://carto.com/attributions\" target=\"_blank\" rel=\"noopener\">CARTO</a>"
+      attribution:'&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>'
     }).addTo(MAP);
     MAP_LAYER=L.layerGroup().addTo(MAP);
+  }else{
+    setTimeout(()=>MAP.invalidateSize(),0);
   }
   MAP_LAYER.clearLayers();
-  var pts=[];
-  for(var j=0;j<rows.length;j++){var r2=rows[j];var ruled=r2.status==="ruled_out";
-    L.circleMarker([r2.geo_lat,r2.geo_lng],{
-      radius:9,color:"#0e1013",weight:2,
-      fillColor:ruled?"#8b919c":"#7aa2ff",fillOpacity:ruled?0.55:0.9
-    }).bindPopup(mapPopup(r2)).addTo(MAP_LAYER);
-    pts.push([r2.geo_lat,r2.geo_lng]);
+  const pts=[];
+  for(const r of rows){
+    const ruled=r.status==="ruled_out";
+    const sched=!ruled&&!!nextVisitOf(r); // accent pin = has an upcoming visit (now/next discipline)
+    L.circleMarker([r.geo_lat,r.geo_lng],{
+      radius:9,color:"#0a0d10",weight:2,
+      fillColor:ruled?"#5c6773":sched?"#56cce8":"#8c97a3",fillOpacity:ruled?0.55:0.9
+    }).bindPopup(mapPopup(r)).addTo(MAP_LAYER);
+    pts.push([r.geo_lat,r.geo_lng]);
   }
-  // refit only when the pin set changes, so popup clicks / unrelated re-renders don't yank the view
-  var key=rows.map(function(r3){return r3.id+":"+r3.geo_lat+","+r3.geo_lng;}).join("|");
+  const key=rows.map((r)=>r.id+":"+r.geo_lat+","+r.geo_lng).join("|");
   if(key!==MAP_KEY){
     MAP_KEY=key;
     if(pts.length===1)MAP.setView(pts[0],15);
     else MAP.fitBounds(pts,{padding:[28,28],maxZoom:15});
   }
 }
-// deep link from Telegram acks: #apt-<id> scrolls to and briefly highlights that card/row.
-// one-shot (HASH_DONE) so week-nav / resize re-renders don't re-trigger the jump
-var HASH_DONE=false;
-function jumpToHash(){
-  if(HASH_DONE)return;
-  var m=(location.hash||"").match(/^#apt-(\d+)$/);
-  if(!m)return;
-  // list mode: expand the target row first so the full card is the scroll target
-  // (render() re-runs jumpToHash; second pass falls through with OPEN_ROW already set)
-  var hid=Number(m[1]);
-  if(effView()==="list"&&OPEN_ROW!==hid){
-    var act=(DATA&&DATA.apartments)||[];
-    for(var i=0;i<act.length;i++)if(act[i].id===hid){OPEN_ROW=hid;render();return;}
-  }
-  var el=document.getElementById("apt-"+m[1]);
-  if(!el)return;
-  HASH_DONE=true;
-  var det=el.closest?el.closest("details.ruled"):null;
-  if(det)det.open=true;
-  el.scrollIntoView({block:"start"});
-  el.classList.add("hilite");
-  setTimeout(function(){el.classList.remove("hilite");},2000);
+
+/* ================= render ================= */
+function syncSheet(){document.documentElement.classList.toggle("sheet-open",OPEN!=null);}
+let RENDERED_SHEET=null; // which apt the sheet last rendered — keeps the scroll seat on re-renders
+function renderDetail(){
+  const box=$("detail");
+  if(OPEN==null){RENDERED_SHEET=null;box.innerHTML='<div class="dphold">Selecciona un apartamento para ver su ficha.</div>';syncSheet();return;}
+  const r=findApt(OPEN);
+  if(!r){OPEN=null;MODE="view";RENDERED_SHEET=null;box.innerHTML='<div class="dphold">Selecciona un apartamento para ver su ficha.</div>';syncSheet();return;}
+  // a quick action (doc tap, vote, nota) re-renders the SAME ficha — don't yank the reader
+  // back to the top of the sheet; a different apartment starts fresh
+  const sc=box.querySelector(".dscroll");
+  const keep=(RENDERED_SHEET===OPEN&&sc)?sc.scrollTop:0;
+  box.innerHTML=detailHtml(r);
+  if(keep){const sc2=box.querySelector(".dscroll");if(sc2)sc2.scrollTop=keep;}
+  RENDERED_SHEET=OPEN;
+  syncSheet();
 }
 function render(){
-  var rows=DATA.apartments||[];var ruled=DATA.ruledOut||[];
-  // filters narrow the list/table only — the agenda, follow-up block and Descartados always
-  // see every active row (a filter must never hide an upcoming visit); the agenda also always
-  // sees ruled-out rows with a visit_date, crossed out rather than hidden (see visRows below)
-  var shown=applyFilters(rows);
-  document.getElementById("fbar").innerHTML=buildFilterBar(rows);
-  var parts=[filtersActive()?(shown.length+" de "+rows.length+" activos"):(rows.length+(rows.length===1?" activo":" activos"))];
-  if(ruled.length)parts.push(ruled.length+(ruled.length===1?" descartado":" descartados"));
-  // toLocaleDateString returns the string "Invalid Date" (never throws) on bad input, so guard explicitly
-  var niceDay="";if(DATA.today){var nd=new Date(DATA.today+"T00:00:00Z");niceDay=isNaN(nd)?DATA.today:nd.toLocaleDateString("es-CO",{timeZone:"UTC",weekday:"long",day:"numeric",month:"long"});}
-  document.getElementById("sub").textContent=parts.join(" · ")+" · "+niceDay;
-  // desktop keeps the weekly strip; phones get the "next visit" hero + day list — both also see
-  // ruled-out apartments that still carry a visit_date (discarding never clears it, see
-  // ruleOutApt) so a pending visit stays on the agenda, crossed out via .xout/.flag.disc instead
-  // of vanishing
-  var visRows=rows.concat(ruled);
-  document.getElementById("visits").innerHTML=isDesktop()?visitCalendar(visRows):agendaMobile(visRows);
-  if(isDesktop())snapCalendar();
-  // post-visit follow-up sits between the agenda and the list/table, in both views
-  document.getElementById("followup").innerHTML=followupBlock(rows);
-  // the view toggle: Lista or Tabla, on every viewport (the table scrolls sideways on phones)
-  var vopts=[["list","☰ Lista"],["table","▤ Tabla"]];
-  document.getElementById("viewtoggle").innerHTML=vopts.map(function(o){
-    return "<button class=\"vt-btn"+(o[0]===VIEW?" on":"")+"\" data-view=\""+o[0]+"\">"+o[1]+"</button>";
-  }).join("");
-  // grouping toggle only makes sense over the list; hide it while the table is showing
-  var gt=document.getElementById("grouptoggle");
-  gt.style.display=effView()==="table"?"none":"";
-  var gb=gt.getElementsByTagName("button");
-  for(var g=0;g<gb.length;g++)gb[g].className="gr-btn"+(gb[g].getAttribute("data-group")===GROUP?" on":"");
-  // let the table use the full screen width; the list keeps the centered column
-  document.querySelector(".wrap").classList.toggle("wide",effView()==="table");
-  if(!rows.length&&!ruled.length){document.getElementById("root").innerHTML="<div class=\"empty\">Aún no hay apartamentos. Envía un link al grupo de Telegram para empezar.</div>";document.getElementById("ruledRoot").innerHTML="";updateMap();return;}
-  if(rows.length&&!shown.length){
-    document.getElementById("root").innerHTML="<div class=\"empty\">Nada coincide con los filtros — <button class=\"fclearlink\" data-f=\"clear\">límpialos</button>.</div>";
-  }else if(effView()==="table"){
-    document.getElementById("root").innerHTML=tableView(shown);
-  }else if(GROUP==="estado"){
-    // funnel sections: upcoming visits by soonest, unscheduled by value, visited most recent first
-    var sch=[],pen=[],seen=[];
-    for(var si=0;si<shown.length;si++){var st=stageOf(shown[si]);(st==="scheduled"?sch:st==="pending"?pen:seen).push(shown[si]);}
-    document.getElementById("root").innerHTML=
-      stageSection("📅 Con visita",sch,function(a,b){return visitCmp(a.visit_date)<visitCmp(b.visit_date)?-1:1;})+
-      stageSection("⏳ Por agendar",pen,ppmCmpMixed)+
-      stageSection("✔ Visitados",seen,function(a,b){return visitCmp(a.visit_date)<visitCmp(b.visit_date)?1:-1;});
-  }else{
-    var buy=shown.filter(function(r){return r.deal_type==="buy";});
-    var rent=shown.filter(function(r){return r.deal_type==="rent";});
-    var unk=shown.filter(function(r){return r.deal_type!=="buy"&&r.deal_type!=="rent";});
-    document.getElementById("root").innerHTML=section("🛒 Compra",buy,false)+section("🔑 Arriendo",rent,true)+section("❔ Sin clasificar",unk,false);
-  }
-  document.getElementById("ruledRoot").innerHTML=ruledSection(ruled);
+  if(!DATA)return;
+  const rows=DATA.apartments||[],ruled=DATA.ruledOut||[];
+  const shown=applyFilters(rows);
+  const counts={pending:0,scheduled:0,visited:0};
+  for(const r of shown)counts[stageOf(r)]++;
+  if(!SEG)SEG=counts.scheduled?"scheduled":"pending";
+  const parts=[filtersActive()?(shown.length+" de "+rows.length+" activos"):(rows.length+(rows.length===1?" activo":" activos"))];
+  if(ruled.length)parts.push(ruled.length+(ruled.length===1?" descartada":" descartadas"));
+  let niceDay="";
+  if(DATA.today){const nd=new Date(DATA.today+"T00:00:00Z");niceDay=isNaN(nd)?DATA.today:nd.toLocaleDateString("es-CO",{timeZone:"UTC",weekday:"long",day:"numeric",month:"long"});}
+  $("status").textContent=parts.join(" · ")+(niceDay?" · "+niceDay:"");
+  $("hero").innerHTML=heroHtml();
+  const ag=VIEW==="agenda";
+  $("fbar").innerHTML=fbarHtml(rows);
+  $("fbar").hidden=ag; // filters/orden/mapa are list concerns — the agenda shows every visit
+  $("vsw").innerHTML=vswHtml();
+  document.querySelector(".cols").classList.toggle("agview",ag);
+  $("segs").hidden=ag;$("list").hidden=ag;$("ruledbox2").hidden=ag;
+  $("segs").innerHTML=segsHtml(counts);
+  $("list").innerHTML=listHtml(shown);
+  $("ruledbox2").innerHTML=ruledHtml(ruled);
+  const agBox=$("agendabox");
+  if(ag){
+    const html=agendaHtml(); // may resolve WEEK_START on first agenda render
+    const prev=$("agdays");
+    // same week repainted (doc tap, reprogramar…) → keep the reader's day; new week → snap to focus
+    const keep=(prev&&AG_WEEK===WEEK_START)?prev.scrollLeft:null;
+    agBox.hidden=false;agBox.innerHTML=html;
+    const el=$("agdays");
+    if(el){if(keep!=null)el.scrollLeft=keep;else snapAgenda();}
+    AG_WEEK=WEEK_START;
+  }else{agBox.hidden=true;agBox.innerHTML="";AG_WEEK=null;}
+  renderDetail();
   updateMap();
-  renderCardModal();
   jumpToHash();
 }
-function load(){return fetch("apartments-data.json").then(function(r){if(!r.ok)throw 0;return r.json();}).then(function(d){DATA=d;render();});}
-// a full-page reload (href="") lets Cloudflare Access run its login redirect, which fetch cannot follow
-function showRetry(){document.getElementById("sub").innerHTML="No se pudo cargar · <a href=\"\" style=\"color:var(--accent)\">Reintentar</a>";}
-function action(body){return fetch("apartments-action",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json();});}
-// THE quick-action tail: ok → toast + reload; server said no → failMsg (still reloads, so the row
-// shows the real state); network died (incl. offline) → "Error de red" + re-render from cached DATA,
-// so a failed tap in an elevator reverts visibly instead of lying. Actions that read extra fields
-// off the response (vo, rs, iv, the modal saves) keep their own tails.
-function saveAction(body,okMsg,failMsg){
-  return action(body).then(function(res){
-    toast(res&&res.ok?okMsg:(failMsg||"Error al guardar"));
-    return load();
-  }).catch(function(){toast("Error de red");render();});
+
+/* ================= data & actions ================= */
+function load(){
+  return fetch("apartments-data.json").then((r)=>{if(!r.ok)throw 0;return r.json();}).then((d)=>{DATA=d;render();});
 }
-document.addEventListener("change",function(e){
-  var el=e.target;if(!el.classList||!el.classList.contains("vd"))return;
-  var id=Number(el.getAttribute("data-id"));
-  saveAction({action:"set_visit",id:id,visit_date:el.value||null},el.value?"Visita fijada":"Visita borrada");
+// a full-page reload (href="") lets Cloudflare Access run its login redirect, which fetch cannot follow
+function showRetry(){$("status").innerHTML='No se pudo cargar · <a class="rlink" href="">Reintentar</a>';}
+function action(body){
+  return fetch("apartments-action",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}).then((r)=>r.json());
+}
+let TOAST_T=null;
+function toast(t){
+  const el=$("toast");el.textContent=t;el.classList.add("show");
+  clearTimeout(TOAST_T);TOAST_T=setTimeout(()=>el.classList.remove("show"),2200);
+}
+// THE quick-action tail: ok → toast + reload; server said no → its Spanish error verbatim (still
+// reloads, so the row shows the real state); network died → "Error de red" + re-render from cache.
+function saveAction(body,okMsg){
+  return action(body).then((res)=>{
+    toast(res&&res.ok?okMsg:((res&&res.error)||"Error al guardar"));
+    return load();
+  }).catch(()=>{toast("Error de red");render();});
+}
+async function saveEdits(id,changes){
+  let err=null;
+  for(const c of changes){
+    try{
+      const res=await action({action:"edit",id:id,field:c.field,value:c.value});
+      if(!res||!res.ok)err=(res&&res.error)||"Error al guardar";
+    }catch(e){err="Error de red";}
+  }
+  toast(err||"Guardado ✓");
+  MODE="view";
+  return load();
+}
+
+/* ================= navigation / deep links ================= */
+function gotoApt(id,flash){
+  const r=findApt(id);if(!r)return;
+  let dirty=false;
+  if(VIEW!=="list"){VIEW="list";saveView();dirty=true;} // the rows (and #apt-<id> anchors) live in the list
+  if(r.status!=="ruled_out"){
+    const st=stageOf(r);
+    if(SEG!==st){SEG=st;saveSeg();dirty=true;}
+  }
+  if(dirty)render();
+  if(r.status==="ruled_out"){const det=$("ruledbox");if(det)det.open=true;}
+  OPEN=id;MODE="view";renderDetail();
+  const el=document.getElementById("apt-"+id);
+  if(el){
+    el.scrollIntoView({block:"center"});
+    if(flash){el.classList.add("hilite");setTimeout(()=>el.classList.remove("hilite"),2000);}
+  }
+}
+// deep link from Telegram acks: #apt-<id> opens the apartment and flashes its row (one-shot)
+let HASH_DONE=false;
+function jumpToHash(){
+  if(HASH_DONE)return;
+  const m=(location.hash||"").match(/^#apt-(\d+)$/);
+  if(!m)return;
+  const id=Number(m[1]);
+  if(!findApt(id))return;
+  HASH_DONE=true;
+  gotoApt(id,true);
+}
+
+/* ================= lightbox ================= */
+function openPhoto(src,cap){
+  $("lbimg").src=src;
+  $("lbcap").textContent=cap||"";
+  $("lb").classList.add("show");
+}
+function closePhoto(){
+  $("lb").classList.remove("show");
+  $("lbimg").removeAttribute("src"); // stop the download + free the memory
+}
+
+/* ================= interactions ================= */
+// two-tap confirm for destructive taps: first tap arms the button for 2.6 s
+function armed(t){
+  if(t.dataset.arm){delete t.dataset.arm;return true;}
+  t.dataset.arm="1";
+  const old=t.textContent;t.textContent="¿Seguro?";
+  setTimeout(()=>{if(t.isConnected&&t.dataset.arm){delete t.dataset.arm;t.textContent=old;}},2600);
+  return false;
+}
+// swap a control area for a datetime-local; change commits (delegated), Escape/blur restores
+function swapToDateInput(t){
+  const vid=t.dataset.vid,val=t.dataset.val||"";
+  const box=t.closest(".vctl")||t.closest("#htiles");
+  if(!box)return;
+  const inp=document.createElement("input");
+  inp.type="datetime-local";inp.className="in vd";inp.setAttribute("data-vid",vid);inp.value=val;
+  box.innerHTML="";box.appendChild(inp);inp.focus();
+  let dirty=false;
+  inp.addEventListener("input",()=>{dirty=true;});
+  inp.addEventListener("keydown",(e)=>{if(e.key==="Escape"){dirty=false;render();}});
+  inp.addEventListener("blur",()=>{setTimeout(()=>{if(!dirty)render();},150);});
+}
+
+document.addEventListener("change",(e)=>{
+  const el=e.target;
+  if(el.matches&&el.matches("input.vd[data-vid]")){
+    if(!el.value)return; // clearing = «Cancelar», not a reschedule
+    saveAction({action:"visit_edit",visit_id:Number(el.getAttribute("data-vid")),visit_date:el.value},"Visita reprogramada 📅");
+  }
 });
-document.addEventListener("click",function(e){
-  var el=e.target;if(!el.classList)return;
-  // visit-photo thumb: open the full-res photo in the lightbox instead of letting the anchor
-  // navigate to the raw image (checked before the generic anchor handling below, which bails out)
-  var pv=el.closest?el.closest("a.pview"):null;
-  if(pv){e.preventDefault();openPhoto(pv.getAttribute("href"),pv.getAttribute("data-cap"));return;}
-  // table thumbnail → the apartment's full card in a modal
-  var to=el.closest?el.closest(".thopen"):null;
-  if(to){openCard(Number(to.getAttribute("data-id")));return;}
-  // links inside editable cells (e.g. the 🗺 maps anchor) must navigate, not begin an edit.
-  // Exception: in list mode an in-page #apt- link (hero/agenda) expands its row before scrolling.
-  var an=el.closest?el.closest("a"):null;
-  if(an){
-    var hm=(an.getAttribute("href")||"").match(/^#apt-(\d+)$/);
-    if(hm&&effView()==="list"){
-      var hid=Number(hm[1]),act=(DATA&&DATA.apartments)||[];
-      for(var ha=0;ha<act.length;ha++)if(act[ha].id===hid){
-        e.preventDefault();OPEN_ROW=hid;render();
-        var ht=document.getElementById("apt-"+hid);
-        if(ht){ht.scrollIntoView({block:"start"});ht.classList.add("hilite");setTimeout(function(){ht.classList.remove("hilite");},2000);}
-        return;
-      }
-    }
+
+document.addEventListener("keydown",(e)=>{
+  if(e.key==="Enter"&&e.target.matches&&e.target.matches("input[data-enterbtn]")){
+    e.preventDefault();
+    const b=$(e.target.getAttribute("data-enterbtn"));
+    if(b)b.click();
     return;
   }
-  // list mode: tapping a row toggles its full card in place (one open at a time)
-  var lr=el.closest?el.closest(".lrow"):null;
-  if(lr){var lid=Number(lr.getAttribute("data-id"));OPEN_ROW=OPEN_ROW===lid?null:lid;render();return;}
-  if(el.classList.contains("vt-btn")){
-    VIEW=el.getAttribute("data-view");localStorage.setItem("aptView",VIEW);
-    render();return;
+  if(e.key!=="Escape")return;
+  if($("lb").classList.contains("show"))closePhoto();
+  else if(OPEN!=null){OPEN=null;MODE="view";renderDetail();}
+});
+
+document.addEventListener("click",(e)=>{
+  // photo thumbs: open the lightbox instead of navigating to the raw image (PWA = download)
+  const pv=e.target.closest("a.pv");
+  if(pv){e.preventDefault();openPhoto(pv.getAttribute("href"),pv.getAttribute("data-cap"));return;}
+  // in-page #apt-<id> anchors (map popups) open the apartment; other links navigate normally
+  const an=e.target.closest("a");
+  if(an){
+    const hm=(an.getAttribute("href")||"").match(/^#apt-(\d+)$/);
+    if(hm){e.preventDefault();gotoApt(Number(hm[1]),true);}
+    return;
   }
-  if(el.classList.contains("gr-btn")){GROUP=el.getAttribute("data-group");localStorage.setItem("aptGroup",GROUP);render();return;}
-  if(el.classList.contains("fchip")||el.classList.contains("fclearlink")){
-    var ff=el.getAttribute("data-f");
-    if(ff==="deal")FILTERS.deal=FILTERS.deal==null?"rent":FILTERS.deal==="rent"?"buy":null;
-    else if(ff==="beds")FILTERS.minBeds=FILTERS.minBeds==null?2:FILTERS.minBeds===2?3:null;
-    else if(ff==="price"){
-      var cuts=priceCuts(DATA.apartments||[]);
-      var ci=cuts.indexOf(FILTERS.maxPrice);
-      if(!cuts.length)FILTERS.maxPrice=null;
-      else if(FILTERS.maxPrice==null)FILTERS.maxPrice=cuts[0];
-      else if(ci<0||ci===cuts.length-1)FILTERS.maxPrice=null; // stale cutoff or end of cycle → off
-      else FILTERS.maxPrice=cuts[ci+1];
-    }
-    else if(ff==="stage")FILTERS.stage=FILTERS.stage==null?"pending":FILTERS.stage==="pending"?"scheduled":FILTERS.stage==="scheduled"?"visited":null;
-    else if(ff==="tag"){var tv=el.getAttribute("data-v");FILTERS.tag=FILTERS.tag===tv?null:tv;}
-    else if(ff==="sort")FILTERS.sort=FILTERS.sort==="ppm"?"price":FILTERS.sort==="price"?"recent":FILTERS.sort==="recent"?"visit":"ppm";
-    else if(ff==="clear")FILTERS={deal:null,minBeds:null,maxPrice:null,tag:null,stage:null,sort:"ppm"};
+  const t=e.target.closest("[data-act]");
+  if(!t)return;
+  const act=t.getAttribute("data-act");
+  const id=t.getAttribute("data-id")?Number(t.getAttribute("data-id")):null;
+
+  /* nav + chrome */
+  if(act==="open"){gotoApt(id,false);return;}
+  if(act==="ag-open"){OPEN=id;MODE="view";renderDetail();return;} // open the ficha WITHOUT leaving the agenda
+  if(act==="close"){OPEN=null;MODE="view";renderDetail();return;}
+  if(act==="view-list"||act==="view-agenda"){
+    const nv=act==="view-agenda"?"agenda":"list";
+    if(VIEW!==nv){VIEW=nv;saveView();render();}
+    return;
+  }
+  if(act==="ag-prev"||act==="ag-next"){WEEK_START=addDays(WEEK_START,act==="ag-next"?7:-7);render();return;}
+  if(act==="ag-today"){WEEK_START=mondayOf(((DATA&&DATA.today)||nowBogota()).slice(0,10));render();return;}
+  if(act==="nav-seg"){SEG=t.getAttribute("data-seg");saveSeg();
+    if(VIEW!=="list"){VIEW="list";saveView();} // a pipeline segment is a list destination
+    render();
+    const sg=$("segs");if(sg)sg.scrollIntoView({block:"nearest"});return;}
+  if(act==="hero-docs"){gotoApt(id,false);setTimeout(()=>{const s=$("docsSect");if(s)s.scrollIntoView({block:"start",behavior:"smooth"});},80);return;}
+  if(act==="bar-agendar"){
+    const nvT=$("nvToggle"),nvB=$("nvBlock");
+    if(nvB&&nvB.hidden){nvB.hidden=false;if(nvT)nvT.hidden=true;}
+    const s=$("schedBlock");if(s)s.scrollIntoView({block:"center",behavior:"smooth"});
+    const d=$("nv_dt");if(d)setTimeout(()=>d.focus(),120);
+    return;
+  }
+  if(act==="bar-note"){
+    const s=$("notesSect");if(s)s.scrollIntoView({block:"center",behavior:"smooth"});
+    const i=$("nt_new");if(i)setTimeout(()=>i.focus(),120);
+    return;
+  }
+
+  /* filter chips */
+  if(act==="chip-deal"){FILTERS.deal=FILTERS.deal==null?"rent":FILTERS.deal==="rent"?"buy":null;saveFilters();render();return;}
+  if(act==="chip-beds"){FILTERS.minBeds=FILTERS.minBeds==null?2:FILTERS.minBeds===2?3:null;saveFilters();render();return;}
+  if(act==="chip-price"){
+    const cuts=priceCuts(DATA.apartments||[]);
+    const ci=cuts.indexOf(FILTERS.maxPrice);
+    if(!cuts.length)FILTERS.maxPrice=null;
+    else if(FILTERS.maxPrice==null)FILTERS.maxPrice=cuts[0];
+    else if(ci<0||ci===cuts.length-1)FILTERS.maxPrice=null; // stale cutoff or end of cycle → off
+    else FILTERS.maxPrice=cuts[ci+1];
     saveFilters();render();return;
   }
-  // week nav is desktop-only (buttons don't render on mobile); no-op if WEEK_START isn't set yet
-  if(el.classList.contains("cal-prev")){if(!WEEK_START)return;WEEK_START=addDays(WEEK_START,-7);render();return;}
-  if(el.classList.contains("cal-next")){if(!WEEK_START)return;WEEK_START=addDays(WEEK_START,7);render();return;}
-  if(el.classList.contains("iv")){
-    var id=Number(el.getAttribute("data-id"));
-    el.disabled=true;var old=el.textContent;el.textContent="Enviando…";
-    action({action:"invite",id:id}).then(function(res){
-      if(res&&res.ok){toast("Invitación enviada 📧");}
-      else{toast(res&&res.error?("No se envió: "+res.error):"Error al enviar");}
-    }).catch(function(){toast("Error de red");}).then(function(){el.disabled=false;el.textContent=old;});
-    return;
+  if(act==="chip-tag"){const tv=t.getAttribute("data-v");FILTERS.tag=FILTERS.tag===tv?null:tv;saveFilters();render();return;}
+  if(act==="chip-sort"){
+    FILTERS.sort=FILTERS.sort==="auto"?"ppm":FILTERS.sort==="ppm"?"price":FILTERS.sort==="price"?"recent":"auto";
+    saveFilters();render();return;
   }
-  if(el.classList.contains("rvd")){
-    // swap the agenda card's button row for an inline datetime-local; the delegated
-    // vd change handler saves it and reloads. Escape / unchanged blur restores the buttons.
-    var id=Number(el.getAttribute("data-id"));var r=findApt(id);if(!r)return;
-    var box=el.closest(".vctrls");if(!box)return;
-    var inp=document.createElement("input");inp.type="datetime-local";inp.className="vd";inp.setAttribute("data-id",String(id));inp.value=vdVal(r.visit_date);inp.style.width="100%";
-    box.innerHTML="";box.appendChild(inp);inp.focus();
-    var dirty=false;
-    inp.addEventListener("input",function(){dirty=true;});
-    inp.addEventListener("keydown",function(e){if(e.key==="Escape"){dirty=false;render();}});
-    inp.addEventListener("blur",function(){setTimeout(function(){if(!dirty)render();},150);});
-    return;
-  }
-  if(el.classList.contains("fbup")||el.classList.contains("fbdn")){
-    // one-tap post-visit verdict: a canned, stamped note (echoes to Telegram); the reload hides
-    // the row. The tap also records the tapper's structured vote — quiet, the note already echoes.
-    var id=Number(el.getAttribute("data-id"));
-    var up=el.classList.contains("fbup");
-    var note=up?"👍 nos gustó":"👎 no nos gustó";
-    el.disabled=true;
-    action({action:"vote",id:id,vote:up?"up":"down",quiet:true}).catch(function(){}).then(function(){
-      return saveAction({action:"apt_note",id:id,note:note},"Guardado ✓");
-    });
-    return;
-  }
-  if(el.classList.contains("vo")){
-    // my own verdict cycles — → 👍 → 👎 → — ; the server derives the voter from the login
-    var id=Number(el.getAttribute("data-id"));
-    var cur=el.getAttribute("data-cur")||"";
-    var next=cur===""?"up":cur==="up"?"down":null;
-    el.disabled=true;
-    action({action:"vote",id:id,vote:next}).then(function(res){
-      if(res&&res.ok){toast(next==="up"?"👍 Guardado":next==="down"?"👎 Guardado":"Veredicto borrado");}
-      else{toast(res&&res.error?("Error: "+res.error):"Error al guardar");}
+  if(act==="chip-clear"){FILTERS={deal:null,minBeds:null,maxPrice:null,tag:null,sort:FILTERS.sort};saveFilters();render();return;}
+  if(act==="chip-map"){MAP_ON=!MAP_ON;render();if(MAP_ON){const b=$("mapbox");if(b&&!b.hidden)b.scrollIntoView({block:"nearest",behavior:"smooth"});}return;}
+
+  /* votes */
+  if(act==="vote"){
+    const cur=t.getAttribute("data-cur")||"";
+    const next=cur===""?"up":cur==="up"?"down":null;
+    t.disabled=true;
+    action({action:"vote",id:id,vote:next}).then((res)=>{
+      if(res&&res.ok)toast(next==="up"?"👍 Guardado":next==="down"?"👎 Guardado":"Veredicto borrado");
+      else toast((res&&res.error)||"Error al guardar");
       return load();
-    }).catch(function(){toast("Error de red");render();});
+    }).catch(()=>{toast("Error de red");render();});
     return;
   }
-  if(el.classList.contains("sortable")){var k=el.getAttribute("data-sort");if(SORT.key===k)SORT.dir=-SORT.dir;else{SORT.key=k;SORT.dir=1;}render();return;}
-  var ecCell=el.classList.contains("ec")?el:(el.closest?el.closest(".ec"):null);
-  if(ecCell){beginEdit(ecCell);return;}
-  if(el.classList.contains("ed")){openEdit(Number(el.getAttribute("data-id")));return;}
-  if(el.classList.contains("nt")){openNote(Number(el.getAttribute("data-id")));return;}
-  if(el.classList.contains("ntdel")){
-    var raw;try{raw=unb64u(el.getAttribute("data-line")||"");}catch(err){return;}
-    el.disabled=true;
-    saveAction({action:"apt_note_del",id:Number(el.getAttribute("data-id")),line:raw},"Nota borrada","Error al borrar");
+
+  /* visits */
+  if(act==="visit-when"){swapToDateInput(t);return;}
+  if(act==="visit-who"){
+    const vid=Number(t.getAttribute("data-vid")),w=t.getAttribute("data-who");
+    const on=t.classList.contains("on"); // tapping the active chip clears quién
+    saveAction({action:"visit_edit",visit_id:vid,who:on?null:w},on?"Quién va: sin definir":("Van: "+whoLabel(w)));
     return;
   }
-  if(el.classList.contains("chip")){
-    // fill/toggle the rule-out reason; one chip active at a time, second tap clears
-    var inp=document.getElementById("r_reason");
-    if(el.classList.contains("on")){el.classList.remove("on");inp.value="";}
+  if(act==="visit-cancel"){
+    if(!armed(t))return;
+    saveAction({action:"visit_cancel",visit_id:Number(t.getAttribute("data-vid"))},"Visita cancelada");
+    return;
+  }
+  if(act==="visit-note-open"){
+    const row=$("vni_"+t.getAttribute("data-vid"));
+    if(row){row.hidden=false;t.closest(".vctl").hidden=true;const i=row.querySelector("input");if(i)i.focus();}
+    return;
+  }
+  if(act==="visit-note-save"){
+    const vid=Number(t.getAttribute("data-vid"));
+    const i=$("vn_"+vid);
+    const txt=i?i.value.trim():"";
+    if(!txt){toast("Nota vacía");return;}
+    t.disabled=true;
+    saveAction({action:"visit_edit",visit_id:vid,note:txt},"Nota de visita guardada 📝");
+    return;
+  }
+  if(act==="visit-new-toggle"){
+    const b=$("nvBlock");if(b){b.hidden=false;t.hidden=true;const d=$("nv_dt");if(d)d.focus();}
+    return;
+  }
+  if(act==="who-pick"){
+    const on=t.classList.contains("on");
+    t.parentNode.querySelectorAll(".wchip").forEach((c)=>c.classList.remove("on"));
+    if(!on)t.classList.add("on");
+    return;
+  }
+  if(act==="visit-new-save"){
+    const dt=$("nv_dt")?$("nv_dt").value:"";
+    if(!dt){toast("Falta la fecha");return;}
+    const wEl=$("nv_who")?$("nv_who").querySelector(".wchip.on"):null;
+    const who=wEl?wEl.getAttribute("data-who"):null;
+    const mode=t.getAttribute("data-mode");
+    t.disabled=true;
+    const body=mode==="add"?{action:"visit_add",id:id,visit_date:dt}:{action:"set_visit",id:id,visit_date:dt};
+    if(who)body.who=who;
+    saveAction(body,"Visita agendada 📅");
+    return;
+  }
+  if(act==="invite"){
+    t.disabled=true;const old=t.textContent;t.textContent="Enviando…";
+    action({action:"invite",id:id}).then((res)=>{
+      if(res&&res.ok)toast("Invitación enviada 📧");
+      else toast((res&&res.error)||"Error al enviar");
+    }).catch(()=>toast("Error de red")).then(()=>{t.disabled=false;t.textContent=old;});
+    return;
+  }
+
+  /* docs */
+  if(act==="doc-cycle"){
+    const slug=t.getAttribute("data-slug"),st=t.getAttribute("data-status");
+    // every applicable doc renders as "pendiente" until received/na, so st is always set;
+    // the fallback only guards a missing attribute
+    const next=DOC_ST_NEXT[st]||"pending";
+    const body={action:"doc_set",id:id,doc_type:slug,status:next};
+    const dl=t.getAttribute("data-dlabel");
+    if(slug==="otro"&&dl)body.label=dl;
+    saveAction(body,DOC_ST_TOAST[next]);
+    return;
+  }
+  if(act==="doc-del"){
+    if(!armed(t))return;
+    saveAction({action:"doc_del",doc_id:Number(t.getAttribute("data-did"))},"Documento eliminado");
+    return;
+  }
+  if(act==="doc-add"){
+    const i=$("doc_new");
+    const label=i?i.value.trim():"";
+    if(!label){toast("Escribe el nombre del documento");return;}
+    t.disabled=true;
+    saveAction({action:"doc_set",id:id,doc_type:"otro",label:label,status:"pending"},"Documento agregado");
+    return;
+  }
+
+  /* notes */
+  if(act==="note-save"){
+    const i=$("nt_new");
+    const note=i?i.value.trim():"";
+    if(!note){toast("Nota vacía");return;}
+    t.disabled=true;
+    saveAction({action:"apt_note",id:id,note:note},"Nota guardada 📝");
+    return;
+  }
+  if(act==="note-del"){
+    let raw;try{raw=unb64u(t.getAttribute("data-line")||"");}catch(err){return;}
+    t.disabled=true;
+    saveAction({action:"apt_note_del",id:id,line:raw},"Nota borrada");
+    return;
+  }
+
+  /* ficha edit / rescrape */
+  if(act==="edit-open"){MODE="edit";renderDetail();return;}
+  if(act==="edit-cancel"){MODE="view";renderDetail();return;}
+  if(act==="edit-save"){
+    const r=findApt(id);if(!r)return;
+    const changes=[];
+    for(const [f,,kind] of EDIT_FIELDS){
+      const el=$("ef_"+f);if(!el)continue;
+      const val=el.value.trim();
+      const cur=r[f]==null?"":String(r[f]);
+      if(kind==="deal"){if(el.value!==(cur==="rent"||cur==="buy"?cur:"unknown"))changes.push({field:f,value:el.value});}
+      else if(val!==cur)changes.push({field:f,value:val});
+    }
+    if(!changes.length){MODE="view";renderDetail();return;}
+    t.disabled=true;
+    saveEdits(id,changes);
+    return;
+  }
+  if(act==="rescrape"){
+    t.disabled=true;const old=t.textContent;t.textContent="Leyendo…";
+    action({action:"rescrape",id:id}).then((res)=>{
+      if(res&&res.ok){
+        const pc=res.priceChange;
+        toast("Releído ✓"+(pc?(" · "+(pc.to<pc.from?"⬇ bajó a ":"⬆ subió a ")+mny(pc.to)):""));
+      }else{
+        toast("No se pudo leer"+(res&&res.blocked?(" ("+(res.blocked==="bot"?"el sitio bloquea robots":res.blocked)+")"):""));
+      }
+      return load();
+    }).catch(()=>toast("Error de red")).then(()=>{t.disabled=false;t.textContent=old;});
+    return;
+  }
+
+  /* discard / reactivate */
+  if(act==="discard-open"){MODE="discard";renderDetail();return;}
+  if(act==="discard-cancel"){MODE="view";renderDetail();return;}
+  if(act==="chip-reason"){
+    const inp=$("ro_reason");
+    if(t.classList.contains("on")){t.classList.remove("on");if(inp)inp.value="";}
     else{
-      var ch=document.getElementById("r_chips").getElementsByTagName("button");
-      for(var ci=0;ci<ch.length;ci++)ch[ci].classList.remove("on");
-      el.classList.add("on");inp.value=el.textContent;
+      t.parentNode.querySelectorAll(".rchip").forEach((c)=>c.classList.remove("on"));
+      t.classList.add("on");if(inp)inp.value=t.textContent;
     }
     return;
   }
-  if(el.classList.contains("rs")){
-    var id=Number(el.getAttribute("data-id"));
-    el.disabled=true;var old=el.textContent;el.textContent="Leyendo…";
-    action({action:"rescrape",id:id}).then(function(res){
-      if(res&&res.ok){
-        var pc=res.priceChange;
-        toast("Releído ✓"+(pc?(" · "+(pc.to<pc.from?"⬇ bajó a ":"⬆ subió a ")+mny(pc.to)):""));
-      }
-      else{toast("No se pudo leer"+(res&&res.blocked?(" ("+(res.blocked==="bot"?"el sitio bloquea robots":res.blocked)+")"):""));}
-      return load();
-    }).catch(function(){toast("Error de red");}).then(function(){el.disabled=false;el.textContent=old;});
+  if(act==="discard-save"){
+    const reason=$("ro_reason")?$("ro_reason").value.trim():"";
+    t.disabled=true;MODE="view";
+    saveAction({action:"rule_out",id:id,reason:reason||null},"Descartado 🚫");
     return;
   }
-  if(el.classList.contains("ro")){openRo(Number(el.getAttribute("data-id")));return;}
-  if(el.classList.contains("re")){
-    var id=Number(el.getAttribute("data-id"));
-    el.disabled=true;el.textContent="…";
-    saveAction({action:"reactivate",id:id},"De vuelta en la lista ↩️","Error");
+  if(act==="reactivate"){
+    t.disabled=true;
+    saveAction({action:"reactivate",id:id},"De vuelta en la lista ↩️");
     return;
   }
 });
-// edit sheet
-document.getElementById("e_cancel").onclick=closeEdit;
-document.getElementById("editModal").addEventListener("click",function(e){if(e.target.id==="editModal")closeEdit();});
-document.getElementById("e_save").onclick=function(){
-  if(EDIT_ID==null)return;var btn=this;btn.disabled=true;
-  action({action:"set_fields",id:EDIT_ID,
-    address:document.getElementById("e_address").value,
-    agent_name:document.getElementById("e_agent").value,
-    agent_phone:document.getElementById("e_phone").value,
-    tag:document.getElementById("e_tag").value
-  }).then(function(res){
-    if(res&&res.ok){toast("Guardado ✓");}else{toast("Error al guardar");}
-    closeEdit();return load();
-  }).catch(function(){toast("Error de red");}).then(function(){btn.disabled=false;});
-};
-// nota sheet
-document.getElementById("n_cancel").onclick=closeNote;
-document.getElementById("noteModal").addEventListener("click",function(e){if(e.target.id==="noteModal")closeNote();});
-document.getElementById("n_save").onclick=function(){
-  if(NOTE_ID==null)return;
-  var note=document.getElementById("n_text").value.trim();
-  if(!note){toast("Nota vacía");return;}
-  var btn=this;btn.disabled=true;
-  action({action:"apt_note",id:NOTE_ID,note:note}).then(function(res){
-    if(res&&res.ok){toast("Nota guardada 📝");}else{toast("Error al guardar");}
-    closeNote();return load();
-  }).catch(function(){toast("Error de red");}).then(function(){btn.disabled=false;});
-};
-// descartar sheet
-document.getElementById("r_cancel").onclick=closeRo;
-document.getElementById("roModal").addEventListener("click",function(e){if(e.target.id==="roModal")closeRo();});
-document.getElementById("r_save").onclick=function(){
-  if(RO_ID==null)return;
-  var reason=document.getElementById("r_reason").value.trim();
-  var btn=this;btn.disabled=true;
-  action({action:"rule_out",id:RO_ID,reason:reason||null}).then(function(res){
-    if(res&&res.ok){toast("Descartado 🚫");}else{toast("Error al descartar");}
-    closeRo();return load();
-  }).catch(function(){toast("Error de red");}).then(function(){btn.disabled=false;});
-};
-// card-detail modal: close on backdrop tap
-document.getElementById("cardModal").addEventListener("click",function(e){if(e.target.id==="cardModal")closeCard();});
-// photo lightbox: close on the ✕, on any tap outside the image, or on Escape
-document.getElementById("lb_close").onclick=closePhoto;
-document.getElementById("photoLb").addEventListener("click",function(e){if(e.target.id!=="lb_img")closePhoto();});
-document.addEventListener("keydown",function(e){
-  if(e.key!=="Escape")return;
-  if(document.getElementById("photoLb").classList.contains("show"))closePhoto();
-  else if(document.getElementById("cardModal").classList.contains("show"))closeCard();
-});
+
+$("lbx").addEventListener("click",closePhoto);
+$("lb").addEventListener("click",(e)=>{if(e.target.id!=="lbimg")closePhoto();});
+
+/* ================= boot ================= */
 load().catch(showRetry);
-// re-render only when crossing the mobile/desktop line (the agenda/calendar layout differs)
-var wasDesktop=isDesktop();
-window.addEventListener("resize",function(){var d=isDesktop();if(d!==wasDesktop){wasDesktop=d;if(DATA)render();}});
 // refresh when the tab/app regains focus (data changes a few times a day, not per minute)
-document.addEventListener("visibilitychange",function(){if(!document.hidden)load().catch(showRetry);});
+document.addEventListener("visibilitychange",()=>{if(!document.hidden)load().catch(showRetry);});
+// keep the HOY countdown honest without polling the server: re-render the hero from cached DATA
+setInterval(()=>{
+  if(!DATA)return;
+  const h=$("hero");
+  if(h&&!h.querySelector("input"))h.innerHTML=heroHtml(); // don't clobber an open reschedule input
+},30000);
 </script>
 </body></html>
