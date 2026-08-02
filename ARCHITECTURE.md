@@ -126,8 +126,10 @@ src/
                      ingest/scrape/extract/rescrape, shared mutations (incl. visits +
                      docs) + aptAnnounce, summary, digest, crons, ops vocabulary
                      (OP_LINES) + executeOps, photo/document handlers, web routes
-  apartments.html    apartment screen (self-contained page over /apartments-data.json
-                     + /apartments-action; carries the client twins of §2.7)
+  apartments.html    apartment screen «Radar» (see DESIGN.md): dark mission-control page —
+                     HOY hero, pipeline segments, bottom-sheet detail (visitas/docs/notas)
+                     over /apartments-data.json + /apartments-action; carries the client
+                     twins of §2.7 and the stage derivation (nextVisitOf/lastVisitOf)
   dashboard.html     household overview, ✓ buttons ({{SECTIONS}}/{{UPDATED}} placeholders)
   home.html          home screen: pick Household or Apartamentos ({{…}} placeholders)
   icons.ts           PWA icons as base64 (data URIs — see manifest note in §4)
