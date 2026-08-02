@@ -98,10 +98,19 @@ function canonVoter(raw: string): string {
 }
 const VOTER_NAME: Record<string, string> = { felipe: 'Felipe', lucia: 'Lucía' };
 const voterName = (v: string) => VOTER_NAME[v] || (v ? v.charAt(0).toUpperCase() + v.slice(1) : v);
-async function upsertVote(env: Env, aptId: number, voter: string, vote: 'up' | 'down') {
-  await run(env,
-    'INSERT INTO apartment_votes (apartment_id, voter, vote, updated_at) VALUES (?,?,?,?) ON CONFLICT(apartment_id, voter) DO UPDATE SET vote=excluded.vote, updated_at=excluded.updated_at',
-    aptId, voter, vote, new Date().toISOString());
+// vote=null clears the person's vote (deletes the row) — the ONE implementation for setting
+// and clearing. Returns the apartment row for the caller's announcement, null when it's gone.
+async function upsertVote(env: Env, aptId: number, voter: string, vote: 'up' | 'down' | null): Promise<{ row: any } | null> {
+  const row = await get(env, 'SELECT * FROM apartments WHERE id=?', aptId);
+  if (!row) return null;
+  if (vote === null) {
+    await run(env, 'DELETE FROM apartment_votes WHERE apartment_id=? AND voter=?', aptId, voter);
+  } else {
+    await run(env,
+      'INSERT INTO apartment_votes (apartment_id, voter, vote, updated_at) VALUES (?,?,?,?) ON CONFLICT(apartment_id, voter) DO UPDATE SET vote=excluded.vote, updated_at=excluded.updated_at',
+      aptId, voter, vote, new Date().toISOString());
+  }
+  return { row };
 }
 // decode the handful of HTML entities that appear in scraped attribute URLs (&amp; splits query params)
 function decodeHtml(s: string): string {
@@ -359,13 +368,15 @@ async function sendInviteMail(env: Env, row: any, method: 'REQUEST' | 'CANCEL', 
   ].join('\r\n');
   for (const to of tos) await env.INVITE_MAIL.send(new EmailMessage(env.INVITE_FROM, to, raw));
 }
+// a visit still counts as upcoming through the end of its day (wall-clock date compare) — the
+// ONE predicate behind the invite/cancel mail decision and the web "reenviar invitación" guard
+const visitUpcoming = (vd: unknown) => !!vd && String(vd).slice(0, 10) >= today();
 // decide invite vs cancel after a visit change; returns an ack suffix and never throws —
 // a mail hiccup must not break the visit update itself, but it must not be silent either
 async function visitMail(env: Env, row: any, vd: string | null, oldVd: string | null): Promise<string> {
-  const td = today();
   try {
-    if (vd && String(vd).slice(0, 10) >= td) { await sendInviteMail(env, row, 'REQUEST', String(vd)); return ' · 📧 invitación enviada'; }
-    if (!vd && oldVd && String(oldVd).slice(0, 10) >= td) { await sendInviteMail(env, row, 'CANCEL', String(oldVd)); return ' · 📧 cancelación enviada'; }
+    if (visitUpcoming(vd)) { await sendInviteMail(env, row, 'REQUEST', String(vd)); return ' · 📧 invitación enviada'; }
+    if (!vd && visitUpcoming(oldVd)) { await sendInviteMail(env, row, 'CANCEL', String(oldVd)); return ' · 📧 cancelación enviada'; }
     return ''; // past visits get no mail
   } catch (e: any) {
     console.log('invite mail error:', String(e && e.message || e));
@@ -622,34 +633,89 @@ async function retryBlockedScrapes(env: Env): Promise<{ updated: any[], still: a
 const aptLink = (id: number | string) => 'https://turikumwe.cc/apartments.html#apt-' + id;
 
 // ---- shared apartment mutations ----
-// One implementation for the Telegram ops loop, the web actions, and callback buttons. Both
-// return null when the row isn't in the required status, which doubles as the idempotency check
-// for stale button taps. Neither touches visit_date or calls visitMail — discarding (or
-// un-discarding) an apartment must never silently cancel or resend its calendar invite; only a
-// person explicitly editing the visit date does that (the set_visit handlers), regardless of
-// whether the row is active or ruled_out.
+// ONE implementation each, serving the Telegram ops loop, the web actions, the callback
+// buttons (and MCP for notes). Each returns the post-mutation row — callers never re-read it —
+// or null when the row is missing / not in the required status, which doubles as the
+// idempotency check for stale button taps (status predicate + `meta.changes`: two concurrent
+// taps can both pass the SELECT, but only the invocation whose UPDATE flips the row announces).
+// Rule-out and reactivate never touch visit_date or call visitMail — discarding (or
+// un-discarding) an apartment must never silently cancel or resend its calendar invite; only
+// setVisit — a person explicitly editing the visit date — does that, regardless of whether the
+// row is active or ruled_out.
 async function ruleOutApt(env: Env, id: number, rawReason: unknown): Promise<{ row: any; reason: string | null } | null> {
   const row = await get(env, "SELECT * FROM apartments WHERE id=? AND status='active'", id);
   if (!row) return null;
   const reason = (rawReason && String(rawReason).trim()) ? String(rawReason).trim().slice(0, 120) : null;
   const now = new Date().toISOString();
-  // status predicate + changes check: two concurrent taps can both pass the SELECT, but only the
-  // invocation whose UPDATE actually flips the row gets to announce
   const res = await run(env, "UPDATE apartments SET status='ruled_out', ruled_out_reason=?, ruled_out_at=?, updated_at=? WHERE id=? AND status='active'", reason, now, now, id);
   if (!res.meta.changes) return null;
-  return { row, reason };
+  return { row: { ...row, status: 'ruled_out', ruled_out_reason: reason, ruled_out_at: now, updated_at: now }, reason };
 }
 async function reactivateApt(env: Env, id: number): Promise<{ row: any } | null> {
   const row = await get(env, "SELECT * FROM apartments WHERE id=? AND status='ruled_out'", id);
   if (!row) return null;
-  const res = await run(env, "UPDATE apartments SET status='active', ruled_out_reason=NULL, ruled_out_at=NULL, updated_at=? WHERE id=? AND status='ruled_out'", new Date().toISOString(), id);
+  const now = new Date().toISOString();
+  const res = await run(env, "UPDATE apartments SET status='active', ruled_out_reason=NULL, ruled_out_at=NULL, updated_at=? WHERE id=? AND status='ruled_out'", now, id);
   if (!res.meta.changes) return null;
-  return { row };
+  return { row: { ...row, status: 'active', ruled_out_reason: null, ruled_out_at: null, updated_at: now } };
 }
 // append one attributed, stamped note line ("YYYY-MM-DD [Autor]: text") — the format every reader parses
-async function appendAptNote(env: Env, id: number, author: string, note: string) {
+async function appendAptNote(env: Env, id: number, author: string, note: string): Promise<{ row: any; stamped: string } | null> {
+  const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
+  if (!row) return null;
   const stamped = today() + (author ? ' [' + author + ']' : '') + ': ' + String(note).trim().slice(0, 300);
-  await run(env, "UPDATE apartments SET notes=COALESCE(notes||char(10),'')||?, updated_at=? WHERE id=?", stamped, new Date().toISOString(), id);
+  const now = new Date().toISOString();
+  await run(env, "UPDATE apartments SET notes=COALESCE(notes||char(10),'')||?, updated_at=? WHERE id=?", stamped, now, id);
+  return { row: { ...row, notes: (row.notes ? row.notes + '\n' : '') + stamped, updated_at: now }, stamped };
+}
+// set or clear (vd=null) an apartment's visit date, then send the invite/cancel mail. The one
+// place a visit change happens; activeOnly is the policy seam — the Telegram ops path only
+// touches active rows, the web omits it because it's the manual override and may (re)schedule
+// on a ruled_out row (ARCHITECTURE.md §8).
+async function setVisit(env: Env, id: number, vd: string | null, o: { activeOnly?: boolean } = {}): Promise<{ row: any; mailNote: string } | null> {
+  const row = await get(env, `SELECT * FROM apartments WHERE id=?${o.activeOnly ? " AND status='active'" : ''}`, id);
+  if (!row) return null;
+  const now = new Date().toISOString();
+  await run(env, 'UPDATE apartments SET visit_date=?, updated_at=? WHERE id=?', vd, now, id);
+  const mailNote = await visitMail(env, row, vd, row.visit_date);
+  return { row: { ...row, visit_date: vd, updated_at: now }, mailNote };
+}
+
+// ---- apartment mutation announcements ----
+// The ONLY builder of the "something happened to apartment X" group message: it owns the emoji,
+// the escaped canonical reference (aptRef), the escaping of every free-text bit, and the
+// keyboard. Callers pass `via` (their attribution suffix, e.g. " — Felipe, vía botón" /
+// " — vía web · felipe" / " — vía MCP · Lucía") ALREADY Markdown-safe, and only decide where
+// the announcement goes: tgSend, web echo, or MCP notification.
+function aptAnnounce(
+  kind: 'rule_out' | 'reactivate' | 'note' | 'vote' | 'visit' | 'invite',
+  row: any,
+  o: { via?: string; reason?: string | null; note?: string; voter?: string; vote?: 'up' | 'down'; visit?: string | null; mailNote?: string } = {},
+): { text: string; markup?: unknown } {
+  const ref = `*${mdEscape(aptRef(row))}*`;
+  const via = o.via || '';
+  switch (kind) {
+    case 'rule_out':
+      return {
+        text: `🚫 ${ref} descartado${o.reason ? ' — ' + mdEscape(o.reason) : ''}${via}`,
+        markup: kb([[{ text: '↩️ Reactivar', callback_data: 're:' + row.id }]]),
+      };
+    case 'reactivate':
+      return { text: `↩️ ${ref} de vuelta en la lista${via}` };
+    case 'note':
+      return { text: `📝 Nota en ${ref}: ${mdEscape(o.note)}${via}` };
+    case 'vote':
+      // voterName is escaped too: canonVoter's unknown-identity fallback can pass symbols through
+      return {
+        text: (o.vote === 'up'
+          ? `👍 A ${mdEscape(voterName(String(o.voter || '')))} le gustó ${ref}`
+          : `👎 A ${mdEscape(voterName(String(o.voter || '')))} no le convenció ${ref}`) + via,
+      };
+    case 'visit':
+      return { text: (o.visit ? `📅 Visita a ${ref} → ${fmtDate(o.visit)}${hhmm(o.visit)}` : `📅 Visita a ${ref} cancelada`) + via + (o.mailNote || '') };
+    case 'invite':
+      return { text: `📧 Invitación de ${ref} enviada a los correos${via}` };
+  }
 }
 
 function apartmentAck(rec: any): string {
@@ -888,19 +954,20 @@ async function handleCallback(env: Env, cq: any) {
   const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
   if (!row) { await tgAnswerCallback(env, cq.id, 'Ese apartamento ya no existe'); return; }
 
+  const via = ` — ${mdEscape(who)}, vía botón`;
   if (verb === 'ro') {
     const res = await ruleOutApt(env, id, null);
     if (!res) { await tgAnswerCallback(env, cq.id, 'Ya estaba hecho 👍'); return; }
     await tgAnswerCallback(env, cq.id, 'Descartado 🚫');
-    await tgSend(env, `🚫 *${mdEscape(aptName(row))}* #${id} descartado — ${who}, vía botón`,
-      undefined, kb([[{ text: '↩️ Reactivar', callback_data: 're:' + id }]]));
+    const a = aptAnnounce('rule_out', res.row, { via });
+    await tgSend(env, a.text, undefined, a.markup);
     return;
   }
   if (verb === 're') {
     const res = await reactivateApt(env, id);
     if (!res) { await tgAnswerCallback(env, cq.id, 'Ya estaba hecho 👍'); return; }
     await tgAnswerCallback(env, cq.id, 'De vuelta ↩️');
-    await tgSend(env, `↩️ *${mdEscape(aptName(row))}* #${id} de vuelta en la lista — ${who}, vía botón`);
+    await tgSend(env, aptAnnounce('reactivate', res.row, { via }).text);
     return;
   }
   if (verb === 'rs') {
@@ -910,7 +977,7 @@ async function handleCallback(env: Env, cq: any) {
     await tgAnswerCallback(env, cq.id, 'Leyendo… 🔍');
     tgTyping(env);
     const rr = await rescrapeOne(env, id);
-    if (rr.ok) await tgSend(env, `🔄 Releí *${mdEscape(aptName(row))}* #${id} — ${who}, vía botón${priceChangeNote(rr.priceChange)}\n` + aptLink(id));
+    if (rr.ok) await tgSend(env, `🔄 Releí *${mdEscape(aptName(row))}* #${id}${via}${priceChangeNote(rr.priceChange)}\n` + aptLink(id));
     else await tgSend(env, `⚠️ Sigo sin poder leer *${mdEscape(aptName(row))}* #${id} (${rr.blocked || 'error'}) — prueba más tarde.`,
       undefined, kb([[{ text: '🔁 Releer', callback_data: 'rs:' + id }]]));
     return;
@@ -928,7 +995,7 @@ async function handleCallback(env: Env, cq: any) {
   // the tap is also a structured per-person verdict, not just prose
   await upsertVote(env, id, canonVoter(who), verb === 'up' ? 'up' : 'down');
   await tgAnswerCallback(env, cq.id, 'Nota guardada 📝');
-  await tgSend(env, `📝 Nota en *${mdEscape(aptName(row))}* #${id}: ${note} — ${who}, vía botón`);
+  await tgSend(env, aptAnnounce('note', row, { via, note }).text);
 }
 
 // a photo message: attach it to the apartment resolved from the replied-to message or a "#id"
@@ -979,6 +1046,153 @@ async function handlePhoto(env: Env, msg: any) {
     apt.id, fileId, thumbId, caption || null, who, new Date().toISOString());
   if (caption) await appendAptNote(env, apt.id, who || '', caption);
   await tgSend(env, `📸 Foto guardada en *${mdEscape(apt.name)}* #${apt.id}`, msg.message_id);
+}
+
+// ================= TELEGRAM OPS =================
+// The ONE op vocabulary: keys are every action the parser may emit; values are the exact spec
+// lines the system prompt shows Claude. executeOps implements the same keys, so the prompt and
+// the dispatch can't drift apart silently — an op the prompt promises but the executor doesn't
+// implement (or one that arrives malformed) lands in executeOps' final else and is acked as
+// not understood, never dropped (invariant 6: failures surface).
+const OP_LINES: Record<string, string> = {
+  add: '{"action":"add","category":"<cat>","title":"<short label>","due_date":"YYYY-MM-DD"|null,"recurrence":"monthly"|"none","recur_day":<1-31>|null,"amount":"<string>"|null}',
+  complete: '{"action":"complete","id":<id from OPEN ITEMS>}',
+  remove: '{"action":"remove","id":<id from OPEN ITEMS>} (user wants to delete/undo a mis-logged item without doing it: "borra eso", "quita el de la farmacia", "me equivoqué, eso no va")',
+  query: '{"action":"query"}   (user is asking what is pending / what is on the list)',
+  none: '{"action":"none"}    (chit-chat, greeting, nothing to track)',
+  rescrape: '{"action":"rescrape"} (user asks to retry reading an apartment listing that could not be read automatically: "reintenta", "vuelve a intentar el scraping", "intenta de nuevo")',
+  set_visit: '{"action":"set_visit","apt_id":<id from APARTMENTS>,"visit_date":"YYYY-MM-DDTHH:MM"|"YYYY-MM-DD"|null} (user schedules a visit to an apartment: "visito el de Chicó el martes a las 10am", "la visita del apto 2 es el 20 a las 3pm", "agenda visita apto 1 mañana"; include the clock time as THH:MM in 24h when the user gives one — "10am"=>T10:00, "3pm"=>T15:00 — otherwise date only; visit_date=null cancels a visit)',
+  rule_out: '{"action":"rule_out","apt_id":<id from APARTMENTS>,"reason":"<short reason>"|null} (user wants to discard / stop considering an apartment: "descarta el apto 2", "ya no me interesa el de Chico Norte", "quita el más caro", "bájalo de la lista", "rule out the Cedritos one"; if they say why, capture a short reason like "muy caro", "muy lejos", "sin parqueadero")',
+  reactivate: '{"action":"reactivate","apt_id":<id from RULED OUT>} (user wants to reconsider a previously discarded apartment: "vuelve a considerar el apto 2", "reactiva el de Chico Norte", "devuelve el descartado a la lista")',
+  apt_note: '{"action":"apt_note","apt_id":<id from APARTMENTS>,"note":"<short note>"} (user records an opinion or fact about an apartment, often after a visit: "el de Chico Norte nos encantó", "apto 2: cocina pequeña pero buena luz", "el de Cedritos tiene mala vista")',
+  apt_vote: '{"action":"apt_vote","apt_id":<id from APARTMENTS or RULED OUT>,"vote":"up"|"down"} (the SENDER gives their own verdict on an apartment: "me encantó el apto 3", "el de Chicó me gustó", "a mí no me convenció el 2". When the phrasing speaks for both ("nos gustó", "nos encantó a los dos"), emit the sender\'s apt_vote AND the apt_note as before — never emit a vote for someone who did not send the message.)',
+  apt_summary: '{"action":"apt_summary"} (user asks for an overview of the apartment hunt: "resumen de aptos", "cómo va la búsqueda", "qué apartamentos tenemos", "cuáles nos faltan por ver")',
+};
+
+// Execute parsed ops and build the ack lines — the seam for the whole Telegram op loop: parsed
+// ops in, ack lines out. Mutations go through the shared implementations; no Claude, no
+// Telegram. Every op lands in exactly one bucket (including the final not-understood one), so
+// nothing ever falls through silently.
+async function executeOps(env: Env, ops: any[], who: string, td: string): Promise<string[]> {
+  const now = new Date().toISOString();
+  const added: string[] = [];
+  const completed: string[] = [];
+  const removed: string[] = [];
+  const notFound: string[] = [];
+  const visitsSet: string[] = [];
+  const ruledOut: string[] = [];
+  const reactivated: string[] = [];
+  const noted: string[] = [];
+  const voted: string[] = [];
+  const skipped: string[] = [];
+  let wantQuery = false;
+  let wantRescrape = false;
+  let wantAptSummary = false;
+  for (const op of ops) {
+    // a null/primitive element in the ops array must not crash the loop mid-batch — route it
+    // to the not-understood bucket like any other malformed op
+    if (!op || typeof op !== 'object') { skipped.push('?'); continue; }
+    if (op.action === 'add' && op.title) {
+      // ponytail: coerce an unknown/missing category to general so a mis-parse never drops the item
+      const cat = (CATEGORIES as readonly string[]).includes(op.category) ? op.category : 'general';
+      await run(env,
+        `INSERT INTO items (category,title,notes,due_date,recurrence,recur_day,amount,status,created_by,created_at,updated_at)
+         VALUES (?,?,?,?,?,?,?, 'open', ?, ?, ?)`,
+        cat, String(op.title).slice(0, 120), null,
+        op.due_date || null, op.recurrence === 'monthly' ? 'monthly' : 'none',
+        op.recur_day || null, op.amount || null, who, now, now);
+      let d = '';
+      if (op.due_date) d = ' — ' + dueLabel(op.due_date, td).replace(/^⚠️ /, '');
+      if (op.recurrence === 'monthly') d += ' (mensual)';
+      added.push(`${CAT_EMOJI[cat]} ${mdEscape(op.title)}${d}`);
+    } else if (op.action === 'complete' && op.id != null) {
+      const r = await completeItem(env, Number(op.id));
+      if (r.ok) completed.push(`${mdEscape(r.title)} ✓${r.next ? ` (próx: ${fmtDate(r.next)})` : ''}`);
+      else notFound.push('#' + op.id);
+    } else if (op.action === 'remove' && op.id != null) {
+      const it = await get(env, 'SELECT * FROM items WHERE id=? AND status=?', Number(op.id), 'open');
+      if (it) {
+        // status='deleted' — every query filters status='open', so it vanishes everywhere; no migration needed
+        await run(env, "UPDATE items SET status='deleted', updated_at=? WHERE id=?", now, it.id);
+        removed.push(mdEscape(it.title));
+      } else notFound.push('#' + op.id);
+    } else if (op.action === 'query') {
+      wantQuery = true;
+    } else if (op.action === 'rescrape') {
+      wantRescrape = true;
+    } else if (op.action === 'apt_summary') {
+      wantAptSummary = true;
+    } else if (op.action === 'set_visit' && op.apt_id != null) {
+      const vd = (op.visit_date == null || op.visit_date === '') ? null : String(op.visit_date);
+      const res = await setVisit(env, Number(op.apt_id), vd, { activeOnly: true });
+      if (res) visitsSet.push(mdEscape(aptRef(res.row)) + (vd ? (' → ' + dueLabel(vd, td) + hhmm(vd)) : ' (visita cancelada)') + res.mailNote);
+      else notFound.push('apto #' + op.apt_id);
+    } else if (op.action === 'rule_out' && op.apt_id != null) {
+      const res = await ruleOutApt(env, Number(op.apt_id), op.reason);
+      if (res) ruledOut.push(mdEscape(aptRef(res.row)) + (res.reason ? (' — ' + mdEscape(res.reason)) : ''));
+      else notFound.push('apto #' + op.apt_id);
+    } else if (op.action === 'reactivate' && op.apt_id != null) {
+      const res = await reactivateApt(env, Number(op.apt_id));
+      if (res) reactivated.push(mdEscape(aptRef(res.row)));
+      else notFound.push('apto #' + op.apt_id);
+    } else if (op.action === 'apt_vote' && op.apt_id != null && (op.vote === 'up' || op.vote === 'down')) {
+      // any status — a verdict on a ruled-out apartment is context for reconsidering it
+      const voter = canonVoter(who.split(' ')[0]); // Telegram first name → canonical person
+      const res = await upsertVote(env, Number(op.apt_id), voter, op.vote);
+      if (res) voted.push((op.vote === 'up' ? '👍 ' : '👎 ') + mdEscape(aptRef(res.row)) + ' — ' + mdEscape(voterName(voter)));
+      else notFound.push('apto #' + op.apt_id);
+    } else if (op.action === 'apt_note' && op.apt_id != null && op.note) {
+      // any status — recording why a ruled-out apartment was rejected is legit; a miss must not be silent
+      // attributed to the first name of whoever sent the Telegram message
+      const res = await appendAptNote(env, Number(op.apt_id), who.split(' ')[0], String(op.note));
+      if (res) noted.push(mdEscape(aptRef(res.row) + ' — ' + String(op.note).trim()));
+      else notFound.push('apto #' + op.apt_id);
+    } else if (op.action === 'none') {
+      // deliberate silence: chit-chat produces no ack
+    } else {
+      // the terminal else that makes invariant 6 hold: an unknown action, or a known action
+      // missing its required fields, becomes an explicit "no entendí" ack — never silence
+      skipped.push(String(op.action || '?') + (Object.hasOwn(OP_LINES, String(op.action)) ? ' — faltan datos' : ''));
+    }
+  }
+
+  // build ack
+  const lines: string[] = [];
+  if (added.length) lines.push('*Anotado:*\n' + added.map(a => '• ' + a).join('\n'));
+  if (completed.length) lines.push('*Hecho:*\n' + completed.map(c => '• ' + c).join('\n'));
+  if (removed.length) lines.push('🗑 *Quitado:*\n' + removed.map(r => '• ' + r).join('\n'));
+  if (notFound.length) lines.push('❓ No encontré ' + mdEscape(notFound.join(', ')) + ' — pregunta "¿qué hay pendiente?" para ver la lista.');
+  if (skipped.length) lines.push('⚠️ No entendí ' + (skipped.length === 1 ? 'una instrucción' : skipped.length + ' instrucciones') + ' (' + mdEscape(skipped.join(', ')) + ') — inténtalo con otras palabras.');
+  if (visitsSet.length) lines.push('*Visita agendada:*\n' + visitsSet.map(v => '• ' + v).join('\n'));
+  if (ruledOut.length) lines.push('🚫 *Descartado(s)* (siguen guardados en la app, sección Descartados):\n' + ruledOut.map(v => '• ' + v).join('\n'));
+  if (reactivated.length) lines.push('↩️ *De vuelta en la lista:*\n' + reactivated.map(v => '• ' + v).join('\n'));
+  if (noted.length) lines.push('📝 *Nota guardada:*\n' + noted.map(n => '• ' + n).join('\n'));
+  if (voted.length) lines.push('*Veredicto guardado:*\n' + voted.map(v => '• ' + v).join('\n'));
+  if (wantQuery) {
+    lines.push(await buildDigestBody(env, td, 'Esto es lo pendiente:'));
+  }
+  if (wantAptSummary) {
+    lines.push(await buildAptSummary(env));
+  }
+  if (wantRescrape) {
+    const rr = await retryBlockedScrapes(env);
+    if (rr.updated.length) {
+      lines.unshift('🔄 *Listo — releí ' + rr.updated.length + ' apartamento(s):*\n' + rr.updated.map((u: any) => {
+        const loc = mdEscape(u.f.location || u.f.title || 'apto') + ' #' + u.id;
+        let pr = money(u.f.price); if (u.dt === 'rent' && pr) pr += '/mes';
+        const ppmShown = aptPpm({ deal_type: u.dt, price: u.f.price, admin_fee: u.f.admin_fee, area_m2: u.f.area_m2, price_per_m2: u.ppm });
+        const bits = [pr, ppmShown ? ('≈' + money(ppmShown) + '/m²') : '', u.f.area_m2 ? (u.f.area_m2 + ' m²') : ''].filter(Boolean).join(' · ');
+        return '• ' + loc + (bits ? (' — ' + bits) : '') + priceChangeNote(u.priceChange);
+      }).join('\n'));
+    }
+    if (rr.still.length) {
+      const hosts = [...new Set(rr.still.map((s: any) => s.host))].join(', ');
+      // hosts outside the italic entity: legacy Markdown chokes on bold-inside-italic, and DNS labels may carry '_'
+      lines.unshift('⚠️ Sigo sin poder leer: ' + mdEscape(hosts) + '. _Puede que la página esté bloqueando el acceso; escribe "reintenta" más tarde para volver a probar._');
+    }
+    if (!rr.updated.length && !rr.still.length) lines.unshift('_No hay apartamentos pendientes por releer. 👍_');
+  }
+  return lines;
 }
 
 async function handleUpdate(env: Env, update: any) {
@@ -1054,18 +1268,8 @@ async function handleUpdate(env: Env, update: any) {
     'Categories: bills, events, groceries, health, pediatrician, general.',
     'Return ONLY a JSON object: {"ops":[...]}. No prose, no code fences.',
     'Each op is exactly one of:',
-    '  {"action":"add","category":"<cat>","title":"<short label>","due_date":"YYYY-MM-DD"|null,"recurrence":"monthly"|"none","recur_day":<1-31>|null,"amount":"<string>"|null}',
-    '  {"action":"complete","id":<id from OPEN ITEMS>}',
-    '  {"action":"remove","id":<id from OPEN ITEMS>} (user wants to delete/undo a mis-logged item without doing it: "borra eso", "quita el de la farmacia", "me equivoqué, eso no va")',
-    '  {"action":"query"}   (user is asking what is pending / what is on the list)',
-    '  {"action":"none"}    (chit-chat, greeting, nothing to track)',
-    '  {"action":"rescrape"} (user asks to retry reading an apartment listing that could not be read automatically: "reintenta", "vuelve a intentar el scraping", "intenta de nuevo")',
-    '  {"action":"set_visit","apt_id":<id from APARTMENTS>,"visit_date":"YYYY-MM-DDTHH:MM"|"YYYY-MM-DD"|null} (user schedules a visit to an apartment: "visito el de Chicó el martes a las 10am", "la visita del apto 2 es el 20 a las 3pm", "agenda visita apto 1 mañana"; include the clock time as THH:MM in 24h when the user gives one — "10am"=>T10:00, "3pm"=>T15:00 — otherwise date only; visit_date=null cancels a visit)',
-    '  {"action":"rule_out","apt_id":<id from APARTMENTS>,"reason":"<short reason>"|null} (user wants to discard / stop considering an apartment: "descarta el apto 2", "ya no me interesa el de Chico Norte", "quita el más caro", "bájalo de la lista", "rule out the Cedritos one"; if they say why, capture a short reason like "muy caro", "muy lejos", "sin parqueadero")',
-    '  {"action":"reactivate","apt_id":<id from RULED OUT>} (user wants to reconsider a previously discarded apartment: "vuelve a considerar el apto 2", "reactiva el de Chico Norte", "devuelve el descartado a la lista")',
-    '  {"action":"apt_note","apt_id":<id from APARTMENTS>,"note":"<short note>"} (user records an opinion or fact about an apartment, often after a visit: "el de Chico Norte nos encantó", "apto 2: cocina pequeña pero buena luz", "el de Cedritos tiene mala vista")',
-    '  {"action":"apt_vote","apt_id":<id from APARTMENTS or RULED OUT>,"vote":"up"|"down"} (the SENDER gives their own verdict on an apartment: "me encantó el apto 3", "el de Chicó me gustó", "a mí no me convenció el 2". When the phrasing speaks for both ("nos gustó", "nos encantó a los dos"), emit the sender\'s apt_vote AND the apt_note as before — never emit a vote for someone who did not send the message.)',
-    '  {"action":"apt_summary"} (user asks for an overview of the apartment hunt: "resumen de aptos", "cómo va la búsqueda", "qué apartamentos tenemos", "cuáles nos faltan por ver")',
+    // the op vocabulary is OP_LINES — one table drives this prompt AND executeOps' dispatch
+    ...Object.values(OP_LINES).map((l) => '  ' + l),
     'Rules:',
     '- One message may produce several ops (e.g. "low on diapers and formula" => two grocery adds).',
     '- Bills that recur (rent, mortgage, utilities, subscriptions, internet, phone): recurrence="monthly", recur_day=the day-of-month it is due, due_date=the NEXT upcoming occurrence (YYYY-MM-DD). One-off bills: recurrence="none", set due_date.',
@@ -1095,117 +1299,7 @@ async function handleUpdate(env: Env, update: any) {
     return;
   }
 
-  const now = new Date().toISOString();
-  const added: string[] = [];
-  const completed: string[] = [];
-  const removed: string[] = [];
-  const notFound: string[] = [];
-  const visitsSet: string[] = [];
-  const ruledOut: string[] = [];
-  const reactivated: string[] = [];
-  const noted: string[] = [];
-  const voted: string[] = [];
-  let wantQuery = false;
-  let wantRescrape = false;
-  let wantAptSummary = false;
-  for (const op of ops) {
-    if (op.action === 'add' && op.title) {
-      // ponytail: coerce an unknown/missing category to general so a mis-parse never drops the item
-      const cat = (CATEGORIES as readonly string[]).includes(op.category) ? op.category : 'general';
-      await run(env,
-        `INSERT INTO items (category,title,notes,due_date,recurrence,recur_day,amount,status,created_by,created_at,updated_at)
-         VALUES (?,?,?,?,?,?,?, 'open', ?, ?, ?)`,
-        cat, String(op.title).slice(0, 120), null,
-        op.due_date || null, op.recurrence === 'monthly' ? 'monthly' : 'none',
-        op.recur_day || null, op.amount || null, who, now, now);
-      let d = '';
-      if (op.due_date) d = ' — ' + dueLabel(op.due_date, td).replace(/^⚠️ /, '');
-      if (op.recurrence === 'monthly') d += ' (mensual)';
-      added.push(`${CAT_EMOJI[cat]} ${op.title}${d}`);
-    } else if (op.action === 'complete' && op.id != null) {
-      const r = await completeItem(env, Number(op.id));
-      if (r.ok) completed.push(`${r.title} ✓${r.next ? ` (próx: ${fmtDate(r.next)})` : ''}`);
-      else notFound.push('#' + op.id);
-    } else if (op.action === 'remove' && op.id != null) {
-      const it = await get(env, 'SELECT * FROM items WHERE id=? AND status=?', Number(op.id), 'open');
-      if (it) {
-        // status='deleted' — every query filters status='open', so it vanishes everywhere; no migration needed
-        await run(env, "UPDATE items SET status='deleted', updated_at=? WHERE id=?", now, it.id);
-        removed.push(it.title);
-      } else notFound.push('#' + op.id);
-    } else if (op.action === 'query') {
-      wantQuery = true;
-    } else if (op.action === 'rescrape') {
-      wantRescrape = true;
-    } else if (op.action === 'apt_summary') {
-      wantAptSummary = true;
-    } else if (op.action === 'set_visit' && op.apt_id != null) {
-      const vd = (op.visit_date == null || op.visit_date === '') ? null : String(op.visit_date);
-      const arow = await get(env, "SELECT * FROM apartments WHERE id=? AND status='active'", op.apt_id);
-      if (arow) {
-        await run(env, 'UPDATE apartments SET visit_date=?, updated_at=? WHERE id=?', vd, new Date().toISOString(), op.apt_id);
-        const mail = await visitMail(env, arow, vd, arow.visit_date);
-        visitsSet.push(aptRef(arow) + (vd ? (' → ' + dueLabel(vd, td) + hhmm(vd)) : ' (visita cancelada)') + mail);
-      }
-    } else if (op.action === 'rule_out' && op.apt_id != null) {
-      const res = await ruleOutApt(env, Number(op.apt_id), op.reason);
-      if (res) ruledOut.push(aptRef(res.row) + (res.reason ? (' — ' + res.reason) : ''));
-    } else if (op.action === 'reactivate' && op.apt_id != null) {
-      const res = await reactivateApt(env, Number(op.apt_id));
-      if (res) reactivated.push(aptRef(res.row));
-    } else if (op.action === 'apt_vote' && op.apt_id != null && (op.vote === 'up' || op.vote === 'down')) {
-      // any status — a verdict on a ruled-out apartment is context for reconsidering it
-      const arow = await get(env, 'SELECT * FROM apartments WHERE id=?', op.apt_id);
-      if (arow) {
-        const voter = canonVoter(who.split(' ')[0]); // Telegram first name → canonical person
-        await upsertVote(env, Number(op.apt_id), voter, op.vote);
-        voted.push((op.vote === 'up' ? '👍 ' : '👎 ') + aptRef(arow) + ' — ' + voterName(voter));
-      } else notFound.push('apto #' + op.apt_id);
-    } else if (op.action === 'apt_note' && op.apt_id != null && op.note) {
-      // any status — recording why a ruled-out apartment was rejected is legit; a miss must not be silent
-      const arow = await get(env, "SELECT * FROM apartments WHERE id=?", op.apt_id);
-      if (arow) {
-        // attributed to the first name of whoever sent the Telegram message
-        await appendAptNote(env, Number(op.apt_id), who.split(' ')[0], String(op.note));
-        noted.push(aptRef(arow) + ' — ' + String(op.note).trim());
-      } else notFound.push('apto #' + op.apt_id);
-    }
-  }
-
-  // build ack
-  const lines: string[] = [];
-  if (added.length) lines.push('*Anotado:*\n' + added.map(a => '• ' + a).join('\n'));
-  if (completed.length) lines.push('*Hecho:*\n' + completed.map(c => '• ' + c).join('\n'));
-  if (removed.length) lines.push('🗑 *Quitado:*\n' + removed.map(r => '• ' + r).join('\n'));
-  if (notFound.length) lines.push('❓ No encontré ' + notFound.join(', ') + ' — pregunta "¿qué hay pendiente?" para ver la lista.');
-  if (visitsSet.length) lines.push('*Visita agendada:*\n' + visitsSet.map(v => '• ' + v).join('\n'));
-  if (ruledOut.length) lines.push('🚫 *Descartado(s)* (siguen guardados en la app, sección Descartados):\n' + ruledOut.map(v => '• ' + v).join('\n'));
-  if (reactivated.length) lines.push('↩️ *De vuelta en la lista:*\n' + reactivated.map(v => '• ' + v).join('\n'));
-  if (noted.length) lines.push('📝 *Nota guardada:*\n' + noted.map(n => '• ' + n).join('\n'));
-  if (voted.length) lines.push('*Veredicto guardado:*\n' + voted.map(v => '• ' + v).join('\n'));
-  if (wantQuery) {
-    lines.push(await buildDigestBody(env, td, 'Esto es lo pendiente:'));
-  }
-  if (wantAptSummary) {
-    lines.push(await buildAptSummary(env));
-  }
-  if (wantRescrape) {
-    const rr = await retryBlockedScrapes(env);
-    if (rr.updated.length) {
-      lines.unshift('🔄 *Listo — releí ' + rr.updated.length + ' apartamento(s):*\n' + rr.updated.map((u: any) => {
-        const loc = (u.f.location || u.f.title || 'apto') + ' #' + u.id;
-        let pr = money(u.f.price); if (u.dt === 'rent' && pr) pr += '/mes';
-        const ppmShown = aptPpm({ deal_type: u.dt, price: u.f.price, admin_fee: u.f.admin_fee, area_m2: u.f.area_m2, price_per_m2: u.ppm });
-        const bits = [pr, ppmShown ? ('≈' + money(ppmShown) + '/m²') : '', u.f.area_m2 ? (u.f.area_m2 + ' m²') : ''].filter(Boolean).join(' · ');
-        return '• ' + loc + (bits ? (' — ' + bits) : '') + priceChangeNote(u.priceChange);
-      }).join('\n'));
-    }
-    if (rr.still.length) {
-      const hosts = [...new Set(rr.still.map((s: any) => s.host))].join(', ');
-      lines.unshift('⚠️ _Sigo sin poder leer: *' + hosts + '*. Puede que la página esté bloqueando el acceso; escribe "reintenta" más tarde para volver a probar._');
-    }
-    if (!rr.updated.length && !rr.still.length) lines.unshift('_No hay apartamentos pendientes por releer. 👍_');
-  }
+  const lines = await executeOps(env, ops, who, td);
   if (lines.length) await tgSend(env, lines.join('\n\n'), msg.message_id);
 }
 
@@ -1317,7 +1411,7 @@ async function itemsAction(env: Env, req: Request, ctx: ExecutionContext): Promi
   const who = webUser(req);
   // groceries are checked off in bursts at the store — one Telegram ping per item is spam
   if (r.category !== 'groceries') {
-    ctx.waitUntil(tgSend(env, `✓ *${r.title}*${r.next ? ` (próx: ${fmtDate(r.next)})` : ''} — vía web${who ? ' · ' + who : ''}`).catch(() => {}));
+    ctx.waitUntil(tgSend(env, `✓ *${mdEscape(r.title)}*${r.next ? ` (próx: ${fmtDate(r.next)})` : ''} — vía web${who ? ' · ' + mdEscape(who) : ''}`).catch(() => {}));
   }
   return json({ ok: true, next: r.next ? fmtDate(r.next) : null });
 }
@@ -1373,55 +1467,52 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
   const id = Number(b.id);
   if (!id) return json({ ok: false, error: 'missing id' }, 400);
   const who = webUser(req);
-  const via = ` — vía web${who ? ' · ' + who : ''}`;
+  const via = ` — vía web${who ? ' · ' + mdEscape(who) : ''}`;
   const echo = (msg: string, markup?: unknown) => ctx.waitUntil(tgSend(env, msg, undefined, markup).catch(() => {}));
   if (b.action === 'set_visit') {
     const vd = (b.visit_date == null || b.visit_date === '') ? null : String(b.visit_date);
-    const oldVd = (await get(env, 'SELECT visit_date FROM apartments WHERE id=?', id))?.visit_date || null;
-    await run(env, 'UPDATE apartments SET visit_date=?, updated_at=? WHERE id=?', vd, new Date().toISOString(), id);
-    const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
-    if (row) ctx.waitUntil((async () => {
-      const mail = await visitMail(env, row, vd, oldVd);
-      await tgSend(env, (vd ? `📅 Visita a *${aptRef(row)}* → ${fmtDate(vd)}${hhmm(vd)}` : `📅 Visita a *${aptRef(row)}* cancelada`) + via + mail);
-    })().catch(() => {}));
-    return json({ ok: true, row });
+    // no activeOnly: the web is the manual override and may (re)schedule on a ruled_out row (§8)
+    const res = await setVisit(env, id, vd);
+    if (!res) return json({ ok: false, error: 'no encontrado' }, 404);
+    echo(aptAnnounce('visit', res.row, { via, visit: vd, mailNote: res.mailNote }).text);
+    return json({ ok: true, row: res.row });
   }
   if (b.action === 'invite') {
     // manual re-send from the calendar card, e.g. after editing the address or agent
     const row = await get(env, "SELECT * FROM apartments WHERE id=? AND status='active'", id);
     if (!row) return json({ ok: false, error: 'no encontrado' }, 404);
     if (!row.visit_date) return json({ ok: false, error: 'sin fecha de visita' }, 400);
-    if (String(row.visit_date).slice(0, 10) < today()) return json({ ok: false, error: 'la visita ya pasó' }, 400);
+    if (!visitUpcoming(row.visit_date)) return json({ ok: false, error: 'la visita ya pasó' }, 400);
     try { await sendInviteMail(env, row, 'REQUEST', String(row.visit_date)); } catch (e: any) {
       console.log('invite mail error:', String(e && e.message || e));
       return json({ ok: false, error: 'no se pudo enviar el correo' }, 502);
     }
-    echo(`📧 Invitación de *${aptRef(row)}* enviada a los correos${via}`);
+    echo(aptAnnounce('invite', row, { via }).text);
     return json({ ok: true });
   }
   if (b.action === 'rule_out') {
     const res = await ruleOutApt(env, id, b.reason); // shared with Telegram ops + callback buttons
     if (!res) return json({ ok: false, error: 'no encontrado' }, 404);
-    echo(`🚫 *${mdEscape(aptRef(res.row))}* descartado${res.reason ? ' — ' + res.reason : ''}${via}`,
-      kb([[{ text: '↩️ Reactivar', callback_data: 're:' + id }]]));
-    return json({ ok: true, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
+    const a = aptAnnounce('rule_out', res.row, { via, reason: res.reason });
+    echo(a.text, a.markup);
+    return json({ ok: true, row: res.row });
   }
   if (b.action === 'reactivate') {
     const res = await reactivateApt(env, id);
     if (!res) return json({ ok: false, error: 'no encontrado' }, 404);
-    echo(`↩️ *${mdEscape(aptRef(res.row))}* de vuelta en la lista${via}`);
-    return json({ ok: true, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
+    echo(aptAnnounce('reactivate', res.row, { via }).text);
+    return json({ ok: true, row: res.row });
   }
   if (b.action === 'rescrape') {
     const res = await rescrapeOne(env, id);
+    const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
     // a price move must reach the group no matter who pressed the button; the JSON carries
     // priceChange too so the frontend can toast it
-    if (res.ok && res.priceChange) {
-      const prow = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
+    if (res.ok && res.priceChange && row) {
       const pc = res.priceChange;
-      echo(`${pc.to < pc.from ? '⬇️' : '⬆️'} *${mdEscape(aptRef(prow))}* ${pc.to < pc.from ? 'bajó' : 'subió'} de ${money(pc.from)} a ${money(pc.to)}${via}`);
+      echo(`${pc.to < pc.from ? '⬇️' : '⬆️'} *${mdEscape(aptRef(row))}* ${pc.to < pc.from ? 'bajó' : 'subió'} de ${money(pc.from)} a ${money(pc.to)}${via}`);
     }
-    return json({ ...res, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
+    return json({ ...res, row });
   }
   if (b.action === 'set_fields') {
     // address / agent / phone / tag — quiet metadata edits, no Telegram echo
@@ -1471,27 +1562,20 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
     // the voter is ALWAYS the logged-in Access user — never trusted from the body
     const voter = canonVoter(webUser(req));
     if (!voter) return json({ ok: false, error: 'sin usuario' }, 403);
-    const vote = b.vote === 'up' || b.vote === 'down' ? b.vote : null;
-    const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
-    if (!row) return json({ ok: false, error: 'no encontrado' }, 404);
-    if (vote === null) {
-      await run(env, 'DELETE FROM apartment_votes WHERE apartment_id=? AND voter=?', id, voter); // quiet on clear
-    } else {
-      await upsertVote(env, id, voter, vote);
-      // b.quiet: the post-visit follow-up buttons pair this with an apt_note that already echoes
-      if (!b.quiet) echo(vote === 'up'
-        ? `👍 A ${voterName(voter)} le gustó *${mdEscape(aptRef(row))}*`
-        : `👎 A ${voterName(voter)} no le convenció *${mdEscape(aptRef(row))}*`);
-    }
+    const vote = b.vote === 'up' || b.vote === 'down' ? b.vote : null; // null clears, quietly
+    const res = await upsertVote(env, id, voter, vote);
+    if (!res) return json({ ok: false, error: 'no encontrado' }, 404);
+    // b.quiet: the post-visit follow-up buttons pair this with an apt_note that already echoes
+    if (vote !== null && !b.quiet) echo(aptAnnounce('vote', res.row, { voter, vote }).text);
     return json({ ok: true });
   }
   if (b.action === 'apt_note') {
     const note = (b.note && String(b.note).trim()) ? String(b.note).trim().slice(0, 300) : null;
     if (!note) return json({ ok: false, error: 'empty note' }, 400);
-    await appendAptNote(env, id, webAuthor(req), note);
-    const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
-    if (row) echo(`📝 Nota en *${aptRef(row)}*: ${note}${via}`);
-    return json({ ok: true, row });
+    const res = await appendAptNote(env, id, webAuthor(req), note);
+    if (!res) return json({ ok: false, error: 'no encontrado' }, 404);
+    echo(aptAnnounce('note', res.row, { via, note }).text);
+    return json({ ok: true, row: res.row });
   }
   if (b.action === 'apt_note_del') {
     // remove one exact note line (mis-parsed notes shouldn't live forever); quiet cleanup, no Telegram echo
@@ -1594,12 +1678,11 @@ async function mcpToolCall(env: Env, ctx: ExecutionContext, params: any): Promis
       const id = Number(args.apartment_id);
       const note = String(args.note || '').trim().slice(0, 300);
       if (!id || !note) return mcpText('rejected: apartment_id and a non-empty note are required', true);
-      const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
-      if (!row) return mcpText('apartment #' + id + ' not found', true);
       const author = voterName(canonVoter(String(args.author || 'felipe')));
-      await appendAptNote(env, id, author, note);
-      ctx.waitUntil(tgSend(env, `📝 Nota en *${mdEscape(aptRef(row))}*: ${mdEscape(note)} — vía MCP · ${author}`).catch(() => {}));
-      return mcpText(`Nota añadida a "${aptName(row)}" #${id}: ${today()} [${author}]: ${note}`);
+      const res = await appendAptNote(env, id, author, note);
+      if (!res) return mcpText('apartment #' + id + ' not found', true);
+      ctx.waitUntil(tgSend(env, aptAnnounce('note', res.row, { via: ' — vía MCP · ' + author, note }).text).catch(() => {}));
+      return mcpText(`Nota añadida a "${aptName(res.row)}" #${id}: ${res.stamped}`);
     }
     default:
       return mcpText('unknown tool: ' + String(params?.name), true);
