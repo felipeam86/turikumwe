@@ -795,6 +795,21 @@ function classifyDoc(text: string): string {
   if (/c[eé]dula|representaci/.test(s)) return 'cedula_prop';
   return 'otro';
 }
+// The docs a realtor still owes us: the deal-applicable checklist minus received/na rows —
+// the same notion the web checklist renders (an applicable doc is owed by default, even
+// before anyone materializes a row for it). Unknown deal_type shows the full set, like the web.
+async function missingDocLabels(env: Env, apt: any): Promise<string[]> {
+  const rows = await all(env, 'SELECT * FROM apartment_docs WHERE apartment_id=?', apt.id);
+  const out: string[] = [];
+  for (const t of DOC_TYPES) {
+    if (t.slug === 'otro') continue; // 'otro' entries only exist as real rows
+    if ((apt.deal_type === 'rent' || apt.deal_type === 'buy') && !t.deals.includes(apt.deal_type)) continue;
+    const ex = rows.find((d: any) => d.doc_type === t.slug);
+    if (!ex || ex.status === 'pending') out.push(t.label);
+  }
+  for (const d of rows) if (d.doc_type === 'otro' && d.status === 'pending') out.push(docLabel(d));
+  return out;
+}
 // Upsert one doc row, keyed (apartment_id, doc_type) — 'otro' additionally keys by label so
 // several free-form documents can coexist. A label-less 'otro' WITH a file is always its own
 // new row; a label-less status-only update falls back to the latest 'otro' row (otherwise a
@@ -1071,9 +1086,10 @@ async function sendVisitReminders(env: Env) {
     // the plain number is the dial fallback: Telegram makes it tap-to-call, and tel: is not
     // allowed in inline url buttons — the 💬 button below stays the WhatsApp path
     if (r.agent_phone) lines.push(`📞 ${mdEscape(r.agent_phone)}`);
-    // documents still owed by this realtor: the visit is the moment to ask in person
-    const pend = await all(env, "SELECT * FROM apartment_docs WHERE apartment_id=? AND status='pending'", r.id);
-    if (pend.length) lines.push(`📄 Pídele: ${mdEscape(pend.map(docLabel).join(', '))}`);
+    // documents still owed by this realtor: the visit is the moment to ask in person —
+    // the full checklist notion (missingDocLabels), not just explicitly tracked rows
+    const pend = await missingDocLabels(env, r);
+    if (pend.length) lines.push(`📄 Pídele: ${mdEscape(pend.join(', '))}`);
     // the links live in buttons (url buttons never touch the Markdown parser)
     const row1: TgBtn[] = [];
     if (r.address) row1.push({ text: '🗺 Cómo llegar', url: mapsLink(r.address) });
@@ -1096,9 +1112,9 @@ async function sendPostVisitFollowup(env: Env) {
     "SELECT a.* FROM apartment_visits v JOIN apartments a ON a.id=v.apartment_id WHERE a.status='active' AND v.status='scheduled' AND substr(v.visit_date,1,10)=? AND v.visit_date<=? GROUP BY a.id",
     today(), nowBogota());
   for (const r of rows) {
-    // the debrief is also when the missing paperwork gets remembered
-    const pend = await all(env, "SELECT * FROM apartment_docs WHERE apartment_id=? AND status='pending'", r.id);
-    const docsBit = pend.length ? `\n📄 Siguen pendientes: ${mdEscape(pend.map(docLabel).join(', '))} — pídanselos al agente.` : '';
+    // the debrief is also when the missing paperwork gets remembered — checklist notion
+    const pend = await missingDocLabels(env, r);
+    const docsBit = pend.length ? `\n📄 Siguen pendientes: ${mdEscape(pend.join(', '))} — pídanselos al agente.` : '';
     await tgSend(env, `🗣 ¿Cómo les fue en *${mdEscape(aptName(r))}* #${r.id}? Un toque para el veredicto, o respondan a este mensaje y lo guardo como nota.${docsBit}`,
       undefined, kb([
         [{ text: '👍 Nos gustó', callback_data: 'up:' + r.id }, { text: '👎 No', callback_data: 'dn:' + r.id }],

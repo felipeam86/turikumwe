@@ -315,8 +315,8 @@ adds a new calendar entry instead of moving the old one.
 | Cron (UTC) | Bogota | What |
 |---|---|---|
 | `30 12 * * *` | 07:30 | `sendDigest` — full pendientes digest to the group (visits section reads `apartment_visits`, shows who goes) |
-| `0 0 * * *` | 19:00 | `sendEveningReminder` (only if something is due/overdue) + `sendPostVisitFollowup` (per visited-today apartment — scheduled visits whose datetime passed, deduped per apartment — with 👍/👎/🚫 buttons, a 💬 WhatsApp url button when the agent's phone is stored, and the list of still-pending docs to ask for) |
-| `0 * * * *` | hourly | `sendVisitReminders` — ~1 h before each timed visit (scheduled `apartment_visits` rows joined to active apartments); 90-min lookahead + per-visit `reminder_sent` guarantees exactly one reminder per scheduled datetime; includes who goes and the pending docs to request in person |
+| `0 0 * * *` | 19:00 | `sendEveningReminder` (only if something is due/overdue) + `sendPostVisitFollowup` (per visited-today apartment — scheduled visits whose datetime passed, deduped per apartment — with 👍/👎/🚫 buttons, a 💬 WhatsApp url button when the agent's phone is stored, and the docs the realtor still owes: `missingDocLabels`, the deal-applicable checklist minus received/na, same notion the web renders) |
+| `0 * * * *` | hourly | `sendVisitReminders` — ~1 h before each timed visit (scheduled `apartment_visits` rows joined to active apartments); 90-min lookahead + per-visit `reminder_sent` guarantees exactly one reminder per scheduled datetime; includes who goes and the still-owed docs (`missingDocLabels`) to request in person |
 
 At 00:00 UTC the evening and hourly crons both fire as separate invocations —
 fine. Dispatch is an explicit `switch` on `controller.cron`; an unknown string
