@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "household-worker",
-      "runtimeExecutable": "/Users/felipe/.nvm/versions/node/v22.23.1/bin/node",
-      "runtimeArgs": ["node_modules/wrangler/bin/wrangler.js", "dev", "--port", "8787"],
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
       "port": 8787
     }
   ]

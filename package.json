@@ -2,8 +2,11 @@
   "name": "household",
   "private": true,
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "db:local": "wrangler d1 execute household --local --file schema.sql && wrangler d1 execute household --local --file seed.sql",
+    "predev": "npm run db:local",
+    "dev": "wrangler dev --port 8787 --var DEV_USER:felipeam86@turikumwe.cc --show-interactive-dev-session=false",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260708.1",

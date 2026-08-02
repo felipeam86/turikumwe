@@ -14,6 +14,9 @@ export interface Env {
   INVITE_MAIL: SendEmail;
   INVITE_FROM: string;
   INVITE_TO: string;
+  // stand-in for the Access header on `npm run dev`; passed by that script's --var only,
+  // so a deployed Worker never has it (see webUser)
+  DEV_USER?: string;
 }
 
 const TZ = 'America/Bogota'; // UTC-5, no DST
@@ -1365,14 +1368,15 @@ async function homePage(env: Env): Promise<Response> {
   return html(homeHtml.replace('{{TODAY}}', () => todayLabel).replace('{{HH_META}}', () => hhMeta).replace('{{APT_META}}', () => aptMeta));
 }
 
-// Cloudflare Access injects the logged-in user's email on every request
-function webUser(req: Request): string {
-  return (req.headers.get('cf-access-authenticated-user-email') || '').split('@')[0];
+// Cloudflare Access injects the logged-in user's email on every request. `wrangler dev` has no
+// Access in front of it, so DEV_USER stands in — without an identity, voting 403s locally.
+function webUser(req: Request, env: Env): string {
+  return (req.headers.get('cf-access-authenticated-user-email') || env.DEV_USER || '').split('@')[0];
 }
 // pretty note-author name for a web user: known email local-parts → first names, else the raw local-part
 const WEB_ALIAS: Record<string, string> = { felipeam86: 'Felipe' };
-function webAuthor(req: Request): string {
-  const lp = webUser(req);
+function webAuthor(req: Request, env: Env): string {
+  const lp = webUser(req, env);
   if (!lp) return '';
   const s = lp.toLowerCase();
   if (WEB_ALIAS[s]) return WEB_ALIAS[s];
@@ -1408,7 +1412,7 @@ async function itemsAction(env: Env, req: Request, ctx: ExecutionContext): Promi
   if (!id) return json({ ok: false, error: 'missing id' }, 400);
   const r = await completeItem(env, id);
   if (!r.ok) return json({ ok: false, error: 'not-found' }, 404);
-  const who = webUser(req);
+  const who = webUser(req, env);
   // groceries are checked off in bursts at the store — one Telegram ping per item is spam
   if (r.category !== 'groceries') {
     ctx.waitUntil(tgSend(env, `✓ *${mdEscape(r.title)}*${r.next ? ` (próx: ${fmtDate(r.next)})` : ''} — vía web${who ? ' · ' + mdEscape(who) : ''}`).catch(() => {}));
@@ -1432,7 +1436,7 @@ async function apartmentsData(env: Env, req: Request, ctx: ExecutionContext): Pr
   const vByApt: Record<number, Record<string, string>> = {};
   for (const v of votes) (vByApt[v.apartment_id] = vByApt[v.apartment_id] || {})[v.voter] = v.vote;
   for (const r of [...rows, ...ruledOut]) r.votes = vByApt[r.id] || {};
-  return json({ apartments: rows, ruledOut, today: today(), me: canonVoter(webUser(req)) });
+  return json({ apartments: rows, ruledOut, today: today(), me: canonVoter(webUser(req, env)) });
 }
 
 // serve a stored visit photo: permanent file_id → short-lived file_path (getFile, expires ~1 h,
@@ -1466,7 +1470,7 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
   const b: any = await req.json().catch(() => ({}));
   const id = Number(b.id);
   if (!id) return json({ ok: false, error: 'missing id' }, 400);
-  const who = webUser(req);
+  const who = webUser(req, env);
   const via = ` — vía web${who ? ' · ' + mdEscape(who) : ''}`;
   const echo = (msg: string, markup?: unknown) => ctx.waitUntil(tgSend(env, msg, undefined, markup).catch(() => {}));
   if (b.action === 'set_visit') {
@@ -1560,7 +1564,7 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
   }
   if (b.action === 'vote') {
     // the voter is ALWAYS the logged-in Access user — never trusted from the body
-    const voter = canonVoter(webUser(req));
+    const voter = canonVoter(webUser(req, env));
     if (!voter) return json({ ok: false, error: 'sin usuario' }, 403);
     const vote = b.vote === 'up' || b.vote === 'down' ? b.vote : null; // null clears, quietly
     const res = await upsertVote(env, id, voter, vote);
@@ -1572,7 +1576,7 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
   if (b.action === 'apt_note') {
     const note = (b.note && String(b.note).trim()) ? String(b.note).trim().slice(0, 300) : null;
     if (!note) return json({ ok: false, error: 'empty note' }, 400);
-    const res = await appendAptNote(env, id, webAuthor(req), note);
+    const res = await appendAptNote(env, id, webAuthor(req, env), note);
     if (!res) return json({ ok: false, error: 'no encontrado' }, 404);
     echo(aptAnnounce('note', res.row, { via, note }).text);
     return json({ ok: true, row: res.row });
