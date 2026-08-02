@@ -1019,12 +1019,19 @@ function updateMap(){
 
 /* ================= render ================= */
 function syncSheet(){document.documentElement.classList.toggle("sheet-open",OPEN!=null);}
+let RENDERED_SHEET=null; // which apt the sheet last rendered — keeps the scroll seat on re-renders
 function renderDetail(){
   const box=$("detail");
-  if(OPEN==null){box.innerHTML='<div class="dphold">Selecciona un apartamento para ver su ficha.</div>';syncSheet();return;}
+  if(OPEN==null){RENDERED_SHEET=null;box.innerHTML='<div class="dphold">Selecciona un apartamento para ver su ficha.</div>';syncSheet();return;}
   const r=findApt(OPEN);
-  if(!r){OPEN=null;MODE="view";box.innerHTML='<div class="dphold">Selecciona un apartamento para ver su ficha.</div>';syncSheet();return;}
+  if(!r){OPEN=null;MODE="view";RENDERED_SHEET=null;box.innerHTML='<div class="dphold">Selecciona un apartamento para ver su ficha.</div>';syncSheet();return;}
+  // a quick action (doc tap, vote, nota) re-renders the SAME ficha — don't yank the reader
+  // back to the top of the sheet; a different apartment starts fresh
+  const sc=box.querySelector(".dscroll");
+  const keep=(RENDERED_SHEET===OPEN&&sc)?sc.scrollTop:0;
   box.innerHTML=detailHtml(r);
+  if(keep){const sc2=box.querySelector(".dscroll");if(sc2)sc2.scrollTop=keep;}
+  RENDERED_SHEET=OPEN;
   syncSheet();
 }
 function render(){
@@ -1295,7 +1302,9 @@ document.addEventListener("click",(e)=>{
   /* docs */
   if(act==="doc-cycle"){
     const slug=t.getAttribute("data-slug"),st=t.getAttribute("data-status");
-    const next=DOC_ST_NEXT[st]||"received";
+    // every applicable doc renders as "pendiente" until received/na, so st is always set;
+    // the fallback only guards a missing attribute
+    const next=DOC_ST_NEXT[st]||"pending";
     const body={action:"doc_set",id:id,doc_type:slug,status:next};
     const dl=t.getAttribute("data-dlabel");
     if(slug==="otro"&&dl)body.label=dl;
