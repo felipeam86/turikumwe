@@ -14,7 +14,7 @@ that **shared logbook** — light, warm, paper-like, editorial — the deliberat
 counterpoint to the dark console it replaced. Two ideas carry everything:
 
 - **The spine.** Journal entries hang on a thin vertical line; each entry's
-  knot is a small serif disc that says *who* — authorship is visible
+  knot is a small initialed disc that says *who* — authorship is visible
   everywhere, always in the same two hues.
 - **Chapters and dividers.** Each apartment page is a chronological thread
   whose visits are numbered chapters («Primera visita», «Segunda visita»);
@@ -51,18 +51,20 @@ so they sit on any paper tone.
 
 ## 3. Typography
 
-- **Instrument Serif** (400 + italic; Google Fonts, `Georgia` fallback) — the
-  voice of the book: the `Bitácora` wordmark (italic), apartment titles,
-  chapter titles, week headers (italic), prices and fact values, quoted
-  notes/impressions (italic, inside `.quote`/`.ntxt`).
-- **Instrument Sans** (400–700, same foundry; system-sans fallback) — the
-  hand of the tool: entry text, metadata, buttons, chips, labels, inputs.
+**One family, one style.** Instrument Sans (400 / 600 / 700; system-sans
+fallback) is the entire typographic voice — no serif, no italics anywhere.
+Hierarchy is built from exactly two dials: weight (700 display, 600
+emphasis, 400 body) and size. Quoted notes/impressions are distinguished by
+the left hairline of `.quote` and the muted ink tone, never by a style
+change. This is deliberate minimalism: font-family or font-style switches
+read as noise on a small screen.
 
-Scale (px): wordmark 30 · apt title 31 · sheet title 22 · chapter 20 ·
-week header 19 · fact value 18 · entry text 14.5 · body 15 · meta 12 ·
-caps-labels 10–11 with `.08–.09em` tracking, uppercase. Prices always
-`font-variant-numeric: tabular-nums`. Caps-labels (`.dayhead`, `.sect2`,
-`.nvlabel`, `.fk`, `.vk`) are the only uppercase text.
+Scale (px): wordmark 22/700 · apt title 25/700 · sheet title 18/700 ·
+chapter 17/700 · agenda week header 19/700 · fact value 16/600 · entry
+text 14.5 · body 15 · meta 12 · caps-labels 10–11 with `.06–.09em`
+tracking, uppercase. Prices always `font-variant-numeric: tabular-nums`.
+Caps-labels (`.dayhead`, `.agday .dh`, `.sect2`, `.nvlabel`, `.fk`, `.vk`)
+are the only uppercase text.
 
 ## 4. Spacing & layout
 
@@ -79,7 +81,7 @@ caps-labels 10–11 with `.08–.09em` tracking, uppercase. Prices always
 
 ## 5. Component inventory
 
-- **Masthead** — italic wordmark + subtitle; ⌂/Hogar links.
+- **Masthead** — bold wordmark + subtitle; ⌂/Hogar links.
 - **Tabs** (`.tabs`, sticky) — «Diario» / «Agenda» / «Índice», ink underline
   for the active one. The apartment page counts as Diario.
 - **Roster** (`.rcard`) — compact apartment cards: thumb, `#id`, name, price
@@ -90,29 +92,32 @@ caps-labels 10–11 with `.08–.09em` tracking, uppercase. Prices always
 - **Próxima-visita banner** (`.nextv`) — quiet card, brass left rule: when
   (HOY/MAÑANA + hora + countdown), `#id · lugar`, quién va, dirección. It
   opens the Agenda («ver la agenda →»), where the visit sits in its week.
-- **Agenda spread** (`#agenda`) — the week's page in a paper planner: one
-  Mon–Sun week at a time, ‹ hoy › navigation, an italic serif headline that
-  always names the dates («Semana del 3 al 9 de agosto»). Days flow down the
-  spine, every day present — an empty day is a quiet rule (dim node + italic
-  «libre»); today's header is brass, past days/entries muted (`.agpast`).
-  One entry = one scheduled visit row (active AND ruled-out apartments;
-  follow-ups are their own entries): the node is quién va, the serif time
-  leads (italic «hora por definir» when date-only), then `#id · lugar`
-  linking to the story, price/area, and the fixed contact idiom (Maps
-  address, WhatsApp + «llamar»). Actions per entry: 📅 Reprogramar (inline
-  `datetime-local`, per-visit `visit_edit`), Cancelar (confirm sheet), 📧
-  Invitación only on an active apartment's next upcoming visit; ruled-out
-  entries render struck through with a `descartado` pill and «↩
-  Reconsiderar» — never hidden. A past visit swaps the actions for «✎
-  Impresión». **Clash rule:** same-day timed visits whose starts are <60 min
-  apart BOTH get «⚠️ choque de horario» (warn pill); date-only visits never
-  clash. A visit-less week shows the empty state with the count of
-  apartments por agendar, linking to the Índice.
+- **Agenda calendar** (`#agenda`) — one day per column, like a real calendar
+  app: one Mon–Sun week at a time (`.agdays` → seven `.agday` columns),
+  ‹ hoy › navigation, a headline that always names the dates («Semana del 3
+  al 9 de agosto»). Phones see ~1.3 columns and swipe through the week
+  (scroll-snap, auto-focused on today or the week's first visit; the seat
+  survives quick-action re-renders, week nav re-snaps); ≥960px the roster
+  rail steps aside and the seven columns share the full shell width. Every
+  day is present — an empty column just says «libre»; today's column is
+  brass-edged, past days muted. One entry = one scheduled visit row (active
+  AND ruled-out apartments; follow-ups are their own entries): bold time
+  leads (muted «hora por definir» when date-only) with quién-va person
+  marks beside it, then `#id · lugar` linking to the story, price/area, and
+  the fixed contact idiom (Maps address, WhatsApp + «llamar»). Actions per
+  entry: 📅 Reprogramar (inline `datetime-local`, per-visit `visit_edit`),
+  Cancelar (confirm sheet), 📧 Invitación only on an active apartment's
+  next upcoming visit; ruled-out entries render struck through with a
+  `descartado` pill and «↩ Reconsiderar» — never hidden. A past visit swaps
+  the actions for «✎ Impresión». **Clash rule:** same-day timed visits
+  whose starts are <60 min apart BOTH get «⚠️ choque de horario» (warn
+  pill); date-only visits never clash. A visit-less week shows the empty
+  state with the count of apartments por agendar, linking to the Índice.
 - **Journal entry** (`.ev` inside `.evs`) — spine + node + one-line text +
-  meta; optional serif quote and photo strip. Nodes: `F` / `L` /
+  meta; optional hairline-ruled quote and photo strip. Nodes: `F` / `L` /
   split `F·L` discs for people; `$` price, `✕` discard (err), `✦` photos,
   `→ / ✓` visits without quién.
-- **Person mark** (`.pm`) — 20px serif initial disc; appears wherever
+- **Person mark** (`.pm`) — 20px initialed disc; appears wherever
   authorship or attendance matters.
 - **Pills** (`.pill`) — state, never authorship: `sin leer` (warn), `nuevo`
   (brass), visita/visitado/por agendar (neutral), `⬇ bajó $X` (ok) /
@@ -121,7 +126,7 @@ caps-labels 10–11 with `.08–.09em` tracking, uppercase. Prices always
   hash-derived hue (same label ⇒ same color).
 - **Facts strip** (`.facts`) — ruled grid (2 cols on phones, 4 from 560px):
   $/mes total (all-in for rent), m², $/m², hab/baños, estrato, parqueadero,
-  admin/año, tipo. Serif values, caps labels; best comparable $/m² in green.
+  admin/año, tipo. Semibold values, caps labels; best comparable $/m² in green.
 - **Verdict row** — my medallion cycles `— → 👍 → 👎 → —`; the partner's is
   read-only; agreement adds the green line.
 - **Docs checklist** (`.docscard`) — recessed card: default rows from
@@ -130,10 +135,10 @@ caps-labels 10–11 with `.08–.09em` tracking, uppercase. Prices always
   deletes a mis-filed row; add-«otro» box; «Pedir pendientes por WhatsApp»
   prefills a Spanish wa.me message. Progress reads «n de m» (m excludes «no
   aplica»; shown once at least one row exists).
-- **Chapter** (`.chap`) — serif visit title + meta (fecha, quién va with
+- **Chapter** (`.chap`) — bold visit title + meta (fecha, quién va with
   marks); impressions as quotes; that day's photos; cancelled visits stay,
   struck through.
-- **Divider** (`.divider`) — centered italic serif between rules; err for
+- **Divider** (`.divider`) — centered semibold line between rules; err for
   «Descartado — motivo», ok for «les gustó a los dos».
 - **Composer** — docked bar on the apartment page only: Nota / Visita /
   Docs n/m / ✕ Descartar (↩ Reconsiderar when ruled out).
@@ -142,7 +147,7 @@ caps-labels 10–11 with `.08–.09em` tracking, uppercase. Prices always
   documentos, descartar (reason chips + free text), cancelar visita (the
   agenda's confirm), ficha (all editable fields).
 - **Índice** — filter chips (tipo/hab/precio/estado/tag + orden, persisted
-  in `localStorage.bitFilters`), comparable rows with serif $/m², descartados
+  in `localStorage.bitFilters`), comparable rows with semibold $/m², descartados
   section with reasons + Reconsiderar, Leaflet map (CARTO `light_all` tiles,
   brass pins, ruled-out pins greyed).
 - **Toast** — ink pill above the composer; every action result lands here

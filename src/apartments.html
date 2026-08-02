@@ -8,10 +8,10 @@
 <!-- Leaflet (keyless map lib; SRI-pinned). If the CDN is unreachable the map simply stays hidden. -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<!-- editorial voice: Instrument Serif (display/quotes) + Instrument Sans (UI); system fallbacks if offline -->
+<!-- one quiet voice: Instrument Sans only — hierarchy comes from weight and size, not family changes -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;600;700&display=swap" rel="stylesheet">
 <style>
   /* ---- Bitácora design tokens (see DESIGN.md) ---- */
   :root{
@@ -28,7 +28,6 @@
     --brass:#8A6A2F;   /* interactive tint: links, active chips */
     --ok:#3E7A4C;--warn:#96690F;--err:#AE3B2C;
     --flash:#F0DFA4;   /* deep-link highlighter */
-    --serif:"Instrument Serif",Georgia,"Times New Roman",serif;
     --sans:"Instrument Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
     color-scheme:light;
   }
@@ -42,7 +41,7 @@
   .shell{max-width:680px;margin:0 auto;}
   /* ---- masthead ---- */
   .mast{display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding:18px 2px 4px;}
-  .bmark{font-family:var(--serif);font-style:italic;font-size:30px;line-height:1;letter-spacing:.01em;}
+  .bmark{font-weight:700;font-size:22px;line-height:1;letter-spacing:-.01em;}
   .bsub{display:block;color:var(--faint);font-size:12px;margin-top:4px;letter-spacing:.02em;}
   .sites{display:flex;gap:2px;flex:0 0 auto;}
   .sites a{color:var(--ink2);text-decoration:none;font-size:13px;font-weight:600;min-height:44px;min-width:44px;display:inline-flex;align-items:center;justify-content:center;padding:0 10px;border-radius:8px;}
@@ -58,11 +57,11 @@
   .rcard{flex:0 0 128px;width:128px;background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden;cursor:pointer;text-align:left;padding:0;}
   .rcard:active{border-color:var(--brass);}
   .rcard .rthumb{width:100%;height:64px;object-fit:cover;display:block;background:var(--paper2);border-bottom:1px solid var(--line);}
-  .rcard .rthumb.noimg{display:flex;align-items:center;justify-content:center;color:var(--line2);font-family:var(--serif);font-size:20px;}
+  .rcard .rthumb.noimg{display:flex;align-items:center;justify-content:center;color:var(--line2);font-size:20px;}
   .rcard .rbody{padding:7px 9px 9px;}
   .rcard .rid{font-size:11px;font-weight:700;color:var(--faint);letter-spacing:.03em;margin-right:4px;}
   .rcard .rname{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  .rcard .rprice{font-family:var(--serif);font-size:16px;margin-top:2px;font-variant-numeric:tabular-nums;display:block;}
+  .rcard .rprice{font-weight:600;font-size:15px;margin-top:2px;font-variant-numeric:tabular-nums;display:block;}
   .rcard .rprice .u{font-family:var(--sans);font-size:10px;color:var(--faint);}
   .rcard .rmeta{display:flex;align-items:center;gap:6px;margin-top:4px;font-size:10.5px;color:var(--faint);}
   /* stage dot: pendiente hollow · agendada brass · visitada ink */
@@ -73,13 +72,13 @@
   /* ---- próxima visita banner ---- */
   .nextv{display:block;background:var(--card);border:1px solid var(--line);border-left:3px solid var(--brass);border-radius:10px;padding:12px 14px;margin:12px 0 4px;color:inherit;text-decoration:none;}
   .nextv .nvlabel{font-size:11px;font-weight:700;letter-spacing:.09em;color:var(--brass);text-transform:uppercase;}
-  .nextv .nvmain{font-family:var(--serif);font-size:19px;line-height:1.3;margin-top:3px;}
+  .nextv .nvmain{font-weight:600;font-size:16px;line-height:1.35;margin-top:3px;}
   .nextv .nvmeta{color:var(--ink2);font-size:13px;margin-top:3px;line-height:1.6;}
   .nextv .nvmeta a{color:var(--brass);text-decoration:none;}
   .nextv.xout .nvmain{text-decoration:line-through;text-decoration-color:var(--err);}
   .nextv .nvgo{color:var(--brass);font-weight:600;white-space:nowrap;}
   /* ---- journal feed ---- */
-  .wkhead{font-family:var(--serif);font-style:italic;font-size:19px;color:var(--ink2);margin:26px 2px 2px;}
+  .wkhead{font-weight:700;font-size:15px;color:var(--ink2);margin:26px 2px 2px;}
   .wkhead:first-child{margin-top:18px;}
   .dayhead{font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--faint);margin:16px 0 6px 2px;}
   .dayhead.today{color:var(--brass);}
@@ -89,7 +88,7 @@
   .ev{position:relative;padding:7px 0;}
   .ev .node{position:absolute;left:-40px;top:7px;width:29px;height:29px;border-radius:99px;background:var(--paper);
     border:1.5px solid var(--faint);color:var(--faint);display:flex;align-items:center;justify-content:center;
-    font-family:var(--serif);font-size:13px;line-height:1;}
+    font-family:var(--sans);font-size:13px;line-height:1;}
   .ev .node.f{border-color:var(--felipe);color:var(--felipe);background:#31577F14;}
   .ev .node.l{border-color:var(--lucia);color:var(--lucia);background:#A03E6614;}
   .ev .node.fl{border-color:var(--line2);color:var(--ink2);background:linear-gradient(135deg,#31577F1f 50%,#A03E661f 50%);font-size:10px;letter-spacing:-.02em;}
@@ -103,37 +102,52 @@
   .ev .emeta{color:var(--faint);font-size:12px;margin-top:1px;}
   .ev.tap{cursor:pointer;}
   .ev.tap:active .etxt{color:var(--brass);}
-  .quote{font-family:var(--serif);font-style:italic;font-size:16px;line-height:1.45;color:var(--ink2);margin:4px 0 0;padding-left:10px;border-left:2px solid var(--line2);}
-  .quote .qby{font-family:var(--sans);font-style:normal;font-size:11px;color:var(--faint);margin-left:6px;}
+  .quote{font-size:14.5px;line-height:1.5;color:var(--ink2);margin:4px 0 0;padding-left:10px;border-left:2px solid var(--line2);}
+  .quote .qby{font-size:11px;color:var(--faint);margin-left:6px;}
   .evph{display:flex;gap:6px;overflow-x:auto;margin-top:6px;padding-bottom:2px;}
   .evph a{flex:0 0 auto;cursor:zoom-in;}
   .evph img{width:64px;height:64px;object-fit:cover;border-radius:7px;display:block;border:1px solid var(--line);}
-  /* ---- agenda: the week's planner spread ---- */
+  /* ---- agenda: one day per column, like a real calendar. Phones see ~1.3 columns and
+     swipe through the week (snap); ≥960px the seven days sit side by side full-width. ---- */
   .agnav{display:flex;align-items:flex-end;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:18px 2px 6px;}
-  .agweek{font-family:var(--serif);font-style:italic;font-weight:400;font-size:24px;line-height:1.15;margin:0;}
+  .agweek{font-weight:700;font-size:19px;line-height:1.2;margin:0;}
   .agsub{color:var(--faint);font-size:12px;margin-top:3px;}
   .agbtns{display:flex;gap:6px;}
   .agbtns .btn{min-width:46px;}
-  .agv{padding:1px 0 5px;}
+  .agdays{display:flex;gap:10px;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;padding:6px 2px 12px;scrollbar-width:none;}
+  .agdays::-webkit-scrollbar{display:none;}
+  .agday{flex:0 0 78vw;max-width:262px;min-height:170px;scroll-snap-align:start;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;}
+  .agday.today{border-color:var(--brass);}
+  .agday.past{opacity:.62;}
+  .agday .dh{font-size:11px;font-weight:700;color:var(--faint);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;white-space:nowrap;}
+  .agday.today .dh{color:var(--brass);}
+  .agitem{padding:7px 0 10px;}
+  .agitem+.agitem{border-top:1px solid var(--line);margin-top:2px;}
+  .agitem.agpast{opacity:.62;}
   .agtop{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
-  .agtime{font-family:var(--serif);font-size:20px;line-height:1.3;font-variant-numeric:tabular-nums;}
-  .agtime.tbd{font-style:italic;font-size:17px;color:var(--faint);}
-  .agv .agname{font-size:15px;font-weight:600;margin-top:1px;line-height:1.4;}
-  .agv .agname a{color:inherit;text-decoration:none;}
-  .agv .agname .hash{color:var(--faint);font-weight:600;}
-  .agv .agwho{font-weight:400;color:var(--ink2);font-size:13px;white-space:nowrap;}
-  .agv .agmeta{color:var(--faint);font-size:12.5px;margin-top:1px;}
-  .agv .agcontact{color:var(--ink2);font-size:13px;line-height:1.85;margin-top:3px;}
-  .agv .agcontact a{color:var(--brass);text-decoration:none;}
+  .agtime{font-weight:700;font-size:17px;line-height:1.3;font-variant-numeric:tabular-nums;}
+  .agtime.tbd{font-weight:400;font-size:14px;color:var(--faint);}
+  .agitem .agname{font-size:14.5px;font-weight:600;margin-top:2px;line-height:1.4;}
+  .agitem .agname a{color:inherit;text-decoration:none;}
+  .agitem .agname .hash{color:var(--faint);font-weight:600;}
+  .agitem .agwho{font-weight:400;color:var(--ink2);font-size:12.5px;}
+  .agitem .agmeta{color:var(--faint);font-size:12px;margin-top:1px;}
+  .agitem .agcontact{color:var(--ink2);font-size:13px;line-height:1.85;margin-top:4px;overflow-wrap:break-word;}
+  .agitem .agcontact a{color:var(--brass);text-decoration:none;}
   .agact{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px;}
-  .agre{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;color:var(--ink2);background:var(--card);border:1px solid var(--line2);border-radius:10px;padding:2px 8px 2px 12px;min-height:44px;}
+  .agre{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;color:var(--ink2);background:var(--paper);border:1px solid var(--line2);border-radius:10px;padding:2px 8px 2px 12px;min-height:44px;flex-wrap:wrap;}
   .agre input{font-family:var(--sans);font-size:13px;color:var(--ink);background:transparent;border:none;padding:0;min-height:40px;max-width:176px;}
-  .ev.agpast{opacity:.6;}
-  .agfree{font-family:var(--serif);font-style:italic;color:var(--faint);font-size:14.5px;padding:5px 0;}
-  .ev .node.dim{border-color:var(--line);color:var(--line2);background:transparent;}
+  .agfree{color:var(--faint);font-size:13px;padding:4px 0;}
+  @media(min-width:960px){
+    /* the week needs the whole shell: drop the roster rail and the 680px cap on this view */
+    body[data-view=agenda] .cols{display:block;}
+    body[data-view=agenda] .rail{display:none;}
+    .agdays{overflow-x:visible;}
+    .agday{flex:1 1 0;max-width:none;min-width:0;}
+  }
   /* ---- person marks ---- */
   .pm{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:99px;
-    font-family:var(--serif);font-size:11px;line-height:1;vertical-align:-4px;margin-right:2px;}
+    font-family:var(--sans);font-size:11px;line-height:1;vertical-align:-4px;margin-right:2px;}
   .pm.f{border:1.5px solid var(--felipe);color:var(--felipe);background:#31577F14;}
   .pm.l{border:1.5px solid var(--lucia);color:var(--lucia);background:#A03E6614;}
   /* ---- pills (state, not authorship) ---- */
@@ -147,7 +161,7 @@
   .crumb{display:inline-flex;align-items:center;min-height:44px;color:var(--faint);text-decoration:none;font-size:13px;font-weight:600;margin-top:6px;}
   .cover{width:100%;max-height:230px;object-fit:cover;border-radius:12px;display:block;border:1px solid var(--line);margin-top:6px;}
   .ahead{margin:14px 0 4px;}
-  .ahead h1{font-family:var(--serif);font-weight:400;font-size:31px;line-height:1.12;margin:0;}
+  .ahead h1{font-weight:700;font-size:25px;line-height:1.15;margin:0;}
   .ahead h1 .hash{color:var(--faint);}
   .ahead .asub{color:var(--ink2);font-size:13.5px;margin-top:4px;line-height:1.5;}
   .apills{margin-top:8px;}
@@ -166,7 +180,7 @@
     .fact:nth-child(n+5){border-top:1px solid var(--line);}
   }
   .fact .fk{display:block;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);}
-  .fact .fv{font-family:var(--serif);font-size:18px;line-height:1.3;font-variant-numeric:tabular-nums;overflow-wrap:break-word;}
+  .fact .fv{font-weight:600;font-size:16px;line-height:1.3;font-variant-numeric:tabular-nums;overflow-wrap:break-word;}
   .fact .fv .u{font-family:var(--sans);font-size:10.5px;color:var(--faint);}
   .fact .fv.best{color:var(--ok);}
   .contact{color:var(--ink2);font-size:13.5px;line-height:1.9;margin:10px 0;}
@@ -191,7 +205,7 @@
   /* ---- docs card ---- */
   .docscard{background:var(--paper2);border:1px solid var(--line);border-radius:12px;padding:13px 14px;margin:16px 0;}
   .docscard .dchead{display:flex;align-items:baseline;gap:8px;}
-  .docscard .dctitle{font-family:var(--serif);font-size:19px;}
+  .docscard .dctitle{font-weight:700;font-size:16px;}
   .docscard .dcnum{color:var(--faint);font-size:12.5px;font-weight:600;margin-left:auto;}
   .docrow{display:flex;align-items:center;gap:9px;padding:8px 0;border-top:1px solid var(--line);}
   .docrow:first-of-type{margin-top:9px;}
@@ -209,13 +223,13 @@
   .dwa{margin-top:11px;}
   /* ---- thread (apartment story) ---- */
   .chap{margin:6px 0 2px;}
-  .chap .chtitle{font-family:var(--serif);font-size:20px;line-height:1.2;}
+  .chap .chtitle{font-weight:700;font-size:17px;line-height:1.25;}
   .chap .chmeta{color:var(--faint);font-size:12px;margin-top:1px;}
   .chap.cancelled .chtitle{color:var(--faint);text-decoration:line-through;text-decoration-color:var(--line2);}
   .divider{display:flex;align-items:center;gap:12px;margin:20px 0;color:var(--err);}
   .divider::before,.divider::after{content:"";flex:1;border-top:1px solid var(--err);opacity:.45;}
-  .divider .dvx{font-family:var(--serif);font-style:italic;font-size:18px;text-align:center;line-height:1.35;}
-  .divider .dvx .dvw{display:block;font-family:var(--sans);font-style:normal;font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;opacity:.8;}
+  .divider .dvx{font-weight:600;font-size:15px;text-align:center;line-height:1.4;}
+  .divider .dvx .dvw{display:block;font-weight:400;font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;opacity:.8;}
   .divider.okd{color:var(--ok);}
   .divider.okd::before,.divider.okd::after{border-top-color:var(--ok);}
   .sect2{font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--faint);margin:22px 2px 4px;}
@@ -242,7 +256,7 @@
   .irow .isub{color:var(--ink2);font-size:12.5px;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .irow .isub .best2{color:var(--ok);font-weight:700;}
   .irow .iright{flex:0 0 auto;display:flex;flex-direction:column;align-items:flex-end;gap:3px;}
-  .irow .ippm{font-family:var(--serif);font-size:16px;font-variant-numeric:tabular-nums;}
+  .irow .ippm{font-weight:600;font-size:15px;font-variant-numeric:tabular-nums;}
   .irow .ippm .u{font-family:var(--sans);font-size:10px;color:var(--faint);}
   .irow .istate{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--faint);}
   .ruledwrap{margin-top:26px;}
@@ -256,7 +270,7 @@
   .mpop{font-size:12.5px;line-height:1.5;}
   .mpop .mname{font-weight:700;font-size:13.5px;}
   .mpop .mmeta{color:var(--ink2);}
-  .mpop .mapprox{color:var(--faint);font-size:10.5px;font-style:italic;margin-top:2px;}
+  .mpop .mapprox{color:var(--faint);font-size:10.5px;margin-top:2px;}
   .mpop a{color:var(--brass);text-decoration:none;}
   /* ---- sheets ---- */
   .scrim{display:none;position:fixed;inset:0;background:rgba(40,34,26,.42);z-index:50;align-items:flex-end;justify-content:center;}
@@ -265,7 +279,7 @@
   @media(min-width:760px){.scrim{align-items:center;}.sheet{border-radius:14px;border:1px solid var(--line2);}}
   @keyframes sheetup{from{transform:translateY(26px);opacity:.6;}to{transform:none;opacity:1;}}
   .sheet{animation:sheetup .18s ease-out;}
-  .sheet .sh{font-family:var(--serif);font-size:22px;margin:0 0 4px;}
+  .sheet .sh{font-weight:700;font-size:18px;margin:0 0 4px;}
   .sheet .ssub{color:var(--faint);font-size:12.5px;margin:0 0 12px;}
   .sheet label{display:block;font-size:12px;font-weight:600;color:var(--ink2);margin:12px 0;}
   .sheet input,.sheet textarea,.sheet select{display:block;width:100%;margin-top:5px;font-family:var(--sans);font-size:16px;min-height:44px;background:var(--card);color:var(--ink);border:1px solid var(--line2);border-radius:10px;padding:8px 11px;}
@@ -280,7 +294,7 @@
   .chip.wf.on{background:var(--felipe);border-color:var(--felipe);color:#fff;}
   .chip.wl.on{background:var(--lucia);border-color:var(--lucia);color:#fff;}
   .vsrow{border:1px solid var(--line);background:var(--card);border-radius:11px;padding:11px 12px;margin:10px 0;}
-  .vsrow .vswhen{font-family:var(--serif);font-size:17px;}
+  .vsrow .vswhen{font-weight:600;font-size:15px;}
   .vsrow .vsmeta{color:var(--faint);font-size:12px;margin-top:1px;}
   .vsrow .vsact{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px;}
   .vsrow input[type=datetime-local]{margin-top:8px;}
@@ -289,12 +303,12 @@
   /* ---- notes ---- */
   .ntline{display:flex;align-items:baseline;gap:7px;padding:2px 0;}
   .ntline .nmeta{color:var(--faint);font-size:11px;white-space:nowrap;}
-  .ntline .ntxt{flex:1;min-width:0;font-family:var(--serif);font-style:italic;font-size:15.5px;color:var(--ink2);}
+  .ntline .ntxt{flex:1;min-width:0;font-size:14.5px;color:var(--ink2);}
   .ntline .ntdel{background:none;border:none;color:var(--faint);font-size:12px;cursor:pointer;padding:4px 8px;flex:0 0 auto;}
   /* ---- misc ---- */
-  .empty{color:var(--ink2);text-align:center;padding:46px 18px;font-family:var(--serif);font-style:italic;font-size:19px;line-height:1.5;}
-  .empty .esub{font-family:var(--sans);font-style:normal;font-size:13px;color:var(--faint);display:block;margin-top:8px;}
-  .loading{color:var(--faint);text-align:center;padding:60px 0;font-family:var(--serif);font-style:italic;font-size:19px;}
+  .empty{color:var(--ink2);text-align:center;padding:46px 18px;font-size:15px;line-height:1.6;}
+  .empty .esub{font-size:13px;color:var(--faint);display:block;margin-top:8px;}
+  .loading{color:var(--faint);text-align:center;padding:60px 0;font-size:14px;}
   .deadend{text-align:center;padding:60px 0;font-size:14px;color:var(--ink2);}
   .deadend a{color:var(--brass);font-weight:600;}
   .foot{color:var(--faint);font-size:11.5px;text-align:center;margin:34px 0 8px;line-height:1.65;}
@@ -813,6 +827,7 @@ function renderDiario(){
 // existing YYYY-MM-DD helpers (parseDay/dayStr/addDays/mondayOf/wallMs) — same rules
 // as the old weekly calendar this view brings back.
 var AGENDA_WEEK=null; // Monday on screen; the first open lands on the week of the next visit
+var AG_SNAP=false; // week nav sets it so the fresh week snaps to its focus day
 // every scheduled visit row, active AND ruled-out apartments alike — a discarded
 // apartment keeps its visits, they render crossed out, never hidden. Follow-ups are
 // their own rows, so one apartment can fill several slots in a week.
@@ -846,20 +861,23 @@ function agendaTitle(mon){
     return "Semana del "+da.toLocaleDateString("es-CO",oa)+" al "+db.toLocaleDateString("es-CO",{timeZone:"UTC",day:"numeric",month:"long"});
   }catch(e){return "Semana del "+mon;}
 }
-// one agenda entry = one visit row: who goes is the node, the time is the serif lead,
-// and the entry is self-sufficient — address (Maps), agent (WhatsApp + llamar),
-// price/area, rebooking, cancel, invite — everything needed mid-hunt without leaving
+// one agenda entry = one visit row inside its day column, and the entry is self-sufficient —
+// address (Maps), agent (WhatsApp + «llamar»), price/area, rebooking, cancel, invite —
+// everything needed mid-hunt without leaving the calendar
 function agendaEntry(e,now,clash){
   var r=e.r,v=e.v,ruled=r.status==="ruled_out";
   var timed=v.visit_date.length>10,past=visitCmp(v.visit_date)<now;
-  var h="<div class=\"ev"+(past?" agpast":"")+"\">"+nodeOf(v.who,"<span class=\"node brass\">"+(past?"✓":"→")+"</span>");
-  h+="<div class=\"agv\"><div class=\"agtop\"><span class=\"agtime"+(timed?"":" tbd")+"\">"+(timed?esc(v.visit_date.slice(11,16)):"hora por definir")+"</span>";
-  if(clash[v.id])h+="<span class=\"pill warn\">⚠️ choque de horario</span>";
-  if(ruled)h+="<span class=\"pill err\">descartado</span>";
+  var h="<div class=\"agitem"+(past?" agpast":"")+"\">";
+  h+="<div class=\"agtop\"><span class=\"agtime"+(timed?"":" tbd")+"\">"+(timed?esc(v.visit_date.slice(11,16)):"hora por definir")+"</span>";
+  if(v.who)h+="<span class=\"agwho\">"+whoMarks(v.who)+"</span>";
   h+="</div>";
-  h+="<div class=\"agname"+(ruled?" xout":"")+"\"><a href=\"#apt-"+r.id+"\"><span class=\"hash\">#"+r.id+"</span> "+esc(aptName(r))+"</a>";
-  if(v.who)h+=" <span class=\"agwho\">· va"+(v.who==="both"?"n":"")+" "+esc(whoLabel(v.who))+" "+whoMarks(v.who)+"</span>";
-  h+="</div>";
+  if(clash[v.id]||ruled){
+    h+="<div>";
+    if(clash[v.id])h+="<span class=\"pill warn\">⚠️ choque de horario</span>";
+    if(ruled)h+="<span class=\"pill err\">descartado</span>";
+    h+="</div>";
+  }
+  h+="<div class=\"agname"+(ruled?" xout":"")+"\"><a href=\"#apt-"+r.id+"\"><span class=\"hash\">#"+r.id+"</span> "+esc(aptName(r))+"</a></div>";
   var pa=priceAreaBits(r);
   if(pa.length)h+="<div class=\"agmeta\">"+esc(pa.join(" · "))+"</div>";
   var ct=contactLines(r); // the fixed contact idiom: Maps address, WhatsApp + «llamar»
@@ -878,7 +896,7 @@ function agendaEntry(e,now,clash){
     h+="<button class=\"btn sm\" data-act=\"vnote\" data-vid=\""+v.id+"\" data-id=\""+r.id+"\">✎ Impresión</button>";
   }
   if(ruled)h+="<button class=\"btn sm\" data-act=\"re\" data-id=\""+r.id+"\">↩ Reconsiderar</button>";
-  h+="</div></div></div>";
+  h+="</div></div>";
   return h;
 }
 function renderAgenda(){
@@ -911,14 +929,20 @@ function renderAgenda(){
     h+="<div class=\"empty\">Una semana en blanco.<span class=\"esub\">"+nudge+"</span></div>";
     return h;
   }
-  // every day present, empty ones as quiet rules — a hunting week's gaps are information
-  h+="<div class=\"evs\">";
+  // every day gets a column, empty ones included — a hunting week's gaps are information.
+  // Focus = today when the week contains it, else the first day with a visit (snap target).
+  var focusDs=null;
+  if(todayStr>=mon&&todayStr<=end)focusDs=todayStr;
+  else for(var f=0;f<7;f++){var fd=addDays(mon,f);if(byDay[fd]){focusDs=fd;break;}}
+  h+="<div class=\"agdays\">";
   for(var d=0;d<7;d++){
     var ds=addDays(mon,d),list=byDay[ds]||[];
     var clash=agClashes(list);
-    h+="<div class=\"dayhead"+(ds===todayStr?" today":"")+"\">"+esc(fmtDayLong(ds))+(ds===todayStr?" · hoy":"")+"</div>";
-    if(!list.length){h+="<div class=\"ev"+(ds<todayStr?" agpast":"")+"\"><span class=\"node dim\">·</span><div class=\"agfree\">libre</div></div>";continue;}
-    for(var q=0;q<list.length;q++)h+=agendaEntry(list[q],now,clash);
+    var cls="agday"+(ds===todayStr?" today":ds<todayStr?" past":"")+(ds===focusDs?" focus":"");
+    h+="<div class=\""+cls+"\"><div class=\"dh\">"+esc(fmtDayLong(ds))+(ds===todayStr?" · hoy":"")+"</div>";
+    if(!list.length)h+="<div class=\"agfree\">libre</div>";
+    else for(var q=0;q<list.length;q++)h+=agendaEntry(list[q],now,clash);
+    h+="</div>";
   }
   h+="</div>";
   return h;
@@ -1430,10 +1454,22 @@ function render(){
   $g("roster").innerHTML=rosterHtml();
   var v=$g("view");
   stashMap(); // the innerHTML swap below would otherwise destroy the live Leaflet node
+  // a quick action re-renders the same week — keep the horizontal seat; entering the view or
+  // changing weeks (AG_SNAP) snaps to the focus day instead
+  var prevAg=(!AG_SNAP&&VIEWSTATE.name==="agenda")?v.querySelector(".agdays"):null;
+  var keepAg=prevAg?prevAg.scrollLeft:null;
   if(VIEWSTATE.name==="apt")v.innerHTML=renderApt(VIEWSTATE.id);
   else if(VIEWSTATE.name==="agenda")v.innerHTML=renderAgenda();
   else if(VIEWSTATE.name==="indice")v.innerHTML=renderIndice();
   else v.innerHTML=renderDiario();
+  if(VIEWSTATE.name==="agenda"){
+    var agbox=v.querySelector(".agdays");
+    if(agbox){
+      if(keepAg!=null)agbox.scrollLeft=keepAg;
+      else{var fc=agbox.querySelector(".agday.focus");if(fc)agbox.scrollLeft=Math.max(0,fc.offsetLeft-agbox.offsetLeft);}
+    }
+    AG_SNAP=false;
+  }
   renderComposer(VIEWSTATE.name==="apt"?VIEWSTATE.id:null);
   placeMap();
   // sheets that mirror server state re-render on fresh data; typing sheets are left alone
@@ -1488,6 +1524,7 @@ document.addEventListener("click",function(e){
     var wd=el.getAttribute("data-d");
     var wtd=((DATA&&DATA.today)||nowBogota().slice(0,10)).slice(0,10);
     AGENDA_WEEK=wd==="hoy"?mondayOf(wtd):addDays(AGENDA_WEEK||mondayOf(wtd),Number(wd));
+    AG_SNAP=true; // a fresh week starts at its focus day, not the previous week's offset
     render();return;
   }
   if(act==="re"){
