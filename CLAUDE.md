@@ -25,7 +25,11 @@ an Access Bypass application on the `mcp` path (README §5–6).
 There are no tests: verification = `npx tsc --noEmit` + reading the diff;
 real verification happens in the Telegram group after `npm run deploy`.
 
-- `npm run dev` — `wrangler dev` (local D1: apply `schema.sql` with `--local` first)
+- `npm run dev` — web screens on localhost:8787, local D1 seeded from
+  `schema.sql` + `seed.sql` automatically, Access faked via `--var DEV_USER`.
+  Preview it through `.claude/launch.json` (`household-worker`) — works the
+  same locally and in Claude Code web. See ARCHITECTURE.md §9.
+- `npm run typecheck` — `tsc --noEmit`
 - `npm run deploy` — `wrangler deploy` (does NOT run migrations — see below)
 
 ## Architecture

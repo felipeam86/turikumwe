@@ -9,6 +9,39 @@ reminders, and two Access-protected web screens (`/dashboard.html`,
 How it's built lives in **`ARCHITECTURE.md`** (routes, data model, crons,
 migration discipline). This file is setup only.
 
+## Local development
+
+To see the web screens while working on them — same two commands on your Mac
+and in Claude Code web:
+
+```bash
+npm install && npm run dev
+```
+
+Then open http://localhost:8787. `npm run dev` applies `schema.sql` +
+`seed.sql` to the local D1 first (idempotent), so the screens come up with
+demo apartments, visits, votes and household items instead of blank. No
+secrets, no Cloudflare account, no network needed.
+
+In Claude Code, ask for a preview instead of running the command yourself —
+`.claude/launch.json` exposes the same script as the `household-worker`
+target, and Claude can then screenshot and click through the pages.
+
+What's different from production:
+
+- No Cloudflare Access, so the dev script fakes the logged-in user with
+  `--var DEV_USER:…`. Voting and notes work; change the address in
+  `package.json` to test as someone else.
+- Telegram echoes and calendar mail fail silently (no `BOT_TOKEN`) — the
+  database write still happens.
+- Crons don't fire on their own:
+  `curl "http://localhost:8787/cdn-cgi/handler/scheduled?cron=30+12+*+*+*"`.
+- Editing `src/*.html` hot-reloads; just refresh.
+
+Reset the demo data at any time with `npm run db:local`. Seeded rows (ids
+1–9 / 1–5) snap back; anything you added by hand stays. Before pushing:
+`npm run typecheck`.
+
 ## Setup
 
 ### 1. Install & create the database

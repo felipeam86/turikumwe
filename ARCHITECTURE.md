@@ -106,6 +106,9 @@ wrangler + typescript only. HTML screens are static files imported as text.
 wrangler.toml        infra: custom domain turikumwe.cc, 3 crons, D1 binding DB,
                      send_email binding INVITE_MAIL, vars (GROUP_CHAT_ID, INVITE_FROM/TO)
 schema.sql           the only schema definition (4 tables) — CREATE TABLE IF NOT EXISTS
+seed.sql             demo rows for local dev only (§9) — fixed ids + INSERT OR REPLACE,
+                     dates relative to `now`; never run against --remote
+.claude/launch.json  `npm run dev` as a Claude Code preview target on port 8787
 src/
   index.ts           ALL logic (~1600 lines): date helpers, votes, geocoding,
                      WhatsApp/maps links, iCalendar invites + MIME mail, db helpers,
@@ -287,8 +290,20 @@ update.
 
 ## 9. Build, run, deploy
 
-- `npm run dev` — `wrangler dev`; first apply the schema locally:
-  `npx wrangler d1 execute household --local --file schema.sql`.
+- `npm run dev` — serves the web screens on http://localhost:8787. A `predev`
+  hook runs `npm run db:local` first (schema + `seed.sql` into the local D1),
+  so a fresh clone shows populated screens with no manual step; re-running is
+  idempotent. Point Claude Code's preview at it with `.claude/launch.json`
+  (config name `household-worker`) — same command locally and on the web.
+- **Local dev has no Cloudflare Access**, so the dev script passes
+  `--var DEV_USER:felipeam86@turikumwe.cc`; `webUser()` falls back to it when
+  the `cf-access-authenticated-user-email` header is absent, which is what
+  makes voting and note authorship work locally. A deployed Worker never has
+  the var (it's a `wrangler dev` flag, not a `[vars]` entry).
+- Telegram echoes and mail from local actions fail silently (no `BOT_TOKEN` /
+  no Email Routing) — the D1 write still lands. Crons don't self-trigger
+  locally: `curl "http://localhost:8787/cdn-cgi/handler/scheduled?cron=30+12+*+*+*"`.
+- `npm run typecheck` — `tsc --noEmit`, the only pre-deploy check (§10).
 - `npm run deploy` — `wrangler deploy`. **Deploy does NOT run migrations** —
   see §6; column migrations go first.
 - Setup from scratch (D1 create, secrets, webhook registration, Access apps,
