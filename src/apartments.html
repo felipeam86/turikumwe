@@ -34,6 +34,9 @@
     color-scheme:dark;
   }
   *{box-sizing:border-box;min-width:0;}
+  /* the view switch toggles [hidden] on blocks that carry their own display:flex/grid,
+     which would silently win over the UA's [hidden]{display:none} */
+  [hidden]{display:none!important;}
   html,body{overflow-x:hidden;}
   body{font-family:var(--font-ui);background:var(--bg0);color:var(--fg);margin:0;
     padding:14px 14px calc(30px + env(safe-area-inset-bottom));-webkit-font-smoothing:antialiased;}
@@ -100,6 +103,57 @@
   .seg .n{font-size:14px;color:var(--dim);font-variant-numeric:tabular-nums;letter-spacing:0;}
   .seg.on{color:var(--fg);border-color:var(--fg);background:var(--bg1);}
   .seg.on .n{color:var(--fg);}
+
+  /* ---- view switch: Lista (stage axis) / Agenda (time axis) — underline tabs, a different
+     shape than the boxed segments because it's a different question ---- */
+  .vsws{display:flex;gap:2px;border-bottom:1px solid var(--line);margin:0 0 12px;}
+  .vsw{font-family:var(--font-d);font-weight:600;font-size:15px;letter-spacing:.08em;text-transform:uppercase;
+    background:none;border:none;border-bottom:2px solid transparent;margin-bottom:-1px;color:var(--mut);
+    min-height:46px;padding:4px 14px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;
+    transition:color .14s,border-color .14s;}
+  .vsw.on{color:var(--fg);border-bottom-color:var(--fg);}
+  .vsw .n{font-size:14px;color:var(--dim);letter-spacing:0;font-variant-numeric:tabular-nums;}
+  .vsw.on .n{color:var(--fg);}
+
+  /* ---- agenda: one week (lun–dom) of visits (see DESIGN.md) ---- */
+  .aghead{display:flex;align-items:center;gap:8px;margin:2px 0 10px;flex-wrap:wrap;}
+  .agnav{margin-left:auto;display:flex;align-items:center;gap:6px;}
+  .agnav button{font-family:inherit;font-size:17px;font-weight:600;min-width:44px;min-height:44px;background:var(--bg1);
+    color:var(--fg);border:1px solid var(--line);border-radius:var(--r-ctl);cursor:pointer;padding:0;transition:background .14s;}
+  .agnav button:active{background:var(--bg3);}
+  .agweek{font-family:var(--font-d);font-weight:600;font-size:16px;letter-spacing:.06em;text-transform:uppercase;
+    text-align:center;min-width:108px;white-space:nowrap;font-variant-numeric:tabular-nums;}
+  .agdays{display:flex;gap:8px;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;
+    padding-bottom:4px;scrollbar-width:none;}
+  .agdays::-webkit-scrollbar{display:none;}
+  .agday{flex:0 0 74vw;max-width:310px;min-height:132px;scroll-snap-align:start;background:var(--bg1);
+    border:1px solid var(--line);border-radius:12px;padding:10px 11px;}
+  .agday.today{border-color:var(--now);}
+  .agday.past{opacity:.55;}
+  .agdh{font-family:var(--font-d);font-weight:600;font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--mut);white-space:nowrap;}
+  .agday.today .agdh{color:var(--now);}
+  .agfree{color:var(--dim);font-size:12.5px;font-style:italic;padding:10px 0 2px;}
+  .ag{padding:10px 0 6px;}
+  .ag+.ag{border-top:1px solid var(--line);}
+  .agtime{font-family:var(--font-d);font-weight:700;font-size:27px;line-height:1;font-variant-numeric:tabular-nums;}
+  .agtime.next{color:var(--now);}
+  .agtbd{color:var(--mut);font-size:13px;font-style:italic;padding:6px 0 2px;}   /* same voice as .htbd */
+  .agflags{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;}
+  .agname{display:block;width:100%;text-align:left;background:none;border:none;padding:8px 0 2px;min-height:44px;
+    font-size:14px;font-weight:600;line-height:1.35;cursor:pointer;overflow-wrap:break-word;}
+  .agx .agname{text-decoration:line-through;text-decoration-color:var(--dim);color:var(--mut);}
+  .agx .agtime{color:var(--dim);}
+  .agmeta{color:var(--mut);font-size:12px;line-height:1.5;font-variant-numeric:tabular-nums;}
+  .ag .contactb{font-size:12px;margin-top:6px;line-height:1.7;}
+  /* desktop: the full week side by side while browsing; opening a ficha docks the sheet right
+     and the week compresses back to snap-scrolling columns */
+  @media(min-width:760px){
+    html:not(.sheet-open) .cols.agview{grid-template-columns:minmax(0,1fr);}
+    html:not(.sheet-open) .cols.agview .colR{display:none;}
+    html:not(.sheet-open) .cols.agview .agdays{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));overflow:visible;}
+    html:not(.sheet-open) .cols.agview .agday{max-width:none;}
+    html.sheet-open .agday{flex-basis:250px;}
+  }
 
   /* ---- apartment rows ---- */
   .rows{display:flex;flex-direction:column;gap:8px;}
@@ -337,10 +391,12 @@
   <div id="mapbox" hidden><div id="map"></div></div>
   <div class="cols">
     <div class="colL">
+      <div class="vsws" id="vsw"></div>
       <div class="segs" id="segs"></div>
       <div class="rows" id="list">
         <div class="skel" style="height:64px"></div><div class="skel" style="height:64px"></div><div class="skel" style="height:64px"></div>
       </div>
+      <div id="agendabox" hidden></div>
       <div id="ruledbox2"></div>
       <div class="foot">Toca un apartamento para agendar visitas, seguir documentos o descartarlo.<br>
         También puedes responder al mensaje del apto en Telegram: «visita el martes a las 10am».<br>
@@ -408,6 +464,18 @@ function vdVal(vd){const v=vd?String(vd):"";return (v&&v.indexOf("T")<0)?v+"T09:
 // all date math on YYYY-MM-DD strings anchored at UTC midnight, so wall-clock dates never shift with the browser TZ
 function parseDay(s){return new Date(s.slice(0,10)+"T00:00:00Z");}
 function addDays(s,n){const d=parseDay(s);d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10);}
+// Monday of the week containing s — the agenda's anchor day
+function mondayOf(s){const d=parseDay(s);d.setUTCDate(d.getUTCDate()-((d.getUTCDay()+6)%7));return d.toISOString().slice(0,10);}
+// agenda day-column header: weekday + day only (the week label already carries the month)
+function fmtDayHead(s){try{return parseDay(s).toLocaleDateString("es-CO",{timeZone:"UTC",weekday:"short",day:"numeric"});}catch(e){return s;}}
+// «3 – 9 ago» — the month (and year) only appear on the side where they disambiguate
+function weekLabel(a,b){try{
+  const da=parseDay(a),db=parseDay(b);
+  const oa={timeZone:"UTC",day:"numeric"},ob={timeZone:"UTC",day:"numeric",month:"short"};
+  if(da.getUTCMonth()!==db.getUTCMonth())oa.month="short";
+  if(da.getUTCFullYear()!==db.getUTCFullYear()){oa.year="numeric";ob.year="numeric";}
+  return da.toLocaleDateString("es-CO",oa)+" – "+db.toLocaleDateString("es-CO",ob);
+}catch(e){return a+" – "+b;}}
 function fmtDay(s){try{return parseDay(s).toLocaleDateString("es-CO",{timeZone:"UTC",weekday:"short",day:"numeric",month:"short"});}catch(e){return s;}}
 function fmtDT(s){const d=fmtDay(s);const t=s.length>10?s.slice(11,16):"";return t?d+" · "+t:d+" · hora por definir";}
 function noteDate(s){try{return parseDay(s).toLocaleDateString("es-CO",{timeZone:"UTC",day:"numeric",month:"short"});}catch(e){return s;}}
@@ -439,6 +507,16 @@ function lastVisitOf(r){
   return best;
 }
 function stageOf(r){return nextVisitOf(r)?"scheduled":(lastVisitOf(r)?"visited":"pending");}
+// double-booking: same-day TIMED visits whose starts are <60 min apart both get flagged;
+// date-only visits have no comparable time, so they never clash. Keyed by visit id.
+function markOverlaps(list){
+  const timed=list.filter((v)=>v.visit_date.length>10).sort((a,b)=>a.visit_date<b.visit_date?-1:1);
+  const ids={};
+  for(let i=1;i<timed.length;i++){
+    if(wallMs(timed[i].visit_date)-wallMs(timed[i-1].visit_date)<60*60000){ids[timed[i-1].id]=1;ids[timed[i].id]=1;}
+  }
+  return ids;
+}
 
 function whoLabel(w){return w==="felipe"?"Felipe":w==="lucia"?"Lucía":w==="both"?"los dos":"";}
 function voterName(p){return p==="felipe"?"Felipe":p==="lucia"?"Lucía":p?(p.charAt(0).toUpperCase()+p.slice(1)):"";}
@@ -542,11 +620,16 @@ try{
 }catch(e){}
 let SEG=localStorage.getItem("radarSeg");
 if(SEG!=="pending"&&SEG!=="scheduled"&&SEG!=="visited")SEG=null; // resolved on first render
+let VIEW=localStorage.getItem("radarView");
+if(VIEW!=="agenda")VIEW="list"; // stale saved value degrades to the list
+let WEEK_START=null; // Monday shown in the agenda; first agenda render picks the week of the next visit
+let AG_WEEK=null;    // week last painted — keeps the reader's day-scroll across quick-action re-renders
 let OPEN=null;      // apartment id shown in the sheet/panel
 let MODE="view";    // 'view' | 'edit' | 'discard'
 let MAP_ON=false;
 function saveFilters(){try{localStorage.setItem("radarF",JSON.stringify(FILTERS));}catch(e){}}
 function saveSeg(){try{localStorage.setItem("radarSeg",SEG);}catch(e){}}
+function saveView(){try{localStorage.setItem("radarView",VIEW);}catch(e){}}
 function filtersActive(){return !!(FILTERS.deal||FILTERS.minBeds||FILTERS.maxPrice!=null||FILTERS.tag);}
 
 function allRows(){return ((DATA&&DATA.apartments)||[]).concat((DATA&&DATA.ruledOut)||[]);}
@@ -739,6 +822,114 @@ function ruledHtml(list){
     h+='<button class="btn sm" data-act="reactivate" data-id="'+r.id+'">↩️ Reconsiderar</button></div>';
   }
   return h+"</details>";
+}
+
+/* ================= agenda: the hunting week ================= */
+// the view switch: Lista (pipeline, stage axis) vs Agenda (one week, time axis)
+function upcomingVisitCount(){ // every upcoming scheduled visit, actives + descartados — follow-ups count
+  const now=nowBogota();let n=0;
+  for(const r of allRows())for(const v of (r.visits||[]))if(v.status==="scheduled"&&visitCmp(v.visit_date)>=now)n++;
+  return n;
+}
+function vswHtml(){
+  const n=upcomingVisitCount();
+  return '<button class="vsw'+(VIEW==="list"?" on":"")+'" data-act="view-list">Lista</button>'
+    +'<button class="vsw'+(VIEW==="agenda"?" on":"")+'" data-act="view-agenda">Agenda'+(n?' <span class="n">'+n+"</span>":"")+"</button>";
+}
+// EVERY scheduled visit row across actives + descartados — one apartment can appear several
+// times (follow-ups), and a ruled-out apartment's visit stays visible, crossed out, never hidden
+function agEntries(){
+  const out=[];
+  for(const r of allRows())for(const v of (r.visits||[]))if(v.status==="scheduled")out.push({v:v,r:r});
+  out.sort((a,b)=>a.v.visit_date<b.v.visit_date?-1:1);
+  return out;
+}
+// one agenda entry = one visit row: time, #id · location (opens the ficha), quién va,
+// price/area, contact block, then the per-visit controls
+function agEntryHtml(e,clash,globalNextId,now){
+  const r=e.r,v=e.v;
+  const ruled=r.status==="ruled_out";
+  const timed=v.visit_date.length>10;
+  const past=visitCmp(v.visit_date)<now;
+  const nx=nextVisitOf(r);
+  const isNext=!ruled&&!!nx&&nx.id===v.id; // the visit the server (re)sends the invite for
+  let h='<div class="ag'+(ruled?" agx":"")+'">';
+  // accent discipline: only THE next visit (the one on the HOY board) gets cyan numerals
+  h+=timed
+    ?'<div class="agtime'+(globalNextId===v.id?" next":"")+'">'+esc(v.visit_date.slice(11,16))+"</div>"
+    :'<div class="agtbd">hora por definir</div>';
+  let flags="";
+  if(ruled)flags+='<span class="pill err">🚫 descartado</span>';
+  if(clash[v.id])flags+='<span class="pill warn">⚠️ choque de horario</span>';
+  if(past&&!ruled)flags+='<span class="pill mut">✓ hecha</span>';
+  if(flags)h+='<div class="agflags">'+flags+"</div>";
+  h+='<button class="agname" data-act="ag-open" data-id="'+r.id+'"><span class="rid">#'+r.id+"</span> "+esc(aptName(r))+"</button>";
+  const bits=priceAreaBits(r);
+  if(v.who)bits.push((past?"fueron: ":"van: ")+whoLabel(v.who));
+  if(bits.length)h+='<div class="agmeta num">'+esc(bits.join(" · "))+"</div>";
+  h+=contactHtml(r); // ONE contact idiom: address→Maps, phone→WhatsApp + tel: (§2.7)
+  if(!past){
+    h+='<div class="vctl">'; // class vctl so swapToDateInput finds its box
+    h+='<button class="btn sm" data-act="visit-when" data-vid="'+v.id+'" data-val="'+esc(vdVal(v.visit_date))+'">⏱ Reprogramar</button>';
+    if(isNext)h+='<button class="btn sm" data-act="invite" data-id="'+r.id+'">📧 Invitación</button>';
+    if(ruled)h+='<button class="btn sm" data-act="reactivate" data-id="'+r.id+'">↩️ Reactivar</button>';
+    h+='<button class="btn sm dgr" data-act="visit-cancel" data-vid="'+v.id+'">✕ Cancelar</button>';
+    h+="</div>";
+  }else if(ruled){
+    h+='<div class="vctl"><button class="btn sm" data-act="reactivate" data-id="'+r.id+'">↩️ Reactivar</button></div>';
+  }
+  return h+"</div>";
+}
+function agendaHtml(){
+  const entries=agEntries();
+  const now=nowBogota(),td=(DATA.today||now.slice(0,10)).slice(0,10);
+  if(!WEEK_START){
+    const nx=entries.find((e)=>visitCmp(e.v.visit_date)>=now);
+    WEEK_START=mondayOf(nx?nx.v.visit_date.slice(0,10):td);
+  }
+  const end=addDays(WEEK_START,6);
+  const byDay={};
+  for(const e of entries){const k=e.v.visit_date.slice(0,10);(byDay[k]=byDay[k]||[]).push(e);}
+  let wk=0;
+  for(let d=0;d<7;d++)wk+=(byDay[addDays(WEEK_START,d)]||[]).length;
+  const cur=WEEK_START===mondayOf(td);
+  const gn=nextVisitGlobal();
+  let h='<div class="aghead"><span class="eyebrow">'+(cur?"Esta semana":"Semana")
+    +(wk?' <span class="cnt num">'+wk+(wk===1?" visita":" visitas")+"</span>":"")+"</span>";
+  if(!cur)h+='<button class="btn sm ghost" data-act="ag-today">↩ esta semana</button>';
+  h+='<div class="agnav"><button data-act="ag-prev" aria-label="Semana anterior">‹</button>'
+    +'<span class="agweek">'+esc(weekLabel(WEEK_START,end))+"</span>"
+    +'<button data-act="ag-next" aria-label="Semana siguiente">›</button></div></div>';
+  if(!wk){ // a week with nothing booked: say so, and point at the backlog
+    const pend=(DATA.apartments||[]).filter((r)=>stageOf(r)==="pending").length;
+    return h+'<div class="empty">Semana libre — sin visitas.'
+      +(pend?("<br>Hay <b>"+pend+"</b> apartamento"+(pend===1?"":"s")+" por agendar."
+        +'<br><button class="btn sm" data-act="nav-seg" data-seg="pending">Ver por agendar →</button>')
+        :"<br>Comparte un link de un apartamento en el grupo de Telegram para empezar.")
+      +"</div>";
+  }
+  // day the phone view scrolls to: today if on screen, else the week's first day with a visit
+  let focus=null;
+  if(td>=WEEK_START&&td<=end)focus=td;
+  else for(let f=0;f<7;f++){const fd=addDays(WEEK_START,f);if(byDay[fd]){focus=fd;break;}}
+  h+='<div class="agdays" id="agdays">';
+  for(let d=0;d<7;d++){
+    const ds=addDays(WEEK_START,d);
+    const list=byDay[ds]||[];
+    const clash=markOverlaps(list.map((e)=>e.v)); // visit ids clashing on this day
+    h+='<div class="agday'+(ds===td?" today":(td&&ds<td?" past":""))+(ds===focus?" focus":"")+'">';
+    h+='<div class="agdh num">'+esc(fmtDayHead(ds))+(ds===td?" · hoy":"")+"</div>";
+    if(!list.length)h+='<div class="agfree">libre</div>'; // an empty hunting day is information
+    for(const e of list)h+=agEntryHtml(e,clash,gn&&gn.v?gn.v.id:null,now);
+    h+="</div>";
+  }
+  return h+"</div>";
+}
+function snapAgenda(){ // phones: bring the focus day into view after a fresh week paint
+  const wrap=$("agdays");
+  if(!wrap||wrap.scrollWidth<=wrap.clientWidth)return;
+  const cell=wrap.querySelector(".agday.focus");
+  if(cell)wrap.scrollLeft+=cell.getBoundingClientRect().left-wrap.getBoundingClientRect().left;
 }
 
 /* ================= detail sheet ================= */
@@ -984,6 +1175,7 @@ function mapPopup(r){
 }
 function updateMap(){
   const box=$("mapbox");
+  if(VIEW==="agenda"){box.hidden=true;return;} // the map is a list companion; MAP_ON survives the switch
   if(!MAP_ON||!window.L||!DATA){box.hidden=true;return;} // Leaflet CDN unreachable → no map, no error
   const rows=mapRows();
   if(!rows.length){box.hidden=true;return;}
@@ -1047,10 +1239,26 @@ function render(){
   if(DATA.today){const nd=new Date(DATA.today+"T00:00:00Z");niceDay=isNaN(nd)?DATA.today:nd.toLocaleDateString("es-CO",{timeZone:"UTC",weekday:"long",day:"numeric",month:"long"});}
   $("status").textContent=parts.join(" · ")+(niceDay?" · "+niceDay:"");
   $("hero").innerHTML=heroHtml();
+  const ag=VIEW==="agenda";
   $("fbar").innerHTML=fbarHtml(rows);
+  $("fbar").hidden=ag; // filters/orden/mapa are list concerns — the agenda shows every visit
+  $("vsw").innerHTML=vswHtml();
+  document.querySelector(".cols").classList.toggle("agview",ag);
+  $("segs").hidden=ag;$("list").hidden=ag;$("ruledbox2").hidden=ag;
   $("segs").innerHTML=segsHtml(counts);
   $("list").innerHTML=listHtml(shown);
   $("ruledbox2").innerHTML=ruledHtml(ruled);
+  const agBox=$("agendabox");
+  if(ag){
+    const html=agendaHtml(); // may resolve WEEK_START on first agenda render
+    const prev=$("agdays");
+    // same week repainted (doc tap, reprogramar…) → keep the reader's day; new week → snap to focus
+    const keep=(prev&&AG_WEEK===WEEK_START)?prev.scrollLeft:null;
+    agBox.hidden=false;agBox.innerHTML=html;
+    const el=$("agdays");
+    if(el){if(keep!=null)el.scrollLeft=keep;else snapAgenda();}
+    AG_WEEK=WEEK_START;
+  }else{agBox.hidden=true;agBox.innerHTML="";AG_WEEK=null;}
   renderDetail();
   updateMap();
   jumpToHash();
@@ -1094,12 +1302,14 @@ async function saveEdits(id,changes){
 /* ================= navigation / deep links ================= */
 function gotoApt(id,flash){
   const r=findApt(id);if(!r)return;
-  if(r.status==="ruled_out"){
-    const det=$("ruledbox");if(det)det.open=true;
-  }else{
+  let dirty=false;
+  if(VIEW!=="list"){VIEW="list";saveView();dirty=true;} // the rows (and #apt-<id> anchors) live in the list
+  if(r.status!=="ruled_out"){
     const st=stageOf(r);
-    if(SEG!==st){SEG=st;saveSeg();render();}
+    if(SEG!==st){SEG=st;saveSeg();dirty=true;}
   }
+  if(dirty)render();
+  if(r.status==="ruled_out"){const det=$("ruledbox");if(det)det.open=true;}
   OPEN=id;MODE="view";renderDetail();
   const el=document.getElementById("apt-"+id);
   if(el){
@@ -1191,8 +1401,18 @@ document.addEventListener("click",(e)=>{
 
   /* nav + chrome */
   if(act==="open"){gotoApt(id,false);return;}
+  if(act==="ag-open"){OPEN=id;MODE="view";renderDetail();return;} // open the ficha WITHOUT leaving the agenda
   if(act==="close"){OPEN=null;MODE="view";renderDetail();return;}
-  if(act==="nav-seg"){SEG=t.getAttribute("data-seg");saveSeg();render();
+  if(act==="view-list"||act==="view-agenda"){
+    const nv=act==="view-agenda"?"agenda":"list";
+    if(VIEW!==nv){VIEW=nv;saveView();render();}
+    return;
+  }
+  if(act==="ag-prev"||act==="ag-next"){WEEK_START=addDays(WEEK_START,act==="ag-next"?7:-7);render();return;}
+  if(act==="ag-today"){WEEK_START=mondayOf(((DATA&&DATA.today)||nowBogota()).slice(0,10));render();return;}
+  if(act==="nav-seg"){SEG=t.getAttribute("data-seg");saveSeg();
+    if(VIEW!=="list"){VIEW="list";saveView();} // a pipeline segment is a list destination
+    render();
     const sg=$("segs");if(sg)sg.scrollIntoView({block:"nearest"});return;}
   if(act==="hero-docs"){gotoApt(id,false);setTimeout(()=>{const s=$("docsSect");if(s)s.scrollIntoView({block:"start",behavior:"smooth"});},80);return;}
   if(act==="bar-agendar"){

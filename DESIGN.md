@@ -45,7 +45,9 @@ room. Defined as CSS custom properties on `:root`.
 **The accent rule (the system's backbone):** `--now` cyan means *time* —
 now, next, live. It appears ONLY on: the HOY board (signal dot, countdown,
 edge stripe), next-visit facts and pills, the accent map pin (upcoming
-visit), the focus ring, and the `#apt-<id>` deep-link flash. It is **never**
+visit), the agenda's today column (border + day header) and the time
+numerals of THE next visit (the same one the HOY board shows), the focus
+ring, and the `#apt-<id>` deep-link flash. It is **never**
 used for chrome: buttons, links, and active states are neutrals (`--fg` +
 borders). Green/amber/red are strictly semantic (verdict / warning /
 discard) — never decorative. If a new element wants cyan, ask: *does it mean
@@ -111,6 +113,34 @@ DESCARTADAS) — quiet muted caps, never bold white headlines.
   to "off", never crash.
 - **Pipeline segments (`.seg`)** — Por agendar / Agendadas / Visitadas with
   live counts; the active segment is the stage filter (persisted, `radarSeg`).
+- **View switch (`.vsws`)** — two underline tabs above the segments: Lista /
+  Agenda (with the count of upcoming visits). Different axis, different
+  shape: the boxed segments ask *what stage*, the tabs ask *which lens* —
+  pipeline or week. Persisted (`radarView`); segment taps, deep links, and
+  map popups always land on Lista. In Agenda the filter chips and map hide —
+  the agenda shows every visit, unfiltered.
+- **Agenda (`#agendabox`)** — the hunting week. One week at a time, lun–dom;
+  ‹ › move ±7 days, «↩ esta semana» resets when off-week; condensed week
+  label («3 – 9 ago»). The first paint opens on the week of the next
+  upcoming visit. Every `scheduled` visit row gets an entry — follow-ups as
+  separate entries, ruled-out apartments struck through with 🚫 descartado +
+  Reactivar, never hidden. Entry anatomy, top to bottom: Barlow Cond 700
+  time numerals (or italic «hora por definir» for date-only visits), flag
+  pills (🚫 / ⚠️ choque de horario / ✓ hecha), `#id · location` (opens the
+  sheet without leaving the week), price · m² · quién va, the one contact
+  block (address→Maps, phone→WhatsApp + llamar), then per-visit controls:
+  ⏱ Reprogramar (swap-in-place datetime → `visit_edit` on THAT visit), 📧
+  Invitación (only the next visit of an active apartment — the server
+  re-sends for that one), ✕ Cancelar (two-tap). **Clash rule:** same-day
+  TIMED visits whose starts are <60 min apart flag BOTH entries amber;
+  date-only visits never clash. Today's column wears the accent border and
+  header; past days dim to 55% but stay; an empty day says «libre» (a
+  hunting week's gaps are information); a zero-visit week collapses to an
+  empty state that nudges with the «por agendar» count. Phones snap-scroll
+  the day columns and auto-focus today (else the week's first visit day),
+  keeping your day across quick-action re-renders; ≥760px the seven days
+  sit side by side full-width until a ficha opens and docks the sheet
+  right, when the week compresses back to scrolling columns.
 - **Row (`.row`)** — 64px min: thumb, `#id · location` + tag, price·m²·hab
   line, stage fact (next visit in accent / last visit + docs / "sin visita"),
   status pills right (sin leer, nuevo, ⬇bajó/⬆subió, 💚). Whole row opens the
