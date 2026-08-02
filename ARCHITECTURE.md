@@ -156,7 +156,7 @@ webhook (secret header) and `/mcp` (bearer token).
 | `GET /apartments-data.json` | Access | Active + ruled-out rows, photos, votes, `visits`, `docs`, `doc_types`, `me`; kicks off geocode backfill |
 | `GET /apt-photo/<id>` | Access | Streams a visit photo from Telegram by stored `file_id` (`?s=t` = thumb) |
 | `GET /apt-doc/<id>` | Access | Streams a due-diligence document from Telegram by stored `file_id` (with its filename) |
-| `POST /apartments-action` | Access | `set_visit` (next visit) / `visit_add` (follow-up) / `visit_edit` / `visit_cancel` (by `visit_id`) / `doc_set` / `doc_del` / `invite` / `rule_out` / `reactivate` / `rescrape` / `set_fields` / `edit` (allowlisted single field) / `vote` / `apt_note` / `apt_note_del`; most echo to Telegram; mutations return the post-mutation row incl. `visits`/`docs` |
+| `POST /apartments-action` | Access | `set_visit` (next visit) / `visit_add` (follow-up) / `visit_edit` / `visit_cancel` (by `visit_id`) / `doc_set` / `doc_del` / `invite` / `rule_out` / `reactivate` / `rescrape` / `set_fields` / `edit` (allowlisted single field) / `vote` / `apt_note` / `apt_note_del`; most echo to Telegram; row-returning mutations return the post-mutation row incl. `visits`/`docs` (`vote` and `invite` return only `ok`) |
 | `GET /manifest.json`, `GET /icon.png` | Access | PWA manifest + icon — icons are **data URIs** because Chrome fetches manifest icons without the Access cookie |
 
 ### MCP endpoint
@@ -277,20 +277,27 @@ tool. Therefore:
   until it exists. Record the `ALTER` here.
 
 Applied one-off `ALTER`s on `apartments`, in order (a fresh
-`schema.sql` install already has all of them):
+`schema.sql` install has all of them except `visit_date` and
+`visit_reminder_sent`, retired by the v2 visits migration below):
 `image_url, notes` → `address, agent_name, agent_phone, tag` →
 `visit_reminder_sent` → `prev_price, price_changed_at` →
 `geo_lat, geo_lng, geo_address`.
 
 **Visits migration (v2).** `apartment_visits`/`apartment_docs` are new
 tables — re-applying `schema.sql` creates them. The single visit an
-apartment used to carry moved into `apartment_visits` with this one-off
-(run BEFORE deploying the code that reads the new table):
+apartment used to carry moves into `apartment_visits` with this one-off.
+Run it BEFORE deploying the code that reads the new table, then run it
+AGAIN right after the deploy — the `NOT EXISTS` guard makes it idempotent,
+and the second pass picks up any visit set through the old code in the gap
+(the old model held at most one visit per apartment). Do the whole thing in
+one sitting, avoiding the top of an hour when a same-day timed visit is
+pending (the reminder cron reads whichever side holds the visit):
 
 ```sql
 INSERT INTO apartment_visits (apartment_id, visit_date, who, status, reminder_sent, created_by, created_at, updated_at)
 SELECT id, visit_date, 'both', 'scheduled', visit_reminder_sent, created_by, updated_at, updated_at
-FROM apartments WHERE visit_date IS NOT NULL;
+FROM apartments WHERE visit_date IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM apartment_visits av WHERE av.apartment_id = apartments.id);
 ```
 
 The old `apartments.visit_date`/`visit_reminder_sent` columns stay in place

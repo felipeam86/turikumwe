@@ -663,11 +663,13 @@ async function reactivateApt(env: Env, id: number): Promise<{ row: any } | null>
   if (!res.meta.changes) return null;
   return { row: { ...row, status: 'active', ruled_out_reason: null, ruled_out_at: null, updated_at: now } };
 }
-// append one attributed, stamped note line ("YYYY-MM-DD [Autor]: text") — the format every reader parses
+// one attributed, stamped note line ("YYYY-MM-DD [Autor]: text") — the format every reader
+// parses (NOTE_LINE_RE); shared by apartment notes AND per-visit notes
+const stampLine = (author: string, note: string) => today() + (author ? ' [' + author + ']' : '') + ': ' + String(note).trim().slice(0, 300);
 async function appendAptNote(env: Env, id: number, author: string, note: string): Promise<{ row: any; stamped: string } | null> {
   const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
   if (!row) return null;
-  const stamped = today() + (author ? ' [' + author + ']' : '') + ': ' + String(note).trim().slice(0, 300);
+  const stamped = stampLine(author, note);
   const now = new Date().toISOString();
   await run(env, "UPDATE apartments SET notes=COALESCE(notes||char(10),'')||?, updated_at=? WHERE id=?", stamped, now, id);
   return { row: { ...row, notes: (row.notes ? row.notes + '\n' : '') + stamped, updated_at: now }, stamped };
@@ -683,9 +685,11 @@ const visitCmpSql = (col = 'visit_date') => `CASE WHEN length(${col})>10 THEN ${
 async function nextVisitRow(env: Env, aptId: number): Promise<any | null> {
   return get(env, `SELECT * FROM apartment_visits WHERE apartment_id=? AND status='scheduled' AND ${visitCmpSql()}>=? ORDER BY visit_date LIMIT 1`, aptId, nowBogota());
 }
-// the most recent visit that already happened (non-cancelled, in the past), or null
+// the most recent visit that already counts as done — RAW visit_date<=now, the same notion the
+// evening follow-up uses: a date-only visit is debriefable from its own day (its impressions
+// must land on it), even though the agenda keeps it "upcoming" through 23:59 (visitCmp padding)
 async function lastVisitRow(env: Env, aptId: number): Promise<any | null> {
-  return get(env, `SELECT * FROM apartment_visits WHERE apartment_id=? AND status='scheduled' AND ${visitCmpSql()}<? ORDER BY visit_date DESC LIMIT 1`, aptId, nowBogota());
+  return get(env, "SELECT * FROM apartment_visits WHERE apartment_id=? AND status='scheduled' AND visit_date<=? ORDER BY visit_date DESC LIMIT 1", aptId, nowBogota());
 }
 // who attends a visit: 'felipe' | 'lucia' | 'both' | null (unknown). Free-form input maps
 // through canonVoter so Telegram first names and Access local-parts land on the same values.
@@ -792,8 +796,10 @@ function classifyDoc(text: string): string {
   return 'otro';
 }
 // Upsert one doc row, keyed (apartment_id, doc_type) — 'otro' additionally keys by label so
-// several free-form documents can coexist (a label-less 'otro' never merges). Attaching a
-// Telegram file always flips the row to 'received'. Patch fields left undefined stay put.
+// several free-form documents can coexist. A label-less 'otro' WITH a file is always its own
+// new row; a label-less status-only update falls back to the latest 'otro' row (otherwise a
+// pending 'otro' could never be flipped from Telegram and would haunt every reminder).
+// Attaching a Telegram file always flips the row to 'received'. Undefined patch fields stay put.
 async function setDoc(env: Env, aptId: number, docType: string, patch: { status?: string; label?: string | null; note?: string | null; tg_file_id?: string; file_name?: string | null; mime_type?: string | null }, by: string | null): Promise<{ row: any; doc: any } | null> {
   if (!DOC_TYPES.some((t) => t.slug === docType)) return null;
   const row = await get(env, 'SELECT * FROM apartments WHERE id=?', aptId);
@@ -801,7 +807,9 @@ async function setDoc(env: Env, aptId: number, docType: string, patch: { status?
   const now = new Date().toISOString();
   const status = patch.status && (DOC_STATUSES as readonly string[]).includes(patch.status) ? patch.status : undefined;
   const existing = docType === 'otro'
-    ? (patch.label ? await get(env, "SELECT * FROM apartment_docs WHERE apartment_id=? AND doc_type='otro' AND label=?", aptId, patch.label) : null)
+    ? (patch.label
+      ? await get(env, "SELECT * FROM apartment_docs WHERE apartment_id=? AND doc_type='otro' AND label=?", aptId, patch.label)
+      : (patch.tg_file_id ? null : await get(env, "SELECT * FROM apartment_docs WHERE apartment_id=? AND doc_type='otro' ORDER BY id DESC LIMIT 1", aptId)))
     : await get(env, 'SELECT * FROM apartment_docs WHERE apartment_id=? AND doc_type=?', aptId, docType);
   if (existing) {
     const d = { ...existing };
@@ -1270,7 +1278,7 @@ const OP_LINES: Record<string, string> = {
   set_visit: '{"action":"set_visit","apt_id":<id from APARTMENTS>,"visit_date":"YYYY-MM-DDTHH:MM"|"YYYY-MM-DD"|null,"who":"felipe"|"lucia"|"both"|null} (user schedules or moves THE NEXT visit to an apartment: "visito el de Chicó el martes a las 10am", "la visita del apto 2 es el 20 a las 3pm", "agenda visita apto 1 mañana"; include the clock time as THH:MM in 24h when the user gives one — "10am"=>T10:00, "3pm"=>T15:00 — otherwise date only; visit_date=null cancels the next visit. who = who attends when stated: "voy yo"=>the sender, "va Lucía"=>lucia, "vamos los dos"=>both; omit or null when unsaid)',
   add_visit: '{"action":"add_visit","apt_id":<id from APARTMENTS>,"visit_date":"YYYY-MM-DDTHH:MM"|"YYYY-MM-DD","who":"felipe"|"lucia"|"both"|null} (an EXTRA visit — a follow-up / second look at an apartment already visited or already scheduled: "volvamos al 3 el sábado", "segunda visita al de Chicó el lunes a las 3pm", "quiero verlo otra vez")',
   visit_note: '{"action":"visit_note","apt_id":<id from APARTMENTS>,"note":"<short note>"} (how the LAST visit went — impressions from being there: "la visita al 3 estuvo genial, mucha luz", "en el de Cedritos olía a humedad". A general fact not tied to being there stays apt_note)',
-  set_doc: '{"action":"set_doc","apt_id":<id from APARTMENTS>,"doc":"<slug from DOC TYPES>","status":"pending"|"received"|"na"} (due-diligence document tracking: "pedimos el certificado de libertad del 3"=>pending, "ya mandaron el reglamento del 5"=>received, "el predial del 2 no aplica"=>na)',
+  set_doc: '{"action":"set_doc","apt_id":<id from APARTMENTS>,"doc":"<slug from DOC TYPES>","status":"pending"|"received"|"na","label":"<short name>"|null} (due-diligence document tracking: "pedimos el certificado de libertad del 3"=>pending, "ya mandaron el reglamento del 5"=>received, "el predial del 2 no aplica"=>na; label only for doc="otro" — the document\'s name as the user says it)',
   rule_out: '{"action":"rule_out","apt_id":<id from APARTMENTS>,"reason":"<short reason>"|null} (user wants to discard / stop considering an apartment: "descarta el apto 2", "ya no me interesa el de Chico Norte", "quita el más caro", "bájalo de la lista", "rule out the Cedritos one"; if they say why, capture a short reason like "muy caro", "muy lejos", "sin parqueadero")',
   reactivate: '{"action":"reactivate","apt_id":<id from RULED OUT>} (user wants to reconsider a previously discarded apartment: "vuelve a considerar el apto 2", "reactiva el de Chico Norte", "devuelve el descartado a la lista")',
   apt_note: '{"action":"apt_note","apt_id":<id from APARTMENTS>,"note":"<short note>"} (user records an opinion or fact about an apartment, often after a visit: "el de Chico Norte nos encantó", "apto 2: cocina pequeña pero buena luz", "el de Cedritos tiene mala vista")',
@@ -1334,11 +1342,14 @@ async function executeOps(env: Env, ops: any[], who: string, td: string): Promis
       wantAptSummary = true;
     } else if (op.action === 'set_visit' && op.apt_id != null) {
       const vd = (op.visit_date == null || op.visit_date === '') ? null : String(op.visit_date);
-      const opWho = op.who !== undefined ? canonWho(op.who) : undefined;
+      // who:null means "unsaid" per OP_LINES (and canonWho(null) for a mis-parsed name) — the
+      // Telegram vocabulary has no "clear who", so anything but a recognized person preserves
+      const opWho = op.who == null ? undefined : (canonWho(op.who) ?? undefined);
       const res = await setVisit(env, Number(op.apt_id), vd, { activeOnly: true, who: opWho, by: who.split(' ')[0] });
       if (res) {
         const whoBit = vd && res.visit?.who ? ` · va${res.visit.who === 'both' ? 'n' : ''} ${whoLabel(res.visit.who)}` : '';
-        visitsSet.push(mdEscape(aptRef(res.row)) + (vd ? (' → ' + dueLabel(vd, td) + hhmm(vd) + whoBit) : ' (visita cancelada)') + res.mailNote);
+        // a cancel with nothing scheduled must not announce a phantom cancellation
+        visitsSet.push(mdEscape(aptRef(res.row)) + (vd ? (' → ' + dueLabel(vd, td) + hhmm(vd) + whoBit) : (res.visit ? ' (visita cancelada)' : ' (no tenía visita próxima)')) + res.mailNote);
       } else notFound.push('apto #' + op.apt_id);
     } else if (op.action === 'add_visit' && op.apt_id != null && op.visit_date) {
       const res = await addVisit(env, Number(op.apt_id), String(op.visit_date), { activeOnly: true, who: canonWho(op.who), by: who.split(' ')[0] });
@@ -1351,7 +1362,7 @@ async function executeOps(env: Env, ops: any[], who: string, td: string): Promis
       // plain apartment note — same stamped-line format either way (NOTE_LINE_RE)
       const aptId = Number(op.apt_id);
       const lv = await lastVisitRow(env, aptId);
-      const stamped = td + ' [' + who.split(' ')[0] + ']: ' + String(op.note).trim().slice(0, 300);
+      const stamped = stampLine(who.split(' ')[0], String(op.note));
       if (lv) {
         const res = await editVisit(env, lv.id, { note: (lv.note ? lv.note + '\n' : '') + stamped });
         if (res) noted.push(mdEscape(aptRef(res.row) + ' (visita ' + String(lv.visit_date).slice(0, 10) + ') — ' + String(op.note).trim()));
@@ -1362,7 +1373,8 @@ async function executeOps(env: Env, ops: any[], who: string, td: string): Promis
         else notFound.push('apto #' + op.apt_id);
       }
     } else if (op.action === 'set_doc' && op.apt_id != null && DOC_TYPES.some((t) => t.slug === op.doc) && (DOC_STATUSES as readonly string[]).includes(op.status)) {
-      const res = await setDoc(env, Number(op.apt_id), String(op.doc), { status: String(op.status) }, who.split(' ')[0]);
+      const res = await setDoc(env, Number(op.apt_id), String(op.doc),
+        { status: String(op.status), ...(op.label ? { label: String(op.label).slice(0, 80) } : {}) }, who.split(' ')[0]);
       if (res) docsSet.push(mdEscape(docLabel(res.doc)) + ' de ' + mdEscape(aptRef(res.row)) + ' — ' + (DOC_STATUS_LABEL[String(op.status)] || String(op.status)));
       else notFound.push('apto #' + op.apt_id);
     } else if (op.action === 'rule_out' && op.apt_id != null) {
@@ -1441,7 +1453,8 @@ async function handleUpdate(env: Env, update: any) {
   // photos and documents first — they have no text, so they'd be dropped by the guard below.
   // Albums arrive as one update per photo; each is saved and acked individually.
   if (Array.isArray(msg.photo) && msg.photo.length) { await handlePhoto(env, msg); return; }
-  if (msg.document && msg.document.file_id) { await handleDocument(env, msg); return; }
+  // GIFs arrive with BOTH animation and document set — a meme is not due-diligence paperwork
+  if (msg.document && msg.document.file_id && !msg.animation) { await handleDocument(env, msg); return; }
   const text = String(msg.text || '').trim();
   if (!text) return;
   const who = [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(' ') || 'group';
@@ -1767,10 +1780,12 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
   const echo = (msg: string, markup?: unknown) => ctx.waitUntil(tgSend(env, msg, undefined, markup).catch(() => {}));
   if (b.action === 'set_visit') {
     const vd = (b.visit_date == null || b.visit_date === '') ? null : String(b.visit_date);
-    // no activeOnly: the web is the manual override and may (re)schedule on a ruled_out row (§8)
-    const res = await setVisit(env, id, vd, { who: b.who !== undefined ? canonWho(b.who) : undefined, by: webAuthor(req, env) || null });
+    // no activeOnly: the web is the manual override and may (re)schedule on a ruled_out row (§8).
+    // who: only a recognized person overwrites; null/unrecognized preserves (clear via visit_edit)
+    const res = await setVisit(env, id, vd, { who: b.who == null ? undefined : (canonWho(b.who) ?? undefined), by: webAuthor(req, env) || null });
     if (!res) return json({ ok: false, error: 'no encontrado' }, 404);
-    echo(aptAnnounce('visit', res.row, { via, visit: vd, who: res.visit?.who, mailNote: res.mailNote }).text);
+    // a cancel that found nothing scheduled must not announce a phantom cancellation
+    if (vd || res.visit) echo(aptAnnounce('visit', res.row, { via, visit: vd, who: res.visit?.who, mailNote: res.mailNote }).text);
     return json({ ok: true, row: await aptWithChildren(env, id), visit: res.visit });
   }
   if (b.action === 'visit_add') {
@@ -1788,8 +1803,16 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
     if (!vid) return json({ ok: false, error: 'missing visit_id' }, 400);
     const patch: any = {};
     if (b.visit_date !== undefined && b.visit_date !== null && b.visit_date !== '') patch.visit_date = String(b.visit_date);
-    if (b.who !== undefined) patch.who = canonWho(b.who);
-    if (b.note !== undefined) patch.note = (b.note && String(b.note).trim()) ? String(b.note).trim().slice(0, 500) : null;
+    if (b.who !== undefined) patch.who = canonWho(b.who); // here null IS the explicit clear
+    if (b.note !== undefined) {
+      // same idiom as apartment notes: non-empty note APPENDS a stamped line, null/empty clears
+      const txt = (b.note && String(b.note).trim()) ? String(b.note).trim() : null;
+      if (txt) {
+        const v0 = await get(env, 'SELECT note FROM apartment_visits WHERE id=?', vid);
+        if (!v0) return json({ ok: false, error: 'no encontrado' }, 404);
+        patch.note = (v0.note ? v0.note + '\n' : '') + stampLine(webAuthor(req, env), txt);
+      } else patch.note = null;
+    }
     const res = await editVisit(env, vid, patch);
     if (!res) return json({ ok: false, error: 'no encontrado' }, 404);
     if (res.dateChanged) echo(aptAnnounce('visit', res.row, { via, visit: res.visit.visit_date, who: res.visit.who, mailNote: res.mailNote }).text);
@@ -1843,17 +1866,17 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
     if (!res) return json({ ok: false, error: 'no encontrado' }, 404);
     const a = aptAnnounce('rule_out', res.row, { via, reason: res.reason });
     echo(a.text, a.markup);
-    return json({ ok: true, row: res.row });
+    return json({ ok: true, row: await aptWithChildren(env, id) });
   }
   if (b.action === 'reactivate') {
     const res = await reactivateApt(env, id);
     if (!res) return json({ ok: false, error: 'no encontrado' }, 404);
     echo(aptAnnounce('reactivate', res.row, { via }).text);
-    return json({ ok: true, row: res.row });
+    return json({ ok: true, row: await aptWithChildren(env, id) });
   }
   if (b.action === 'rescrape') {
     const res = await rescrapeOne(env, id);
-    const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
+    const row = await aptWithChildren(env, id);
     // a price move must reach the group no matter who pressed the button; the JSON carries
     // priceChange too so the frontend can toast it
     if (res.ok && res.priceChange && row) {
@@ -1870,7 +1893,7 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
     // a new/changed address gets geocoded right away, so the map pin appears on the reload
     const grow = await get(env, 'SELECT id, address, geo_address FROM apartments WHERE id=?', id);
     if (grow?.address && grow.address !== grow.geo_address) await geocodeApt(env, grow);
-    return json({ ok: true, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
+    return json({ ok: true, row: await aptWithChildren(env, id) });
   }
   if (b.action === 'edit') {
     // generic single-field edit — lets the table fill in any field by hand for listings that can't be scraped
@@ -1904,7 +1927,7 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
       const grow = await get(env, 'SELECT id, address, geo_address FROM apartments WHERE id=?', id);
       if (grow?.address && grow.address !== grow.geo_address) await geocodeApt(env, grow);
     }
-    return json({ ok: true, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
+    return json({ ok: true, row: await aptWithChildren(env, id) });
   }
   if (b.action === 'vote') {
     // the voter is ALWAYS the logged-in Access user — never trusted from the body
@@ -1923,7 +1946,7 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
     const res = await appendAptNote(env, id, webAuthor(req, env), note);
     if (!res) return json({ ok: false, error: 'no encontrado' }, 404);
     echo(aptAnnounce('note', res.row, { via, note }).text);
-    return json({ ok: true, row: res.row });
+    return json({ ok: true, row: await aptWithChildren(env, id) });
   }
   if (b.action === 'apt_note_del') {
     // remove one exact note line (mis-parsed notes shouldn't live forever); quiet cleanup, no Telegram echo
@@ -1937,7 +1960,7 @@ async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): 
     noteLines.splice(idx, 1);
     const rest = noteLines.join('\n');
     await run(env, 'UPDATE apartments SET notes=?, updated_at=? WHERE id=?', rest.trim() ? rest : null, new Date().toISOString(), id);
-    return json({ ok: true, row: await get(env, 'SELECT * FROM apartments WHERE id=?', id) });
+    return json({ ok: true, row: await aptWithChildren(env, id) });
   }
   return json({ ok: false, error: 'unknown action' }, 400);
 }
