@@ -297,7 +297,7 @@ function visitInfoLines(row: any): string[] {
     row.url ? 'Link: ' + row.url : '',
   ].filter(Boolean);
 }
-function visitIcs(env: Env, row: any, method: 'REQUEST' | 'CANCEL', vd: string): string {
+function visitIcs(env: Env, row: any, method: 'REQUEST' | 'CANCEL', vd: string, visitId: number): string {
   const w = icsWindow(vd);
   const desc = visitInfoLines(row).join('\n');
   const lines = [
@@ -310,9 +310,10 @@ function visitIcs(env: Env, row: any, method: 'REQUEST' | 'CANCEL', vd: string):
       'TZOFFSETFROM:-0500', 'TZOFFSETTO:-0500', 'TZNAME:-05', 'END:STANDARD', 'END:VTIMEZONE',
     ]),
     'BEGIN:VEVENT',
-    // stable UID per apartment + epoch-seconds SEQUENCE: a re-send after a reschedule
-    // strictly increases SEQUENCE, so calendars replace the event instead of duplicating it
-    `UID:visit-${row.id}@turikumwe.cc`,
+    // stable UID per VISIT (a follow-up is its own calendar event) + epoch-seconds SEQUENCE:
+    // a re-send after a reschedule strictly increases SEQUENCE, so calendars replace the
+    // event instead of duplicating it
+    `UID:visit-v${visitId}@turikumwe.cc`,
     'SEQUENCE:' + Math.floor(Date.now() / 1000),
     'DTSTAMP:' + icsStampNow(),
     `ORGANIZER;CN=Turikumwe:mailto:${env.INVITE_FROM}`,
@@ -337,8 +338,8 @@ const b64 = (s: string) => {
 const b64wrap = (s: string) => b64(s).replace(/(.{76})/g, '$1\r\n');
 // RFC 2047 for header values with accents ("Visita: Chicó")
 const encHeader = (s: string) => (/^[\x20-\x7e]*$/.test(s) ? s : `=?utf-8?B?${b64(s)}?=`);
-async function sendInviteMail(env: Env, row: any, method: 'REQUEST' | 'CANCEL', vd: string): Promise<void> {
-  const ics = visitIcs(env, row, method, vd);
+async function sendInviteMail(env: Env, row: any, method: 'REQUEST' | 'CANCEL', vd: string, visitId: number): Promise<void> {
+  const ics = visitIcs(env, row, method, vd, visitId);
   const subject = (method === 'CANCEL' ? 'Cancelada — ' : '') + `Visita: ${aptName(row)} · ${fmtDate(vd)}${hhmm(vd)}`;
   const text = [
     (method === 'CANCEL' ? 'Visita cancelada: ' : 'Visita programada: ') + aptName(row),
@@ -346,13 +347,13 @@ async function sendInviteMail(env: Env, row: any, method: 'REQUEST' | 'CANCEL', 
     ...visitInfoLines(row),
   ].join('\n');
   const tos = inviteTos(env);
-  const boundary = 'turikumwe-' + row.id + '-' + Date.now().toString(36);
+  const boundary = 'turikumwe-' + visitId + '-' + Date.now().toString(36);
   const raw = [
     `From: Turikumwe <${env.INVITE_FROM}>`,
     'To: ' + tos.join(', '),
     'Subject: ' + encHeader(subject),
     'Date: ' + new Date().toUTCString(),
-    `Message-ID: <visit-${row.id}-${Date.now().toString(36)}@turikumwe.cc>`,
+    `Message-ID: <visit-v${visitId}-${Date.now().toString(36)}@turikumwe.cc>`,
     'MIME-Version: 1.0',
     `Content-Type: multipart/alternative; boundary="${boundary}"`,
     '',
@@ -376,10 +377,10 @@ async function sendInviteMail(env: Env, row: any, method: 'REQUEST' | 'CANCEL', 
 const visitUpcoming = (vd: unknown) => !!vd && String(vd).slice(0, 10) >= today();
 // decide invite vs cancel after a visit change; returns an ack suffix and never throws —
 // a mail hiccup must not break the visit update itself, but it must not be silent either
-async function visitMail(env: Env, row: any, vd: string | null, oldVd: string | null): Promise<string> {
+async function visitMail(env: Env, row: any, visitId: number, vd: string | null, oldVd: string | null): Promise<string> {
   try {
-    if (visitUpcoming(vd)) { await sendInviteMail(env, row, 'REQUEST', String(vd)); return ' · 📧 invitación enviada'; }
-    if (!vd && visitUpcoming(oldVd)) { await sendInviteMail(env, row, 'CANCEL', String(oldVd)); return ' · 📧 cancelación enviada'; }
+    if (visitUpcoming(vd)) { await sendInviteMail(env, row, 'REQUEST', String(vd), visitId); return ' · 📧 invitación enviada'; }
+    if (!vd && visitUpcoming(oldVd)) { await sendInviteMail(env, row, 'CANCEL', String(oldVd), visitId); return ' · 📧 cancelación enviada'; }
     return ''; // past visits get no mail
   } catch (e: any) {
     console.log('invite mail error:', String(e && e.message || e));
@@ -641,10 +642,10 @@ const aptLink = (id: number | string) => 'https://turikumwe.cc/apartments.html#a
 // or null when the row is missing / not in the required status, which doubles as the
 // idempotency check for stale button taps (status predicate + `meta.changes`: two concurrent
 // taps can both pass the SELECT, but only the invocation whose UPDATE flips the row announces).
-// Rule-out and reactivate never touch visit_date or call visitMail — discarding (or
-// un-discarding) an apartment must never silently cancel or resend its calendar invite; only
-// setVisit — a person explicitly editing the visit date — does that, regardless of whether the
-// row is active or ruled_out.
+// Rule-out and reactivate never touch the visits or call visitMail — discarding (or
+// un-discarding) an apartment must never silently cancel or resend its calendar invites; only
+// setVisit/addVisit/editVisit — a person explicitly editing a visit — do that, regardless of
+// whether the row is active or ruled_out.
 async function ruleOutApt(env: Env, id: number, rawReason: unknown): Promise<{ row: any; reason: string | null } | null> {
   const row = await get(env, "SELECT * FROM apartments WHERE id=? AND status='active'", id);
   if (!row) return null;
@@ -671,17 +672,152 @@ async function appendAptNote(env: Env, id: number, author: string, note: string)
   await run(env, "UPDATE apartments SET notes=COALESCE(notes||char(10),'')||?, updated_at=? WHERE id=?", stamped, now, id);
   return { row: { ...row, notes: (row.notes ? row.notes + '\n' : '') + stamped, updated_at: now }, stamped };
 }
-// set or clear (vd=null) an apartment's visit date, then send the invite/cancel mail. The one
-// place a visit change happens; activeOnly is the policy seam — the Telegram ops path only
-// touches active rows, the web omits it because it's the manual override and may (re)schedule
-// on a ruled_out row (ARCHITECTURE.md §8).
-async function setVisit(env: Env, id: number, vd: string | null, o: { activeOnly?: boolean } = {}): Promise<{ row: any; mailNote: string } | null> {
+// ---- visits (apartment_visits) ----
+// One row per visit; follow-ups are additional rows. status is only 'scheduled' | 'cancelled':
+// a non-cancelled visit whose datetime has passed reads as "hecha" — date-only visits count
+// through the end of their day, exactly like the web's stage logic.
+const visitCmpJs = (vd: string) => (vd.length > 10 ? vd : vd + 'T23:59'); // twin of visitCmp in apartments UIs
+// SQL twin of visitCmpJs, for WHERE clauses against nowBogota()
+const visitCmpSql = (col = 'visit_date') => `CASE WHEN length(${col})>10 THEN ${col} ELSE ${col}||'T23:59' END`;
+// the next upcoming scheduled visit of an apartment, or null
+async function nextVisitRow(env: Env, aptId: number): Promise<any | null> {
+  return get(env, `SELECT * FROM apartment_visits WHERE apartment_id=? AND status='scheduled' AND ${visitCmpSql()}>=? ORDER BY visit_date LIMIT 1`, aptId, nowBogota());
+}
+// the most recent visit that already happened (non-cancelled, in the past), or null
+async function lastVisitRow(env: Env, aptId: number): Promise<any | null> {
+  return get(env, `SELECT * FROM apartment_visits WHERE apartment_id=? AND status='scheduled' AND ${visitCmpSql()}<? ORDER BY visit_date DESC LIMIT 1`, aptId, nowBogota());
+}
+// who attends a visit: 'felipe' | 'lucia' | 'both' | null (unknown). Free-form input maps
+// through canonVoter so Telegram first names and Access local-parts land on the same values.
+function canonWho(w: unknown): string | null {
+  const s = String(w ?? '').trim().toLowerCase();
+  if (!s) return null;
+  if (s === 'both' || /los dos|ambos|juntos/.test(s)) return 'both';
+  const c = canonVoter(s);
+  return c === 'felipe' || c === 'lucia' ? c : null;
+}
+const whoLabel = (w: unknown): string => (w === 'both' ? 'los dos' : w === 'felipe' ? 'Felipe' : w === 'lucia' ? 'Lucía' : '');
+
+// (Re)schedule or clear THE NEXT visit — the semantics every legacy entry point expects:
+// "visita el martes 10am" moves the upcoming appointment (or creates one), vd=null cancels it.
+// A follow-up while another visit is still upcoming goes through addVisit instead. The
+// invite/cancel mail decision lives here (visitMail); activeOnly is the policy seam — the
+// Telegram ops path only touches active rows, the web omits it because it's the manual
+// override and may (re)schedule on a ruled_out row (ARCHITECTURE.md §8).
+async function setVisit(env: Env, id: number, vd: string | null, o: { activeOnly?: boolean; who?: string | null; by?: string | null } = {}): Promise<{ row: any; visit: any | null; mailNote: string } | null> {
   const row = await get(env, `SELECT * FROM apartments WHERE id=?${o.activeOnly ? " AND status='active'" : ''}`, id);
   if (!row) return null;
   const now = new Date().toISOString();
-  await run(env, 'UPDATE apartments SET visit_date=?, updated_at=? WHERE id=?', vd, now, id);
-  const mailNote = await visitMail(env, row, vd, row.visit_date);
-  return { row: { ...row, visit_date: vd, updated_at: now }, mailNote };
+  const nv = await nextVisitRow(env, id);
+  await run(env, 'UPDATE apartments SET updated_at=? WHERE id=?', now, id);
+  if (vd) {
+    if (nv) {
+      const who = o.who !== undefined ? o.who : nv.who;
+      await run(env, 'UPDATE apartment_visits SET visit_date=?, who=?, updated_at=? WHERE id=?', vd, who, now, nv.id);
+      const mailNote = await visitMail(env, row, nv.id, vd, nv.visit_date);
+      return { row: { ...row, updated_at: now }, visit: { ...nv, visit_date: vd, who, updated_at: now }, mailNote };
+    }
+    return addVisit(env, id, vd, o); // no upcoming visit to move — this IS the next visit
+  }
+  if (!nv) return { row: { ...row, updated_at: now }, visit: null, mailNote: '' }; // nothing scheduled, nothing to cancel
+  await run(env, "UPDATE apartment_visits SET status='cancelled', updated_at=? WHERE id=?", now, nv.id);
+  const mailNote = await visitMail(env, row, nv.id, null, nv.visit_date);
+  return { row: { ...row, updated_at: now }, visit: { ...nv, status: 'cancelled', updated_at: now }, mailNote };
+}
+// An explicit follow-up: ALWAYS inserts a new visit row (its own calendar event), even when
+// another visit is still upcoming. Same visitMail discipline as setVisit.
+async function addVisit(env: Env, id: number, vd: string, o: { activeOnly?: boolean; who?: string | null; by?: string | null } = {}): Promise<{ row: any; visit: any; mailNote: string } | null> {
+  const row = await get(env, `SELECT * FROM apartments WHERE id=?${o.activeOnly ? " AND status='active'" : ''}`, id);
+  if (!row) return null;
+  const now = new Date().toISOString();
+  const ins = await run(env, "INSERT INTO apartment_visits (apartment_id, visit_date, who, status, created_by, created_at, updated_at) VALUES (?,?,?,'scheduled',?,?,?)",
+    id, vd, o.who ?? null, o.by ?? null, now, now);
+  const vid = Number(ins.meta.last_row_id);
+  await run(env, 'UPDATE apartments SET updated_at=? WHERE id=?', now, id);
+  const mailNote = await visitMail(env, row, vid, vd, null);
+  return { row: { ...row, updated_at: now }, visit: { id: vid, apartment_id: id, visit_date: vd, who: o.who ?? null, status: 'scheduled', note: null, reminder_sent: null, created_by: o.by ?? null, created_at: now, updated_at: now }, mailNote };
+}
+// Reschedule / cancel / annotate ONE visit row by its id. A date change re-mails the invite
+// (reminder_sent compares against the new datetime, so the reminder re-arms by itself);
+// cancelling an upcoming visit sends the CANCEL mail; who/note edits are quiet.
+async function editVisit(env: Env, visitId: number, patch: { visit_date?: string; who?: string | null; note?: string | null; status?: 'scheduled' | 'cancelled' }): Promise<{ row: any; visit: any; mailNote: string; dateChanged: boolean; cancelled: boolean } | null> {
+  const v = await get(env, 'SELECT * FROM apartment_visits WHERE id=?', visitId);
+  if (!v) return null;
+  const row = await get(env, 'SELECT * FROM apartments WHERE id=?', v.apartment_id);
+  if (!row) return null;
+  const now = new Date().toISOString();
+  const dateChanged = patch.visit_date !== undefined && !!patch.visit_date && String(patch.visit_date) !== v.visit_date;
+  const cancelled = patch.status === 'cancelled' && v.status !== 'cancelled';
+  const nv = { ...v };
+  if (dateChanged) nv.visit_date = String(patch.visit_date);
+  if (patch.who !== undefined) nv.who = patch.who;
+  if (patch.note !== undefined) nv.note = patch.note;
+  if (patch.status !== undefined) nv.status = patch.status;
+  nv.updated_at = now;
+  await run(env, 'UPDATE apartment_visits SET visit_date=?, who=?, note=?, status=?, updated_at=? WHERE id=?', nv.visit_date, nv.who, nv.note, nv.status, now, visitId);
+  await run(env, 'UPDATE apartments SET updated_at=? WHERE id=?', now, v.apartment_id);
+  let mailNote = '';
+  if (cancelled) mailNote = await visitMail(env, row, visitId, null, v.visit_date);
+  else if (dateChanged && nv.status === 'scheduled') mailNote = await visitMail(env, row, visitId, nv.visit_date, v.visit_date);
+  return { row, visit: nv, mailNote, dateChanged, cancelled };
+}
+
+// ---- due-diligence documents (apartment_docs) ----
+// The checklist vocabulary: slugs are stable keys, labels are what every surface prints,
+// deals says which deal_type a doc applies to (the UI builds the default checklist from it).
+// Served to the web in /apartments-data.json and to the ops parser prompt — one table.
+const DOC_TYPES: { slug: string; label: string; deals: string[] }[] = [
+  { slug: 'cert_libertad', label: 'Certificado de libertad y tradición', deals: ['buy'] },
+  { slug: 'predial', label: 'Impuesto predial', deals: ['buy'] },
+  { slug: 'paz_salvo_admin', label: 'Paz y salvo de administración', deals: ['rent', 'buy'] },
+  { slug: 'reglamento', label: 'Reglamento de propiedad horizontal', deals: ['rent', 'buy'] },
+  { slug: 'servicios', label: 'Recibos de servicios', deals: ['rent', 'buy'] },
+  { slug: 'contrato', label: 'Modelo de contrato / promesa', deals: ['rent', 'buy'] },
+  { slug: 'cedula_prop', label: 'Cédula / representación del propietario', deals: ['rent', 'buy'] },
+  { slug: 'otro', label: 'Otro', deals: ['rent', 'buy'] },
+];
+const DOC_STATUSES = ['pending', 'received', 'na'] as const;
+const DOC_STATUS_LABEL: Record<string, string> = { pending: 'pendiente ⏳', received: 'recibido ✓', na: 'no aplica' };
+const docLabel = (d: any): string => (d.doc_type === 'otro' ? (d.label || 'Otro documento') : (DOC_TYPES.find((t) => t.slug === d.doc_type)?.label || String(d.doc_type)));
+// cheap keyword classifier for files arriving by Telegram — caption + filename, no Claude call
+function classifyDoc(text: string): string {
+  const s = String(text).toLowerCase();
+  if (/libertad|tradici/.test(s)) return 'cert_libertad';
+  if (/paz\s*y\s*salvo/.test(s)) return 'paz_salvo_admin';
+  if (/reglamento/.test(s)) return 'reglamento';
+  if (/predial/.test(s)) return 'predial';
+  if (/servicio/.test(s)) return 'servicios';
+  if (/contrato|promesa/.test(s)) return 'contrato';
+  if (/c[eé]dula|representaci/.test(s)) return 'cedula_prop';
+  return 'otro';
+}
+// Upsert one doc row, keyed (apartment_id, doc_type) — 'otro' additionally keys by label so
+// several free-form documents can coexist (a label-less 'otro' never merges). Attaching a
+// Telegram file always flips the row to 'received'. Patch fields left undefined stay put.
+async function setDoc(env: Env, aptId: number, docType: string, patch: { status?: string; label?: string | null; note?: string | null; tg_file_id?: string; file_name?: string | null; mime_type?: string | null }, by: string | null): Promise<{ row: any; doc: any } | null> {
+  if (!DOC_TYPES.some((t) => t.slug === docType)) return null;
+  const row = await get(env, 'SELECT * FROM apartments WHERE id=?', aptId);
+  if (!row) return null;
+  const now = new Date().toISOString();
+  const status = patch.status && (DOC_STATUSES as readonly string[]).includes(patch.status) ? patch.status : undefined;
+  const existing = docType === 'otro'
+    ? (patch.label ? await get(env, "SELECT * FROM apartment_docs WHERE apartment_id=? AND doc_type='otro' AND label=?", aptId, patch.label) : null)
+    : await get(env, 'SELECT * FROM apartment_docs WHERE apartment_id=? AND doc_type=?', aptId, docType);
+  if (existing) {
+    const d = { ...existing };
+    if (status) d.status = status;
+    if (patch.label !== undefined) d.label = patch.label;
+    if (patch.note !== undefined) d.note = patch.note;
+    if (patch.tg_file_id) { d.tg_file_id = patch.tg_file_id; d.file_name = patch.file_name ?? d.file_name; d.mime_type = patch.mime_type ?? d.mime_type; d.status = 'received'; }
+    d.updated_at = now;
+    await run(env, 'UPDATE apartment_docs SET status=?, label=?, note=?, tg_file_id=?, file_name=?, mime_type=?, updated_at=? WHERE id=?',
+      d.status, d.label, d.note, d.tg_file_id, d.file_name, d.mime_type, now, existing.id);
+    return { row, doc: d };
+  }
+  const st = patch.tg_file_id ? 'received' : (status || 'pending');
+  const ins = await run(env, 'INSERT INTO apartment_docs (apartment_id, doc_type, label, status, tg_file_id, file_name, mime_type, note, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+    aptId, docType, patch.label ?? null, st, patch.tg_file_id ?? null, patch.file_name ?? null, patch.mime_type ?? null, patch.note ?? null, by, now, now);
+  return { row, doc: { id: Number(ins.meta.last_row_id), apartment_id: aptId, doc_type: docType, label: patch.label ?? null, status: st, tg_file_id: patch.tg_file_id ?? null, file_name: patch.file_name ?? null, mime_type: patch.mime_type ?? null, note: patch.note ?? null, created_by: by, created_at: now, updated_at: now } };
 }
 
 // ---- apartment mutation announcements ----
@@ -691,9 +827,9 @@ async function setVisit(env: Env, id: number, vd: string | null, o: { activeOnly
 // " — vía web · felipe" / " — vía MCP · Lucía") ALREADY Markdown-safe, and only decide where
 // the announcement goes: tgSend, web echo, or MCP notification.
 function aptAnnounce(
-  kind: 'rule_out' | 'reactivate' | 'note' | 'vote' | 'visit' | 'invite',
+  kind: 'rule_out' | 'reactivate' | 'note' | 'vote' | 'visit' | 'invite' | 'doc',
   row: any,
-  o: { via?: string; reason?: string | null; note?: string; voter?: string; vote?: 'up' | 'down'; visit?: string | null; mailNote?: string } = {},
+  o: { via?: string; reason?: string | null; note?: string; voter?: string; vote?: 'up' | 'down'; visit?: string | null; who?: string | null; mailNote?: string; doc?: string; docStatus?: string } = {},
 ): { text: string; markup?: unknown } {
   const ref = `*${mdEscape(aptRef(row))}*`;
   const via = o.via || '';
@@ -714,10 +850,14 @@ function aptAnnounce(
           ? `👍 A ${mdEscape(voterName(String(o.voter || '')))} le gustó ${ref}`
           : `👎 A ${mdEscape(voterName(String(o.voter || '')))} no le convenció ${ref}`) + via,
       };
-    case 'visit':
-      return { text: (o.visit ? `📅 Visita a ${ref} → ${fmtDate(o.visit)}${hhmm(o.visit)}` : `📅 Visita a ${ref} cancelada`) + via + (o.mailNote || '') };
+    case 'visit': {
+      const whoBit = o.visit && o.who ? ` (va${o.who === 'both' ? 'n' : ''} ${whoLabel(o.who)})` : '';
+      return { text: (o.visit ? `📅 Visita a ${ref} → ${fmtDate(o.visit)}${hhmm(o.visit)}${whoBit}` : `📅 Visita a ${ref} cancelada`) + via + (o.mailNote || '') };
+    }
     case 'invite':
       return { text: `📧 Invitación de ${ref} enviada a los correos${via}` };
+    case 'doc':
+      return { text: `📄 ${mdEscape(o.doc || 'Documento')} de ${ref}: ${DOC_STATUS_LABEL[String(o.docStatus)] || mdEscape(String(o.docStatus || ''))}${via}` };
   }
 }
 
@@ -776,18 +916,30 @@ async function buildAptSummary(env: Env): Promise<string> {
   const ruled = rows.filter((r: any) => r.status === 'ruled_out');
   const td = today();
   const out: string[] = [`🏢 *Búsqueda de apto* — ${active.length} activo${active.length === 1 ? '' : 's'} · ${ruled.length} descartado${ruled.length === 1 ? '' : 's'}`];
-  const visits = active.filter((r: any) => r.visit_date && String(r.visit_date).slice(0, 10) >= td)
-    .sort((a: any, b: any) => String(a.visit_date) < String(b.visit_date) ? -1 : 1).slice(0, 5);
+  // one pass over the visits table: next upcoming + whether anything ever happened, per apartment
+  const now = nowBogota();
+  const allVisits = await all(env, "SELECT * FROM apartment_visits WHERE status='scheduled' ORDER BY visit_date");
+  const nextByApt: Record<number, any> = {};
+  const everVisited: Record<number, boolean> = {};
+  for (const v of allVisits) {
+    if (visitCmpJs(v.visit_date) >= now) { if (!nextByApt[v.apartment_id]) nextByApt[v.apartment_id] = v; }
+    else everVisited[v.apartment_id] = true;
+  }
+  const visits = active.filter((r: any) => nextByApt[r.id])
+    .sort((a: any, b: any) => String(nextByApt[a.id].visit_date) < String(nextByApt[b.id].visit_date) ? -1 : 1).slice(0, 5);
   if (visits.length) {
-    out.push('📅 *Próximas visitas:*\n' + visits.map((v: any) => {
-      const bits = priceAreaBits(v);
-      let s = `• ${mdEscape(aptRef(v))} — ${wdShort(v.visit_date)} ${fmtDate(v.visit_date)}${hhmm(v.visit_date)}${bits ? ' · ' + bits : ''}`;
-      const contact = [v.address ? `📍 ${mdLink(v.address, mapsLink(v.address))}` : '', agentBit(v)].filter(Boolean).join(' · ');
+    out.push('📅 *Próximas visitas:*\n' + visits.map((r: any) => {
+      const v = nextByApt[r.id];
+      const bits = priceAreaBits(r);
+      const who = v.who ? ` · va${v.who === 'both' ? 'n' : ''} ${whoLabel(v.who)}` : '';
+      let s = `• ${mdEscape(aptRef(r))} — ${wdShort(v.visit_date)} ${fmtDate(v.visit_date)}${hhmm(v.visit_date)}${who}${bits ? ' · ' + bits : ''}`;
+      const contact = [r.address ? `📍 ${mdLink(r.address, mapsLink(r.address))}` : '', agentBit(r)].filter(Boolean).join(' · ');
       if (contact) s += '\n   ' + contact;
       return s;
     }).join('\n'));
   }
-  const toSchedule = active.filter((r: any) => !r.visit_date);
+  // never scheduled at all — an already-visited apartment without a follow-up is not "por agendar"
+  const toSchedule = active.filter((r: any) => !nextByApt[r.id] && !everVisited[r.id]);
   if (toSchedule.length) {
     const shown = toSchedule.slice(0, 8).map((r: any) => {
       const bits = priceAreaBits(r);
@@ -795,6 +947,17 @@ async function buildAptSummary(env: Env): Promise<string> {
     });
     if (toSchedule.length > 8) shown.push(`… y ${toSchedule.length - 8} más`);
     out.push('⏳ *Por agendar visita:*\n' + shown.join('\n'));
+  }
+  // due diligence at a glance: which active apartments still owe us documents
+  const pendingDocs = await all(env, "SELECT d.*, a.status AS apt_status FROM apartment_docs d JOIN apartments a ON a.id=d.apartment_id WHERE d.status='pending' AND a.status='active' ORDER BY d.apartment_id");
+  if (pendingDocs.length) {
+    const byApt: Record<number, string[]> = {};
+    for (const d of pendingDocs) (byApt[d.apartment_id] = byApt[d.apartment_id] || []).push(docLabel(d));
+    const lines = Object.entries(byApt).slice(0, 5).map(([aid, labels]) => {
+      const r = active.find((x: any) => x.id === Number(aid));
+      return `• ${mdEscape(r ? aptRef(r) : '#' + aid)} — ${mdEscape(labels.join(', '))}`;
+    });
+    out.push('📄 *Docs pendientes:*\n' + lines.join('\n'));
   }
   for (const [dt, label] of [['rent', 'arriendo'], ['buy', 'compra']] as const) {
     const ranked = active.filter((r: any) => r.deal_type === dt)
@@ -847,12 +1010,14 @@ async function buildDigestBody(env: Env, td: string, header: string): Promise<st
     });
     out.push(`${CAT_EMOJI[cat]} *${CAT_LABEL[cat]}:*\n` + rows.join('\n'));
   }
-  // upcoming apartment visits live in the apartments table, not items
-  const visits = await all(env, "SELECT location, title, source_site, id, visit_date, address, agent_name, agent_phone, price, admin_fee, area_m2, deal_type FROM apartments WHERE status='active' AND visit_date>=? ORDER BY visit_date", td);
+  // upcoming apartment visits live in apartment_visits, not items
+  const visits = await all(env,
+    "SELECT a.location, a.title, a.source_site, a.id, a.address, a.agent_name, a.agent_phone, a.price, a.admin_fee, a.area_m2, a.deal_type, v.visit_date, v.who FROM apartment_visits v JOIN apartments a ON a.id=v.apartment_id WHERE a.status='active' AND v.status='scheduled' AND v.visit_date>=? ORDER BY v.visit_date", td);
   if (visits.length) {
     out.push('🏢 *Visitas de apartamentos:*\n' + visits.map((v: any) => {
       const bits = priceAreaBits(v);
-      let s = `• ${mdEscape(aptRef(v))} — ${stripWarn(dueLabel(v.visit_date, td))}${hhmm(v.visit_date)}${bits ? ' · ' + bits : ''}`;
+      const who = v.who ? ` · va${v.who === 'both' ? 'n' : ''} ${whoLabel(v.who)}` : '';
+      let s = `• ${mdEscape(aptRef(v))} — ${stripWarn(dueLabel(v.visit_date, td))}${hhmm(v.visit_date)}${who}${bits ? ' · ' + bits : ''}`;
       if (v.address) s += ` · 📍 ${mdLink(v.address, mapsLink(v.address))}`;
       const ab = agentBit(v);
       if (ab) s += ' · ' + ab;
@@ -880,15 +1045,17 @@ async function sendEveningReminder(env: Env) {
 }
 
 // ~1 h before each timed visit. Hourly cron + 90-min lookahead guarantees every visit lands in
-// exactly one window; visit_reminder_sent stores the covered datetime (not a boolean), so
-// rescheduling automatically re-arms the reminder. Date-only visits are the digest's job.
+// exactly one window; reminder_sent (on the visit row) stores the covered datetime (not a
+// boolean), so rescheduling automatically re-arms the reminder. Date-only visits are the
+// digest's job. a.* first, v.* after: the aliased visit columns must win any name collision.
 async function sendVisitReminders(env: Env) {
   const now = nowBogota();
   const rows = await all(env,
-    "SELECT * FROM apartments WHERE status='active' AND visit_date IS NOT NULL AND length(visit_date)>10 AND visit_date>? AND visit_date<=? AND (visit_reminder_sent IS NULL OR visit_reminder_sent!=visit_date)",
+    "SELECT a.*, v.id AS visit_id, v.visit_date, v.who FROM apartment_visits v JOIN apartments a ON a.id=v.apartment_id WHERE a.status='active' AND v.status='scheduled' AND length(v.visit_date)>10 AND v.visit_date>? AND v.visit_date<=? AND (v.reminder_sent IS NULL OR v.reminder_sent!=v.visit_date)",
     now, plusMinutes(now, 90));
   for (const r of rows) {
     const lines = [`🔔 *Visita en ~1h — ${String(r.visit_date).slice(11, 16)}* · *${mdEscape(aptName(r))}* #${r.id}`];
+    if (r.who) lines.push(`👥 Va${r.who === 'both' ? 'n' : ''} ${whoLabel(r.who)}`);
     const bits = priceAreaBits(r); // the asking price in hand when walking in — same number as the web card
     if (bits) lines.push(`💰 ${bits}`);
     if (r.address) lines.push(`📍 ${mdLink(r.address, mapsLink(r.address))}`);
@@ -896,6 +1063,9 @@ async function sendVisitReminders(env: Env) {
     // the plain number is the dial fallback: Telegram makes it tap-to-call, and tel: is not
     // allowed in inline url buttons — the 💬 button below stays the WhatsApp path
     if (r.agent_phone) lines.push(`📞 ${mdEscape(r.agent_phone)}`);
+    // documents still owed by this realtor: the visit is the moment to ask in person
+    const pend = await all(env, "SELECT * FROM apartment_docs WHERE apartment_id=? AND status='pending'", r.id);
+    if (pend.length) lines.push(`📄 Pídele: ${mdEscape(pend.map(docLabel).join(', '))}`);
     // the links live in buttons (url buttons never touch the Markdown parser)
     const row1: TgBtn[] = [];
     if (r.address) row1.push({ text: '🗺 Cómo llegar', url: mapsLink(r.address) });
@@ -904,20 +1074,24 @@ async function sendVisitReminders(env: Env) {
     if (r.url) row2.push({ text: '🔗 Anuncio', url: r.url });
     row2.push({ text: '📱 Abrir en la app', url: aptLink(r.id) });
     await tgSend(env, lines.join('\n'), undefined, kb(row1.length ? [row1, row2] : [row2]));
-    await run(env, 'UPDATE apartments SET visit_reminder_sent=? WHERE id=?', r.visit_date, r.id);
+    await run(env, 'UPDATE apartment_visits SET reminder_sent=? WHERE id=?', r.visit_date, r.visit_id);
   }
 }
 
-// evening of a visit day: ask how it went. One message per apartment, each carrying the #id, so a
-// plain reply resolves via replyAptFromMsg and the ops parser stores it as an apt_note — no new
-// plumbing. visit_date<=now skips tonight's still-pending visits (a date-only visit sorts before
-// any "T…" timestamp of its day, so it counts as done by evening).
+// evening of a visit day: ask how it went. One message per apartment (GROUP BY dedups a
+// double-visit day), each carrying the #id, so a plain reply resolves via replyAptFromMsg and
+// the ops parser stores it as a note — no new plumbing. v.visit_date<=now skips tonight's
+// still-pending visits (a date-only visit sorts before any "T…" timestamp of its day, so it
+// counts as done by evening).
 async function sendPostVisitFollowup(env: Env) {
   const rows = await all(env,
-    "SELECT * FROM apartments WHERE status='active' AND visit_date IS NOT NULL AND substr(visit_date,1,10)=? AND visit_date<=?",
+    "SELECT a.* FROM apartment_visits v JOIN apartments a ON a.id=v.apartment_id WHERE a.status='active' AND v.status='scheduled' AND substr(v.visit_date,1,10)=? AND v.visit_date<=? GROUP BY a.id",
     today(), nowBogota());
   for (const r of rows) {
-    await tgSend(env, `🗣 ¿Cómo les fue en *${mdEscape(aptName(r))}* #${r.id}? Un toque para el veredicto, o respondan a este mensaje y lo guardo como nota.`,
+    // the debrief is also when the missing paperwork gets remembered
+    const pend = await all(env, "SELECT * FROM apartment_docs WHERE apartment_id=? AND status='pending'", r.id);
+    const docsBit = pend.length ? `\n📄 Siguen pendientes: ${mdEscape(pend.map(docLabel).join(', '))} — pídanselos al agente.` : '';
+    await tgSend(env, `🗣 ¿Cómo les fue en *${mdEscape(aptName(r))}* #${r.id}? Un toque para el veredicto, o respondan a este mensaje y lo guardo como nota.${docsBit}`,
       undefined, kb([
         [{ text: '👍 Nos gustó', callback_data: 'up:' + r.id }, { text: '👎 No', callback_data: 'dn:' + r.id }],
         // the debrief is when the pending question for the agent comes up — one tap to ask it
@@ -1051,6 +1225,35 @@ async function handlePhoto(env: Env, msg: any) {
   await tgSend(env, `📸 Foto guardada en *${mdEscape(apt.name)}* #${apt.id}`, msg.message_id);
 }
 
+// a document message (PDF etc.): the realtor's due-diligence paperwork. Same resolution as
+// photos — the replied-to message or a "#id" in the caption — stored like photos (permanent
+// file_id, no bytes), classified by cheap caption/filename keywords (classifyDoc, no Claude).
+// ponytail: no album handling — paperwork rarely travels as an album; resend with "#id" covers it
+async function handleDocument(env: Env, msg: any) {
+  const doc = msg.document;
+  const caption = String(msg.caption || '').trim();
+  let apt = await replyAptFromMsg(env, msg);
+  if (!apt) {
+    const m = caption.match(/#(\d+)/);
+    const row = m ? await get(env, 'SELECT * FROM apartments WHERE id=?', Number(m[1])) : null;
+    if (row) apt = { id: row.id, name: aptName(row) };
+  }
+  if (!apt) {
+    await tgSend(env, '📄 ¿De cuál apto es este documento? Responde al mensaje del apartamento con el archivo, o pon "#id" en el pie.', msg.message_id);
+    return;
+  }
+  const slug = classifyDoc(caption + ' ' + String(doc.file_name || ''));
+  const who = msg.from?.first_name || null;
+  const res = await setDoc(env, apt.id, slug, {
+    tg_file_id: String(doc.file_id),
+    file_name: doc.file_name ? String(doc.file_name) : null,
+    mime_type: doc.mime_type ? String(doc.mime_type) : null,
+    ...(slug === 'otro' ? { label: caption.replace(/#\d+/g, '').trim().slice(0, 80) || (doc.file_name ? String(doc.file_name) : null) } : {}),
+  }, who);
+  if (!res) { await tgSend(env, '⚠️ No pude guardar el documento — inténtalo otra vez.', msg.message_id); return; }
+  await tgSend(env, `📄 *${mdEscape(docLabel(res.doc))}* guardado en *${mdEscape(apt.name)}* #${apt.id} ✓`, msg.message_id);
+}
+
 // ================= TELEGRAM OPS =================
 // The ONE op vocabulary: keys are every action the parser may emit; values are the exact spec
 // lines the system prompt shows Claude. executeOps implements the same keys, so the prompt and
@@ -1064,7 +1267,10 @@ const OP_LINES: Record<string, string> = {
   query: '{"action":"query"}   (user is asking what is pending / what is on the list)',
   none: '{"action":"none"}    (chit-chat, greeting, nothing to track)',
   rescrape: '{"action":"rescrape"} (user asks to retry reading an apartment listing that could not be read automatically: "reintenta", "vuelve a intentar el scraping", "intenta de nuevo")',
-  set_visit: '{"action":"set_visit","apt_id":<id from APARTMENTS>,"visit_date":"YYYY-MM-DDTHH:MM"|"YYYY-MM-DD"|null} (user schedules a visit to an apartment: "visito el de Chicó el martes a las 10am", "la visita del apto 2 es el 20 a las 3pm", "agenda visita apto 1 mañana"; include the clock time as THH:MM in 24h when the user gives one — "10am"=>T10:00, "3pm"=>T15:00 — otherwise date only; visit_date=null cancels a visit)',
+  set_visit: '{"action":"set_visit","apt_id":<id from APARTMENTS>,"visit_date":"YYYY-MM-DDTHH:MM"|"YYYY-MM-DD"|null,"who":"felipe"|"lucia"|"both"|null} (user schedules or moves THE NEXT visit to an apartment: "visito el de Chicó el martes a las 10am", "la visita del apto 2 es el 20 a las 3pm", "agenda visita apto 1 mañana"; include the clock time as THH:MM in 24h when the user gives one — "10am"=>T10:00, "3pm"=>T15:00 — otherwise date only; visit_date=null cancels the next visit. who = who attends when stated: "voy yo"=>the sender, "va Lucía"=>lucia, "vamos los dos"=>both; omit or null when unsaid)',
+  add_visit: '{"action":"add_visit","apt_id":<id from APARTMENTS>,"visit_date":"YYYY-MM-DDTHH:MM"|"YYYY-MM-DD","who":"felipe"|"lucia"|"both"|null} (an EXTRA visit — a follow-up / second look at an apartment already visited or already scheduled: "volvamos al 3 el sábado", "segunda visita al de Chicó el lunes a las 3pm", "quiero verlo otra vez")',
+  visit_note: '{"action":"visit_note","apt_id":<id from APARTMENTS>,"note":"<short note>"} (how the LAST visit went — impressions from being there: "la visita al 3 estuvo genial, mucha luz", "en el de Cedritos olía a humedad". A general fact not tied to being there stays apt_note)',
+  set_doc: '{"action":"set_doc","apt_id":<id from APARTMENTS>,"doc":"<slug from DOC TYPES>","status":"pending"|"received"|"na"} (due-diligence document tracking: "pedimos el certificado de libertad del 3"=>pending, "ya mandaron el reglamento del 5"=>received, "el predial del 2 no aplica"=>na)',
   rule_out: '{"action":"rule_out","apt_id":<id from APARTMENTS>,"reason":"<short reason>"|null} (user wants to discard / stop considering an apartment: "descarta el apto 2", "ya no me interesa el de Chico Norte", "quita el más caro", "bájalo de la lista", "rule out the Cedritos one"; if they say why, capture a short reason like "muy caro", "muy lejos", "sin parqueadero")',
   reactivate: '{"action":"reactivate","apt_id":<id from RULED OUT>} (user wants to reconsider a previously discarded apartment: "vuelve a considerar el apto 2", "reactiva el de Chico Norte", "devuelve el descartado a la lista")',
   apt_note: '{"action":"apt_note","apt_id":<id from APARTMENTS>,"note":"<short note>"} (user records an opinion or fact about an apartment, often after a visit: "el de Chico Norte nos encantó", "apto 2: cocina pequeña pero buena luz", "el de Cedritos tiene mala vista")',
@@ -1087,6 +1293,7 @@ async function executeOps(env: Env, ops: any[], who: string, td: string): Promis
   const reactivated: string[] = [];
   const noted: string[] = [];
   const voted: string[] = [];
+  const docsSet: string[] = [];
   const skipped: string[] = [];
   let wantQuery = false;
   let wantRescrape = false;
@@ -1127,8 +1334,36 @@ async function executeOps(env: Env, ops: any[], who: string, td: string): Promis
       wantAptSummary = true;
     } else if (op.action === 'set_visit' && op.apt_id != null) {
       const vd = (op.visit_date == null || op.visit_date === '') ? null : String(op.visit_date);
-      const res = await setVisit(env, Number(op.apt_id), vd, { activeOnly: true });
-      if (res) visitsSet.push(mdEscape(aptRef(res.row)) + (vd ? (' → ' + dueLabel(vd, td) + hhmm(vd)) : ' (visita cancelada)') + res.mailNote);
+      const opWho = op.who !== undefined ? canonWho(op.who) : undefined;
+      const res = await setVisit(env, Number(op.apt_id), vd, { activeOnly: true, who: opWho, by: who.split(' ')[0] });
+      if (res) {
+        const whoBit = vd && res.visit?.who ? ` · va${res.visit.who === 'both' ? 'n' : ''} ${whoLabel(res.visit.who)}` : '';
+        visitsSet.push(mdEscape(aptRef(res.row)) + (vd ? (' → ' + dueLabel(vd, td) + hhmm(vd) + whoBit) : ' (visita cancelada)') + res.mailNote);
+      } else notFound.push('apto #' + op.apt_id);
+    } else if (op.action === 'add_visit' && op.apt_id != null && op.visit_date) {
+      const res = await addVisit(env, Number(op.apt_id), String(op.visit_date), { activeOnly: true, who: canonWho(op.who), by: who.split(' ')[0] });
+      if (res) {
+        const whoBit = res.visit.who ? ` · va${res.visit.who === 'both' ? 'n' : ''} ${whoLabel(res.visit.who)}` : '';
+        visitsSet.push(mdEscape(aptRef(res.row)) + ' → ' + dueLabel(String(op.visit_date), td) + hhmm(String(op.visit_date)) + whoBit + ' (otra visita)' + res.mailNote);
+      } else notFound.push('apto #' + op.apt_id);
+    } else if (op.action === 'visit_note' && op.apt_id != null && op.note) {
+      // the impression lands on the visit it talks about; with no past visit it degrades to a
+      // plain apartment note — same stamped-line format either way (NOTE_LINE_RE)
+      const aptId = Number(op.apt_id);
+      const lv = await lastVisitRow(env, aptId);
+      const stamped = td + ' [' + who.split(' ')[0] + ']: ' + String(op.note).trim().slice(0, 300);
+      if (lv) {
+        const res = await editVisit(env, lv.id, { note: (lv.note ? lv.note + '\n' : '') + stamped });
+        if (res) noted.push(mdEscape(aptRef(res.row) + ' (visita ' + String(lv.visit_date).slice(0, 10) + ') — ' + String(op.note).trim()));
+        else notFound.push('apto #' + op.apt_id);
+      } else {
+        const res = await appendAptNote(env, aptId, who.split(' ')[0], String(op.note));
+        if (res) noted.push(mdEscape(aptRef(res.row) + ' — ' + String(op.note).trim()));
+        else notFound.push('apto #' + op.apt_id);
+      }
+    } else if (op.action === 'set_doc' && op.apt_id != null && DOC_TYPES.some((t) => t.slug === op.doc) && (DOC_STATUSES as readonly string[]).includes(op.status)) {
+      const res = await setDoc(env, Number(op.apt_id), String(op.doc), { status: String(op.status) }, who.split(' ')[0]);
+      if (res) docsSet.push(mdEscape(docLabel(res.doc)) + ' de ' + mdEscape(aptRef(res.row)) + ' — ' + (DOC_STATUS_LABEL[String(op.status)] || String(op.status)));
       else notFound.push('apto #' + op.apt_id);
     } else if (op.action === 'rule_out' && op.apt_id != null) {
       const res = await ruleOutApt(env, Number(op.apt_id), op.reason);
@@ -1171,6 +1406,7 @@ async function executeOps(env: Env, ops: any[], who: string, td: string): Promis
   if (reactivated.length) lines.push('↩️ *De vuelta en la lista:*\n' + reactivated.map(v => '• ' + v).join('\n'));
   if (noted.length) lines.push('📝 *Nota guardada:*\n' + noted.map(n => '• ' + n).join('\n'));
   if (voted.length) lines.push('*Veredicto guardado:*\n' + voted.map(v => '• ' + v).join('\n'));
+  if (docsSet.length) lines.push('📄 *Documentos:*\n' + docsSet.map(d => '• ' + d).join('\n'));
   if (wantQuery) {
     lines.push(await buildDigestBody(env, td, 'Esto es lo pendiente:'));
   }
@@ -1202,9 +1438,10 @@ async function handleUpdate(env: Env, update: any) {
   if (update?.callback_query) { await handleCallback(env, update.callback_query); return; }
   const msg = update?.message;
   if (!msg || String(msg.chat?.id) !== String(env.GROUP_CHAT_ID)) return;
-  // photos first — they have no text, so they'd be dropped by the guard below.
+  // photos and documents first — they have no text, so they'd be dropped by the guard below.
   // Albums arrive as one update per photo; each is saved and acked individually.
   if (Array.isArray(msg.photo) && msg.photo.length) { await handlePhoto(env, msg); return; }
+  if (msg.document && msg.document.file_id) { await handleDocument(env, msg); return; }
   const text = String(msg.text || '').trim();
   if (!text) return;
   const who = [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(' ') || 'group';
@@ -1261,7 +1498,12 @@ async function handleUpdate(env: Env, update: any) {
   const open = await openItems(env);
   const openForModel = open.map((i: any) => ({ id: i.id, category: i.category, title: i.title, due_date: i.due_date }));
   const blockedCount = (await get(env, "SELECT COUNT(*) c FROM apartments WHERE status='active' AND scrape_status!='ok'"))?.c || 0;
-  const aptList = (await all(env, "SELECT id, location, title, deal_type, visit_date FROM apartments WHERE status='active' ORDER BY created_at DESC")).map((a: any) => ({ id: a.id, name: (a.location || a.title || ('apto ' + a.id)), deal: a.deal_type, visit: a.visit_date }));
+  const aptList = (await all(env,
+    `SELECT a.id, a.location, a.title, a.deal_type,
+       (SELECT v.visit_date FROM apartment_visits v WHERE v.apartment_id=a.id AND v.status='scheduled' AND ${visitCmpSql('v.visit_date')}>=? ORDER BY v.visit_date LIMIT 1) AS next_visit,
+       (SELECT COUNT(*) FROM apartment_visits v WHERE v.apartment_id=a.id AND v.status='scheduled' AND ${visitCmpSql('v.visit_date')}<?) AS past_visits
+     FROM apartments a WHERE a.status='active' ORDER BY a.created_at DESC`, nowBogota(), nowBogota()))
+    .map((a: any) => ({ id: a.id, name: (a.location || a.title || ('apto ' + a.id)), deal: a.deal_type, next_visit: a.next_visit, past_visits: a.past_visits }));
   const ruledList = (await all(env, "SELECT id, location, title, deal_type FROM apartments WHERE status='ruled_out' ORDER BY updated_at DESC")).map((a: any) => ({ id: a.id, name: (a.location || a.title || ('apto ' + a.id)), deal: a.deal_type }));
   const replyApt = await replyAptFromMsg(env, msg); // set when this message replies to an apartment message
 
@@ -1286,8 +1528,9 @@ async function handleUpdate(env: Env, update: any) {
     '- Keep titles short and clear. If a message is ambiguous or pure chit-chat, use {"action":"none"}.',
     '- Emit {"action":"rescrape"} when the user asks to retry reading apartment listings. There are currently ' + blockedCount + ' apartment(s) awaiting re-read.',
     'OPEN ITEMS: ' + JSON.stringify(openForModel),
-    'APARTMENTS (active — for set_visit / rule_out): ' + JSON.stringify(aptList),
+    'APARTMENTS (active — for set_visit / add_visit / visit_note / set_doc / rule_out; next_visit = the upcoming appointment, past_visits = visits already done): ' + JSON.stringify(aptList),
     'RULED OUT (for reactivate): ' + JSON.stringify(ruledList),
+    'DOC TYPES (slugs for set_doc): ' + JSON.stringify(Object.fromEntries(DOC_TYPES.map((t) => [t.slug, t.label]))),
     ...(replyApt ? ['REPLIED-TO APARTMENT (this message is a reply to a message about this apartment): ' + JSON.stringify(replyApt) + '. When the user says "this"/"it"/"the apartment" or schedules a visit / rules it out / adds a note without naming which apartment, use apt_id=' + replyApt.id + '.'] : []),
   ].join('\n');
 
@@ -1360,7 +1603,7 @@ async function homePage(env: Env): Promise<Response> {
     ? `${open.length} pendiente${open.length === 1 ? '' : 's'}` + (dueSoon ? ` · ${dueSoon} vence${dueSoon === 1 ? '' : 'n'} ya` : '')
     : 'Nada pendiente 🎉';
   const aptCount = Number((await get(env, "SELECT COUNT(*) c FROM apartments WHERE status='active'"))?.c || 0);
-  const nv = await get(env, "SELECT visit_date FROM apartments WHERE status='active' AND visit_date>=? ORDER BY visit_date LIMIT 1", td);
+  const nv = await get(env, "SELECT v.visit_date FROM apartment_visits v JOIN apartments a ON a.id=v.apartment_id WHERE a.status='active' AND v.status='scheduled' AND v.visit_date>=? ORDER BY v.visit_date LIMIT 1", td);
   let aptMeta = aptCount ? `${aptCount} activo${aptCount === 1 ? '' : 's'}` : 'Aún no hay apartamentos';
   if (nv) aptMeta += ` · visita ${fmtDate(nv.visit_date)}${hhmm(nv.visit_date)}`;
   const todayLabel = new Intl.DateTimeFormat('es-CO', { timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long' }).format(new Date());
@@ -1436,7 +1679,26 @@ async function apartmentsData(env: Env, req: Request, ctx: ExecutionContext): Pr
   const vByApt: Record<number, Record<string, string>> = {};
   for (const v of votes) (vByApt[v.apartment_id] = vByApt[v.apartment_id] || {})[v.voter] = v.vote;
   for (const r of [...rows, ...ruledOut]) r.votes = vByApt[r.id] || {};
-  return json({ apartments: rows, ruledOut, today: today(), me: canonVoter(webUser(req, env)) });
+  // full visit history + due-diligence docs per row; file ids stay server-side (has_file only)
+  const visits = await all(env, 'SELECT id, apartment_id, visit_date, who, status, note FROM apartment_visits ORDER BY visit_date');
+  const visByApt: Record<number, any[]> = {};
+  for (const v of visits) (visByApt[v.apartment_id] = visByApt[v.apartment_id] || []).push({ id: v.id, visit_date: v.visit_date, who: v.who, status: v.status, note: v.note });
+  const docs = await all(env, 'SELECT id, apartment_id, doc_type, label, status, file_name, note, tg_file_id IS NOT NULL AS has_file FROM apartment_docs ORDER BY id');
+  const docsByApt: Record<number, any[]> = {};
+  for (const d of docs) (docsByApt[d.apartment_id] = docsByApt[d.apartment_id] || []).push({ id: d.id, doc_type: d.doc_type, label: d.label, status: d.status, file_name: d.file_name, note: d.note, has_file: !!d.has_file });
+  for (const r of [...rows, ...ruledOut]) { r.visits = visByApt[r.id] || []; r.docs = docsByApt[r.id] || []; }
+  return json({ apartments: rows, ruledOut, today: today(), me: canonVoter(webUser(req, env)), doc_types: DOC_TYPES });
+}
+
+// the row a web mutation hands back: the apartment plus its visits/docs, so the client can
+// re-render the card without a full reload (photos/votes ride along from the data load)
+async function aptWithChildren(env: Env, id: number): Promise<any | null> {
+  const row = await get(env, 'SELECT * FROM apartments WHERE id=?', id);
+  if (!row) return null;
+  row.visits = await all(env, 'SELECT id, visit_date, who, status, note FROM apartment_visits WHERE apartment_id=? ORDER BY visit_date', id);
+  row.docs = (await all(env, 'SELECT id, doc_type, label, status, file_name, note, tg_file_id IS NOT NULL AS has_file FROM apartment_docs WHERE apartment_id=? ORDER BY id', id))
+    .map((d: any) => ({ ...d, has_file: !!d.has_file }));
+  return row;
 }
 
 // serve a stored visit photo: permanent file_id → short-lived file_path (getFile, expires ~1 h,
@@ -1466,28 +1728,110 @@ async function photoResponse(env: Env, photoId: number, thumb: boolean): Promise
   }
 }
 
+// serve a stored due-diligence document — same getFile flow as photos, plus the filename so
+// the browser saves it under something recognizable instead of the Telegram hash
+async function docResponse(env: Env, docId: number): Promise<Response> {
+  const row = await get(env, 'SELECT tg_file_id, file_name, mime_type FROM apartment_docs WHERE id=?', docId);
+  if (!row || !row.tg_file_id) return new Response('not found', { status: 404 });
+  try {
+    const gf = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/getFile`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ file_id: row.tg_file_id }),
+    });
+    const j: any = await gf.json();
+    if (!j.ok || !j.result?.file_path) return new Response('telegram getFile failed', { status: 502 });
+    const f = await fetch(`https://api.telegram.org/file/bot${env.BOT_TOKEN}/${j.result.file_path}`);
+    if (!f.ok || !f.body) return new Response('telegram file fetch failed', { status: 502 });
+    const name = String(row.file_name || 'documento').replace(/[^\w.\- ]/g, '_');
+    return new Response(f.body, {
+      headers: {
+        'content-type': row.mime_type || f.headers.get('content-type') || 'application/octet-stream',
+        'content-disposition': `inline; filename="${name}"`,
+        'cache-control': 'private, max-age=86400',
+      },
+    });
+  } catch (e: any) {
+    return new Response('telegram error: ' + String(e && e.message || e).slice(0, 80), { status: 502 });
+  }
+}
+
 async function apartmentsAction(env: Env, req: Request, ctx: ExecutionContext): Promise<Response> {
   const b: any = await req.json().catch(() => ({}));
   const id = Number(b.id);
-  if (!id) return json({ ok: false, error: 'missing id' }, 400);
+  // visit_edit / visit_cancel / doc_del address a child row directly — its apartment is looked up
+  const childActions = ['visit_edit', 'visit_cancel', 'doc_del'];
+  if (!id && !childActions.includes(String(b.action))) return json({ ok: false, error: 'missing id' }, 400);
   const who = webUser(req, env);
   const via = ` — vía web${who ? ' · ' + mdEscape(who) : ''}`;
   const echo = (msg: string, markup?: unknown) => ctx.waitUntil(tgSend(env, msg, undefined, markup).catch(() => {}));
   if (b.action === 'set_visit') {
     const vd = (b.visit_date == null || b.visit_date === '') ? null : String(b.visit_date);
     // no activeOnly: the web is the manual override and may (re)schedule on a ruled_out row (§8)
-    const res = await setVisit(env, id, vd);
+    const res = await setVisit(env, id, vd, { who: b.who !== undefined ? canonWho(b.who) : undefined, by: webAuthor(req, env) || null });
     if (!res) return json({ ok: false, error: 'no encontrado' }, 404);
-    echo(aptAnnounce('visit', res.row, { via, visit: vd, mailNote: res.mailNote }).text);
-    return json({ ok: true, row: res.row });
+    echo(aptAnnounce('visit', res.row, { via, visit: vd, who: res.visit?.who, mailNote: res.mailNote }).text);
+    return json({ ok: true, row: await aptWithChildren(env, id), visit: res.visit });
+  }
+  if (b.action === 'visit_add') {
+    // an explicit follow-up: always a NEW visit row, even with another one still upcoming
+    const vd = (b.visit_date == null || b.visit_date === '') ? null : String(b.visit_date);
+    if (!vd) return json({ ok: false, error: 'falta la fecha' }, 400);
+    const res = await addVisit(env, id, vd, { who: canonWho(b.who), by: webAuthor(req, env) || null });
+    if (!res) return json({ ok: false, error: 'no encontrado' }, 404);
+    echo(aptAnnounce('visit', res.row, { via, visit: vd, who: res.visit.who, mailNote: res.mailNote }).text);
+    return json({ ok: true, row: await aptWithChildren(env, id), visit: res.visit });
+  }
+  if (b.action === 'visit_edit') {
+    // reschedule / who / outcome-note on ONE visit row; only a date change reaches the group
+    const vid = Number(b.visit_id);
+    if (!vid) return json({ ok: false, error: 'missing visit_id' }, 400);
+    const patch: any = {};
+    if (b.visit_date !== undefined && b.visit_date !== null && b.visit_date !== '') patch.visit_date = String(b.visit_date);
+    if (b.who !== undefined) patch.who = canonWho(b.who);
+    if (b.note !== undefined) patch.note = (b.note && String(b.note).trim()) ? String(b.note).trim().slice(0, 500) : null;
+    const res = await editVisit(env, vid, patch);
+    if (!res) return json({ ok: false, error: 'no encontrado' }, 404);
+    if (res.dateChanged) echo(aptAnnounce('visit', res.row, { via, visit: res.visit.visit_date, who: res.visit.who, mailNote: res.mailNote }).text);
+    return json({ ok: true, row: await aptWithChildren(env, res.row.id), visit: res.visit });
+  }
+  if (b.action === 'visit_cancel') {
+    const vid = Number(b.visit_id);
+    if (!vid) return json({ ok: false, error: 'missing visit_id' }, 400);
+    const res = await editVisit(env, vid, { status: 'cancelled' });
+    if (!res) return json({ ok: false, error: 'no encontrado' }, 404);
+    if (res.cancelled) echo(aptAnnounce('visit', res.row, { via, visit: null, mailNote: res.mailNote }).text);
+    return json({ ok: true, row: await aptWithChildren(env, res.row.id), visit: res.visit });
+  }
+  if (b.action === 'doc_set') {
+    // upsert one checklist entry; only a real status lands in the group announcement
+    if (!DOC_TYPES.some((t) => t.slug === String(b.doc_type))) return json({ ok: false, error: 'tipo de documento inválido' }, 400);
+    const status = (DOC_STATUSES as readonly string[]).includes(String(b.status)) ? String(b.status) : undefined;
+    const res = await setDoc(env, id, String(b.doc_type || ''), {
+      status,
+      ...(b.label !== undefined ? { label: (b.label && String(b.label).trim()) ? String(b.label).trim().slice(0, 80) : null } : {}),
+      ...(b.note !== undefined ? { note: (b.note && String(b.note).trim()) ? String(b.note).trim().slice(0, 300) : null } : {}),
+    }, webAuthor(req, env) || null);
+    if (!res) return json({ ok: false, error: 'no encontrado' }, 404);
+    if (status) echo(aptAnnounce('doc', res.row, { via, doc: docLabel(res.doc), docStatus: status }).text);
+    return json({ ok: true, row: await aptWithChildren(env, id), doc: res.doc });
+  }
+  if (b.action === 'doc_del') {
+    // quiet cleanup for a mis-filed doc row, like apt_note_del
+    const did = Number(b.doc_id);
+    if (!did) return json({ ok: false, error: 'missing doc_id' }, 400);
+    const d = await get(env, 'SELECT * FROM apartment_docs WHERE id=?', did);
+    if (!d) return json({ ok: false, error: 'no encontrado' }, 404);
+    await run(env, 'DELETE FROM apartment_docs WHERE id=?', did);
+    return json({ ok: true, row: await aptWithChildren(env, d.apartment_id) });
   }
   if (b.action === 'invite') {
-    // manual re-send from the calendar card, e.g. after editing the address or agent
+    // manual re-send for the NEXT upcoming visit, e.g. after editing the address or agent
     const row = await get(env, "SELECT * FROM apartments WHERE id=? AND status='active'", id);
     if (!row) return json({ ok: false, error: 'no encontrado' }, 404);
-    if (!row.visit_date) return json({ ok: false, error: 'sin fecha de visita' }, 400);
-    if (!visitUpcoming(row.visit_date)) return json({ ok: false, error: 'la visita ya pasó' }, 400);
-    try { await sendInviteMail(env, row, 'REQUEST', String(row.visit_date)); } catch (e: any) {
+    const nv = await nextVisitRow(env, id);
+    if (!nv) return json({ ok: false, error: 'sin visita próxima' }, 400);
+    try { await sendInviteMail(env, row, 'REQUEST', String(nv.visit_date), nv.id); } catch (e: any) {
       console.log('invite mail error:', String(e && e.message || e));
       return json({ ok: false, error: 'no se pudo enviar el correo' }, 502);
     }
@@ -1611,7 +1955,9 @@ const MCP_PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 const MCP_DB_CONVENTIONS = `Conventions:
 - items.status: 'open' | 'done' | 'deleted' — almost every question is about status='open' (delete is a status flip, so always filter). category: bills|events|groceries|health|pediatrician|general. recurrence='monthly' (+recur_day) means completing rolls due_date forward instead of closing.
 - apartments.status: 'active' | 'ruled_out' (ruled_out_reason / ruled_out_at say why and when). scrape_status is 'ok' or the block reason. prev_price/price_changed_at hold one prior price seen by a rescrape.
-- All time columns are TEXT and string-comparable. created_at/updated_at are UTC ISO; due_date and visit_date are Bogota wall-clock ('YYYY-MM-DD' or 'YYYY-MM-DDTHH:MM').
+- All time columns are TEXT and string-comparable. created_at/updated_at are UTC ISO; due_date and apartment_visits.visit_date are Bogota wall-clock ('YYYY-MM-DD' or 'YYYY-MM-DDTHH:MM').
+- apartment_visits: one row per visit (follow-ups are extra rows). status 'scheduled' | 'cancelled' — a non-cancelled visit in the past means it happened; date-only visits count through end of day. who is 'felipe' | 'lucia' | 'both' | NULL. note holds that visit's impressions as stamped lines.
+- apartment_docs: due-diligence documents per apartment. doc_type slugs: cert_libertad, predial, paz_salvo_admin, reglamento, servicios, contrato, cedula_prop, otro (label carries the free name). status 'pending' | 'received' | 'na'; tg_file_id non-NULL means the actual file is stored.
 - apartments.notes is a newline-joined log of stamped lines: 'YYYY-MM-DD [Autor]: text'.
 - apartment_votes: one row per person per apartment; voter is canonical 'felipe' | 'lucia', vote is 'up' | 'down'; no row = no verdict yet.
 - Effective $/m² for deal_type='rent' is (price + COALESCE(admin_fee,0)) / area_m2; for 'buy' use the stored price_per_m2. Prices are COP.
@@ -1620,7 +1966,7 @@ const MCP_DB_CONVENTIONS = `Conventions:
 const MCP_TOOLS = [
   {
     name: 'query',
-    description: 'Run one read-only SQL statement (SQLite) against the household database (items, apartments, apartment_votes, apartment_photos). SELECT/WITH only. Call get_schema first if you have not seen the schema in this conversation.',
+    description: 'Run one read-only SQL statement (SQLite) against the household database (items, apartments, apartment_visits, apartment_docs, apartment_votes, apartment_photos). SELECT/WITH only. Call get_schema first if you have not seen the schema in this conversation.',
     inputSchema: {
       type: 'object',
       properties: { sql: { type: 'string', description: 'A single SELECT (or WITH … SELECT) statement, SQLite dialect' } },
@@ -1744,6 +2090,8 @@ export default {
     if (req.method === 'GET' && path === '/apartments-data.json') return apartmentsData(env, req, ctx);
     const photoM = path.match(/^\/apt-photo\/(\d+)$/);
     if (req.method === 'GET' && photoM) return photoResponse(env, Number(photoM[1]), url.searchParams.get('s') === 't');
+    const docM = path.match(/^\/apt-doc\/(\d+)$/);
+    if (req.method === 'GET' && docM) return docResponse(env, Number(docM[1]));
     if (req.method === 'GET' && path === '/manifest.json') return manifestResponse();
     if (req.method === 'GET' && path === '/icon.png') return iconResponse();
     if (req.method === 'POST' && path === '/apartments-action') return apartmentsAction(env, req, ctx);

@@ -15,27 +15,57 @@ INSERT OR REPLACE INTO items (id,category,title,notes,due_date,recurrence,recur_
   (8,'pediatrician','¿Cuándo toca el refuerzo de la vacuna?',NULL,NULL,'none',NULL,NULL,'open','Lucía',strftime('%Y-%m-%dT%H:%M','now','-5 hours'),strftime('%Y-%m-%dT%H:%M','now','-5 hours')),
   (9,'general','Renovar SOAT del carro',NULL,date('now','-5 hours','+21 days'),'none',NULL,'$ 560.000','open','Felipe',strftime('%Y-%m-%dT%H:%M','now','-5 hours'),strftime('%Y-%m-%dT%H:%M','now','-5 hours'));
 
-INSERT OR REPLACE INTO apartments (id,url,deal_type,title,price,admin_fee,bedrooms,bathrooms,area_m2,price_per_m2,parking,stratum,location,year_built,amenities,source_site,raw_note,scrape_status,image_url,notes,address,agent_name,agent_phone,tag,status,created_by,created_at,updated_at,visit_date,ruled_out_reason,ruled_out_at,geo_lat,geo_lng,geo_address) VALUES
+INSERT OR REPLACE INTO apartments (id,url,deal_type,title,price,admin_fee,bedrooms,bathrooms,area_m2,price_per_m2,parking,stratum,location,year_built,amenities,source_site,raw_note,scrape_status,image_url,notes,address,agent_name,agent_phone,tag,status,created_by,created_at,updated_at,ruled_out_reason,ruled_out_at,geo_lat,geo_lng,geo_address) VALUES
   (1,'https://example.com/listing/1','rent','Apartamento en arriendo en Chapinero Alto',4200000,480000,3,2,92,NULL,1,4,'Chapinero Alto',2016,'Gimnasio, terraza comunal, portería 24h','example.com',NULL,'ok',NULL,
    'Felipe: la cocina es más chica de lo que se ve en las fotos.','Carrera 5 # 63-20, Bogotá','Ana Restrepo','+57 310 555 1122','favorito','active','Felipe',
    strftime('%Y-%m-%dT%H:%M','now','-5 hours','-6 days'),strftime('%Y-%m-%dT%H:%M','now','-5 hours'),
-   strftime('%Y-%m-%d','now','-5 hours','+1 day')||'T10:30',NULL,NULL,4.6486,-74.0629,'Carrera 5 # 63-20, Bogotá'),
+   NULL,NULL,4.6486,-74.0629,'Carrera 5 # 63-20, Bogotá'),
   (2,'https://example.com/listing/2','rent','Apartamento en arriendo en Cedritos',3100000,320000,2,2,68,NULL,1,4,'Cedritos',2009,'Ascensor, zona BBQ','example.com',NULL,'ok',NULL,
    NULL,'Calle 140 # 11-45, Bogotá','Jorge Peña','+57 320 555 8844',NULL,'active','Lucía',
    strftime('%Y-%m-%dT%H:%M','now','-5 hours','-4 days'),strftime('%Y-%m-%dT%H:%M','now','-5 hours'),
-   NULL,NULL,NULL,4.7280,-74.0330,'Calle 140 # 11-45, Bogotá'),
+   NULL,NULL,4.7280,-74.0330,'Calle 140 # 11-45, Bogotá'),
   (3,'https://example.com/listing/3','buy','Apartamento en venta en Teusaquillo',520000000,NULL,3,2,105,4952381,1,4,'Teusaquillo',1994,'Balcón, depósito','example.com',NULL,'ok',NULL,
    'Lucía: buena luz por la mañana, pero el edificio es viejo.','Calle 39 # 20-15, Bogotá','Inmobiliaria Sur','+57 601 555 7700',NULL,'active','Felipe',
    strftime('%Y-%m-%dT%H:%M','now','-5 hours','-9 days'),strftime('%Y-%m-%dT%H:%M','now','-5 hours'),
-   strftime('%Y-%m-%d','now','-5 hours','-3 days')||'T16:00',NULL,NULL,4.6320,-74.0790,'Calle 39 # 20-15, Bogotá'),
+   NULL,NULL,4.6320,-74.0790,'Calle 39 # 20-15, Bogotá'),
   (4,'https://example.com/listing/4','rent','Apartaestudio en Usaquén',2400000,250000,1,1,44,NULL,0,5,'Usaquén',2020,'Coworking, rooftop','example.com',NULL,'blocked',NULL,
    NULL,NULL,NULL,NULL,NULL,'ruled_out','Lucía',
    strftime('%Y-%m-%dT%H:%M','now','-5 hours','-12 days'),strftime('%Y-%m-%dT%H:%M','now','-5 hours','-7 days'),
-   NULL,'muy pequeño para los tres',strftime('%Y-%m-%dT%H:%M','now','-5 hours','-7 days'),NULL,NULL,NULL),
+   'muy pequeño para los tres',strftime('%Y-%m-%dT%H:%M','now','-5 hours','-7 days'),NULL,NULL,NULL),
   (5,NULL,'rent',NULL,2900000,200000,2,1,60,NULL,0,3,'Suba, cerca al parque',NULL,NULL,NULL,'aviso en la portería, sin link','manual',NULL,
    NULL,NULL,NULL,NULL,NULL,'active','Felipe',
    strftime('%Y-%m-%dT%H:%M','now','-5 hours','-1 day'),strftime('%Y-%m-%dT%H:%M','now','-5 hours','-1 day'),
-   NULL,NULL,NULL,NULL,NULL,NULL);
+   NULL,NULL,NULL,NULL,NULL);
+
+-- visits: apt 1 has a past first visit (with impressions) AND an upcoming follow-up tomorrow;
+-- apt 3 was visited days ago (both went); apt 2 has a date-only visit (time TBD); one cancelled.
+INSERT OR REPLACE INTO apartment_visits (id,apartment_id,visit_date,who,status,note,reminder_sent,created_by,created_at,updated_at) VALUES
+  (1,1,strftime('%Y-%m-%d','now','-5 hours','-5 days')||'T11:00','felipe','scheduled',
+   strftime('%Y-%m-%d','now','-5 hours','-5 days')||' [Felipe]: Bien iluminado, la cocina más chica de lo esperado.',
+   NULL,'Felipe',strftime('%Y-%m-%dT%H:%M','now','-5 hours','-6 days'),strftime('%Y-%m-%dT%H:%M','now','-5 hours','-5 days')),
+  (2,1,strftime('%Y-%m-%d','now','-5 hours','+1 day')||'T10:30','both','scheduled',NULL,
+   NULL,'Lucía',strftime('%Y-%m-%dT%H:%M','now','-5 hours','-1 day'),strftime('%Y-%m-%dT%H:%M','now','-5 hours','-1 day')),
+  (3,3,strftime('%Y-%m-%d','now','-5 hours','-3 days')||'T16:00','both','scheduled',
+   strftime('%Y-%m-%d','now','-5 hours','-3 days')||' [Lucía]: Buena luz por la mañana, edificio viejo pero bien tenido.',
+   NULL,'Felipe',strftime('%Y-%m-%dT%H:%M','now','-5 hours','-4 days'),strftime('%Y-%m-%dT%H:%M','now','-5 hours','-3 days')),
+  (4,2,strftime('%Y-%m-%d','now','-5 hours','+3 days'),'lucia','scheduled',NULL,
+   NULL,'Lucía',strftime('%Y-%m-%dT%H:%M','now','-5 hours'),strftime('%Y-%m-%dT%H:%M','now','-5 hours')),
+  (5,3,strftime('%Y-%m-%d','now','-5 hours','+2 days')||'T09:00','felipe','cancelled',NULL,
+   NULL,'Felipe',strftime('%Y-%m-%dT%H:%M','now','-5 hours','-2 days'),strftime('%Y-%m-%dT%H:%M','now','-5 hours','-1 day'));
+
+-- docs: apt 3 (compra) mid due-diligence; apt 1 (arriendo) has the reglamento pending.
+-- No tg_file_id in seed — local dev has no BOT_TOKEN, a fake id would just 502 on tap.
+INSERT OR REPLACE INTO apartment_docs (id,apartment_id,doc_type,label,status,tg_file_id,file_name,mime_type,note,created_by,created_at,updated_at) VALUES
+  (1,3,'cert_libertad',NULL,'received',NULL,'certificado-libertad-teusaquillo.pdf','application/pdf',NULL,'Felipe',
+   strftime('%Y-%m-%dT%H:%M','now','-5 hours','-2 days'),strftime('%Y-%m-%dT%H:%M','now','-5 hours','-1 day')),
+  (2,3,'predial',NULL,'pending',NULL,NULL,NULL,'pedido a la inmobiliaria el martes','Lucía',
+   strftime('%Y-%m-%dT%H:%M','now','-5 hours','-2 days'),strftime('%Y-%m-%dT%H:%M','now','-5 hours','-2 days')),
+  (3,3,'reglamento',NULL,'pending',NULL,NULL,NULL,NULL,'Felipe',
+   strftime('%Y-%m-%dT%H:%M','now','-5 hours','-1 day'),strftime('%Y-%m-%dT%H:%M','now','-5 hours','-1 day')),
+  (4,1,'reglamento',NULL,'pending',NULL,NULL,NULL,NULL,'Lucía',
+   strftime('%Y-%m-%dT%H:%M','now','-5 hours'),strftime('%Y-%m-%dT%H:%M','now','-5 hours')),
+  (5,1,'contrato',NULL,'received',NULL,'modelo-contrato-chapinero.pdf','application/pdf',NULL,'Felipe',
+   strftime('%Y-%m-%dT%H:%M','now','-5 hours','-1 day'),strftime('%Y-%m-%dT%H:%M','now','-5 hours'));
 
 INSERT OR REPLACE INTO apartment_votes (apartment_id,voter,vote,updated_at) VALUES
   (1,'felipe','up',strftime('%Y-%m-%dT%H:%M','now','-5 hours')),

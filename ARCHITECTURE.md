@@ -9,10 +9,13 @@ file disagreeing means the change is incomplete.
 
 One Cloudflare Worker (`household`, https://turikumwe.cc). A Telegram group is
 the only input surface: plain messages are parsed by Claude into household
-ops, listing URLs are scraped and extracted into apartment rows, photos attach
-to apartments, inline buttons drive one-tap actions. Crons push a morning
-digest, evening nudges, and visit reminders back into the group. Two
-Access-protected web screens mirror the data. All user-facing text is Spanish.
+ops, listing URLs are scraped and extracted into apartment rows, photos and
+due-diligence documents (PDFs from realtors) attach to apartments, inline
+buttons drive one-tap actions. Visits are first-class rows — an apartment can
+be visited several times (first visit + follow-ups), each with who went and
+how it went. Crons push a morning digest, evening nudges, and visit reminders
+back into the group. Two Access-protected web screens mirror the data. All
+user-facing text is Spanish.
 
 ```
 Telegram group ──POST /telegram-webhook (secret header)──┐
@@ -39,22 +42,26 @@ wrangler + typescript only. HTML screens are static files imported as text.
    and duplicates every message. Messages from any chat other than
    `GROUP_CHAT_ID` are dropped.
 2. **One implementation per mutation.** Rule-out, reactivate, notes, votes,
-   and visit changes (`ruleOutApt`, `reactivateApt`, `appendAptNote`,
-   `upsertVote`, `setVisit`) are shared by every entry point: Claude-parsed
-   ops, inline-button callbacks, web actions (and MCP for notes). Each
-   returns the post-mutation row — callers never re-read it — or null on a
-   miss. Concurrency/idempotency lives there too — a status predicate on
-   the `UPDATE` plus a `meta.changes` check means only the tap that
-   actually flips the row announces; stale taps answer "ya estaba hecho".
-   The invite/cancel mail decision (`visitMail`) lives inside `setVisit`
-   and fires only on an explicit `visit_date` change — rule-out and
-   reactivate deliberately never touch it, so discarding an apartment never
-   touches its calendar invite; only a person editing the visit date does.
-   `setVisit`'s `activeOnly` option is the policy seam: the Telegram ops
-   path passes it (active rows only), the web omits it — the manual
-   override (§8). The group announcement for any of these mutations is
-   built ONLY by `aptAnnounce`, which owns the emoji, the escaped `aptRef`,
-   and the keyboard; callers pass their attribution suffix (`via`, already
+   visit changes, and document tracking (`ruleOutApt`, `reactivateApt`,
+   `appendAptNote`, `upsertVote`, `setVisit`, `addVisit`, `editVisit`,
+   `setDoc`) are shared by every entry point: Claude-parsed ops,
+   inline-button callbacks, Telegram photo/document handlers, web actions
+   (and MCP for notes). Each returns the post-mutation state — callers
+   never re-read it — or null on a miss. Concurrency/idempotency lives
+   there too — a status predicate on the `UPDATE` plus a `meta.changes`
+   check means only the tap that actually flips the row announces; stale
+   taps answer "ya estaba hecho". The invite/cancel mail decision
+   (`visitMail`) lives inside the visit mutations and fires only on an
+   explicit visit change — rule-out and reactivate deliberately never touch
+   it, so discarding an apartment never touches its calendar invites; only
+   a person editing a visit does. `setVisit` keeps its historical
+   semantics — it (re)schedules or clears THE NEXT upcoming visit — while
+   `addVisit` always inserts a follow-up and `editVisit` addresses one
+   visit row by id. `activeOnly` is the policy seam: the Telegram ops path
+   passes it (active rows only), the web omits it — the manual override
+   (§8). The group announcement for any of these mutations is built ONLY by
+   `aptAnnounce`, which owns the emoji, the escaped `aptRef`, and the
+   keyboard; callers pass their attribution suffix (`via`, already
    Markdown-safe) and only choose the delivery channel.
 3. **Telegram Markdown is legacy mode and hostile.** Free text (addresses,
    names, scraped titles/URLs) is interpolated only through `mdEscape`;
@@ -67,7 +74,10 @@ wrangler + typescript only. HTML screens are static files imported as text.
 5. **Times are Bogota wall-clock TEXT**, `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM`,
    string-comparable. Bogota has no DST, so date math is deliberately
    Z-anchored (`plusMinutes`, `icsWindow`) and the VTIMEZONE is a fixed
-   -05:00. Don't introduce real timezone libraries.
+   -05:00. Don't introduce real timezone libraries. A date-only visit counts
+   as upcoming through the end of its day — `visitCmpJs`/`visitCmpSql` (and
+   the client twin `visitCmp`) pad it to `T23:59`; a visit's "hecha" state is
+   DERIVED (non-cancelled + in the past), never stored.
 6. **Failures surface, never mask.** Blocked scrape → row saved with
    `scrape_status` + a "Releer" button; Claude parse error → "envíalo otra
    vez" reply; a malformed or unimplemented op → "⚠️ No entendí…" ack line
@@ -105,20 +115,19 @@ wrangler + typescript only. HTML screens are static files imported as text.
 ```
 wrangler.toml        infra: custom domain turikumwe.cc, 3 crons, D1 binding DB,
                      send_email binding INVITE_MAIL, vars (GROUP_CHAT_ID, INVITE_FROM/TO)
-schema.sql           the only schema definition (4 tables) — CREATE TABLE IF NOT EXISTS
+schema.sql           the only schema definition (6 tables) — CREATE TABLE IF NOT EXISTS
 seed.sql             demo rows for local dev only (§9) — fixed ids + INSERT OR REPLACE,
                      dates relative to `now`; never run against --remote
 .claude/launch.json  `npm run dev` as a Claude Code preview target on port 8787
 src/
-  index.ts           ALL logic (~1600 lines): date helpers, votes, geocoding,
+  index.ts           ALL logic (~1900 lines): date helpers, votes, geocoding,
                      WhatsApp/maps links, iCalendar invites + MIME mail, db helpers,
                      Telegram send/callback/typing, Claude client, apartment
-                     ingest/scrape/extract/rescrape, shared mutations + aptAnnounce,
-                     summary, digest, crons, ops vocabulary (OP_LINES) + executeOps,
-                     update handling, web routes
-  apartments.html    apartment screen: list + table views (a row tap or the table
-                     thumbnail opens the full card — inline or in a modal; no card
-                     gallery), inline edits, map (OSM tiles), photo strip
+                     ingest/scrape/extract/rescrape, shared mutations (incl. visits +
+                     docs) + aptAnnounce, summary, digest, crons, ops vocabulary
+                     (OP_LINES) + executeOps, photo/document handlers, web routes
+  apartments.html    apartment screen (self-contained page over /apartments-data.json
+                     + /apartments-action; carries the client twins of §2.7)
   dashboard.html     household overview, ✓ buttons ({{SECTIONS}}/{{UPDATED}} placeholders)
   home.html          home screen: pick Household or Apartamentos ({{…}} placeholders)
   icons.ts           PWA icons as base64 (data URIs — see manifest note in §4)
@@ -143,10 +152,11 @@ webhook (secret header) and `/mcp` (bearer token).
 | `GET /` | Access | Home screen with live counts |
 | `GET /dashboard.html` | Access | Household items by category, ✓ to complete |
 | `POST /items-action` | Access | `complete` (monthly items roll forward); echoes to Telegram except groceries |
-| `GET /apartments.html` | Access | Apartment list/table + map (static HTML, data via XHR) |
-| `GET /apartments-data.json` | Access | Active + ruled-out rows, photos, votes, `me`; kicks off geocode backfill |
+| `GET /apartments.html` | Access | Apartment screen (static HTML, data via XHR) |
+| `GET /apartments-data.json` | Access | Active + ruled-out rows, photos, votes, `visits`, `docs`, `doc_types`, `me`; kicks off geocode backfill |
 | `GET /apt-photo/<id>` | Access | Streams a visit photo from Telegram by stored `file_id` (`?s=t` = thumb) |
-| `POST /apartments-action` | Access | `set_visit` / `invite` / `rule_out` / `reactivate` / `rescrape` / `set_fields` / `edit` (allowlisted single field) / `vote` / `apt_note` / `apt_note_del`; most echo to Telegram |
+| `GET /apt-doc/<id>` | Access | Streams a due-diligence document from Telegram by stored `file_id` (with its filename) |
+| `POST /apartments-action` | Access | `set_visit` (next visit) / `visit_add` (follow-up) / `visit_edit` / `visit_cancel` (by `visit_id`) / `doc_set` / `doc_del` / `invite` / `rule_out` / `reactivate` / `rescrape` / `set_fields` / `edit` (allowlisted single field) / `vote` / `apt_note` / `apt_note_del`; most echo to Telegram; mutations return the post-mutation row incl. `visits`/`docs` |
 | `GET /manifest.json`, `GET /icon.png` | Access | PWA manifest + icon — icons are **data URIs** because Chrome fetches manifest icons without the Access cookie |
 
 ### MCP endpoint
@@ -178,20 +188,27 @@ against accidents, not adversaries.
 2. Photo → `handlePhoto`: resolve the apartment from the replied-to message
    or a `#id` in the caption; album siblings share the resolution via an
    in-isolate map (best-effort); caption also saved as a note.
-3. `/command` → static HELP text.
-4. Message containing a URL → apartment ingestion only (dedup by exact URL;
+3. Document (PDF etc.) → `handleDocument`: same reply/`#id` resolution, then
+   `setDoc` — classified into a `DOC_TYPES` slug by cheap caption/filename
+   keywords (`classifyDoc`, no Claude call), stored like photos (permanent
+   `file_id` only) and flipped to `received`. No album handling (paperwork
+   rarely travels as one); an unresolved file gets the "¿de cuál apto?" nag.
+4. `/command` → static HELP text.
+5. Message containing a URL → apartment ingestion only (dedup by exact URL;
    a blocked-then-resent link is a retry; extra prose >30 chars gets an
    "envíalo aparte" warning). One ack + keyboard per URL.
-5. Plain text → Claude ops parser (`{"ops":[...]}` against the live OPEN
-   ITEMS / APARTMENTS / RULED OUT lists, plus the replied-to apartment when
-   present). The op vocabulary is `OP_LINES` — ONE table whose values are
-   the prompt's op-spec lines and whose keys `executeOps` implements:
-   add / complete / remove / query / none / rescrape / set_visit /
-   rule_out / reactivate / apt_note / apt_vote / apt_summary. `executeOps`
-   runs the parsed ops and returns the ack lines (the seam: ops in, ack
-   out). Unknown categories coerce to `general` so nothing is dropped; an
-   op that is malformed or not implemented is acked "no entendí" — never
-   dropped silently (invariant 6).
+6. Plain text → Claude ops parser (`{"ops":[...]}` against the live OPEN
+   ITEMS / APARTMENTS / RULED OUT / DOC TYPES lists, plus the replied-to
+   apartment when present). The op vocabulary is `OP_LINES` — ONE table
+   whose values are the prompt's op-spec lines and whose keys `executeOps`
+   implements: add / complete / remove / query / none / rescrape /
+   set_visit / add_visit / visit_note / set_doc / rule_out / reactivate /
+   apt_note / apt_vote / apt_summary. `executeOps` runs the parsed ops and
+   returns the ack lines (the seam: ops in, ack out). Unknown categories
+   coerce to `general` so nothing is dropped; an op that is malformed or
+   not implemented is acked "no entendí" — never dropped silently
+   (invariant 6). `visit_note` lands on the last visit that happened and
+   degrades to a plain apartment note when none has.
 
 ### Apartment ingestion pipeline
 
@@ -214,7 +231,7 @@ pairs >150 m apart or outside the Bogotá bbox. Block-accurate by design.
 
 ## 5. Data model (schema.sql)
 
-Four tables, raw SQL, `INTEGER PRIMARY KEY AUTOINCREMENT` ids, ISO-8601 TEXT
+Six tables, raw SQL, `INTEGER PRIMARY KEY AUTOINCREMENT` ids, ISO-8601 TEXT
 timestamps written by the app (no DB defaults for time):
 
 - **`items`** — household todos. `category` ∈ bills/events/groceries/health/
@@ -222,13 +239,25 @@ timestamps written by the app (no DB defaults for time):
   status flip — every query filters `status='open'`); `recurrence='monthly'`
   + `recur_day` makes `complete` roll `due_date` forward instead of closing.
 - **`apartments`** — one row per listing. `status` ∈ `active`/`ruled_out`;
-  `scrape_status` `ok` or the block reason; `visit_date` date or datetime;
-  `visit_reminder_sent` stores the covered **datetime, not a boolean**, so a
-  reschedule re-arms the reminder; `notes` is newline-joined stamped lines
-  (`YYYY-MM-DD [Autor]: text` — `NOTE_LINE_RE` is the parsing contract);
-  `prev_price`/`price_changed_at` hold one prior rescrape price; `geo_lat`/
-  `geo_lng`/`geo_address` cache the geocode (miss = `geo_address` set with
-  NULL coords).
+  `scrape_status` `ok` or the block reason; `notes` is newline-joined
+  stamped lines (`YYYY-MM-DD [Autor]: text` — `NOTE_LINE_RE` is the parsing
+  contract); `prev_price`/`price_changed_at` hold one prior rescrape price;
+  `geo_lat`/`geo_lng`/`geo_address` cache the geocode (miss = `geo_address`
+  set with NULL coords). Visit state does NOT live here anymore (see
+  `apartment_visits`; legacy `visit_date`/`visit_reminder_sent` columns may
+  linger on old installs, unread — §6).
+- **`apartment_visits`** — one row per visit; follow-ups are extra rows.
+  `visit_date` date or datetime (wall clock); `who` ∈
+  `felipe`/`lucia`/`both`/NULL; `status` ∈ `scheduled`/`cancelled` only —
+  "hecha" is derived (non-cancelled + past, date-only counting through end
+  of day); `note` holds that visit's impressions as stamped lines;
+  `reminder_sent` stores the covered **datetime, not a boolean**, so a
+  reschedule re-arms the reminder.
+- **`apartment_docs`** — due-diligence documents per apartment. `doc_type`
+  is a `DOC_TYPES` slug (or `otro` + free `label`); `status` ∈
+  `pending`/`received`/`na`; a row exists only once requested/received (no
+  auto-seeded checklist); `tg_file_id`/`file_name`/`mime_type` when the
+  actual file arrived via Telegram. No bytes stored.
 - **`apartment_votes`** — one 👍/👎 per person per apartment,
   PK `(apartment_id, voter)`, voter canonical (`felipe`/`lucia`), clearing
   deletes the row.
@@ -253,13 +282,32 @@ Applied one-off `ALTER`s on `apartments`, in order (a fresh
 `visit_reminder_sent` → `prev_price, price_changed_at` →
 `geo_lat, geo_lng, geo_address`.
 
+**Visits migration (v2).** `apartment_visits`/`apartment_docs` are new
+tables — re-applying `schema.sql` creates them. The single visit an
+apartment used to carry moved into `apartment_visits` with this one-off
+(run BEFORE deploying the code that reads the new table):
+
+```sql
+INSERT INTO apartment_visits (apartment_id, visit_date, who, status, reminder_sent, created_by, created_at, updated_at)
+SELECT id, visit_date, 'both', 'scheduled', visit_reminder_sent, created_by, updated_at, updated_at
+FROM apartments WHERE visit_date IS NOT NULL;
+```
+
+The old `apartments.visit_date`/`visit_reminder_sent` columns stay in place
+on migrated installs (SQLite column drops aren't worth the risk here) but no
+code reads or writes them; `schema.sql` no longer creates them. One-time
+quirk: calendar events sent before the migration used UID
+`visit-<aptId>@turikumwe.cc`, new ones are per-visit
+(`visit-v<visitId>@…`) — the first post-migration reschedule of an old event
+adds a new calendar entry instead of moving the old one.
+
 ## 7. Crons (wrangler.toml ↔ `scheduled()` switch — keep in sync)
 
 | Cron (UTC) | Bogota | What |
 |---|---|---|
-| `30 12 * * *` | 07:30 | `sendDigest` — full pendientes digest to the group |
-| `0 0 * * *` | 19:00 | `sendEveningReminder` (only if something is due/overdue) + `sendPostVisitFollowup` (per visited-today apartment, with 👍/👎/🚫 buttons + a 💬 WhatsApp url button when the agent's phone is stored) |
-| `0 * * * *` | hourly | `sendVisitReminders` — ~1 h before each timed visit; 90-min lookahead + `visit_reminder_sent` guarantees exactly one reminder per scheduled datetime |
+| `30 12 * * *` | 07:30 | `sendDigest` — full pendientes digest to the group (visits section reads `apartment_visits`, shows who goes) |
+| `0 0 * * *` | 19:00 | `sendEveningReminder` (only if something is due/overdue) + `sendPostVisitFollowup` (per visited-today apartment — scheduled visits whose datetime passed, deduped per apartment — with 👍/👎/🚫 buttons, a 💬 WhatsApp url button when the agent's phone is stored, and the list of still-pending docs to ask for) |
+| `0 * * * *` | hourly | `sendVisitReminders` — ~1 h before each timed visit (scheduled `apartment_visits` rows joined to active apartments); 90-min lookahead + per-visit `reminder_sent` guarantees exactly one reminder per scheduled datetime; includes who goes and the pending docs to request in person |
 
 At 00:00 UTC the evening and hourly crons both fire as separate invocations —
 fine. Dispatch is an explicit `switch` on `controller.cron`; an unknown string
@@ -267,17 +315,19 @@ logs and does nothing (never guess — a wrong guess spams the group).
 
 ## 8. Calendar invites
 
-Setting/clearing a future `visit_date` (from any entry point, always through
-`setVisit`) emails an iCalendar REQUEST/CANCEL to both people via the
-`send_email` binding (recipients must be verified in the zone's Email
-Routing settings). "Future" means today or later, wall-clock — the
-`visitUpcoming` predicate, the same guard the web "reenviar invitación"
-re-send uses. **Ruling out or reactivating an apartment never sends this
-mail** — a discarded apartment keeps its `visit_date` and calendar invite
-exactly as they were; only a person explicitly changing the visit date
-cancels or moves it (the web omits `setVisit`'s `activeOnly` option on
-purpose — it's the manual override and works on a `ruled_out` row too). Stable `UID:visit-<id>@turikumwe.cc` + epoch-seconds
-`SEQUENCE` makes reschedules replace rather than duplicate. RFC 5545 line
+Scheduling, moving, or cancelling an upcoming visit (from any entry point,
+always through `setVisit`/`addVisit`/`editVisit`) emails an iCalendar
+REQUEST/CANCEL to both people via the `send_email` binding (recipients must
+be verified in the zone's Email Routing settings). "Upcoming" means today or
+later, wall-clock — the `visitUpcoming` predicate; the web "reenviar
+invitación" re-send targets the next upcoming visit. **Ruling out or
+reactivating an apartment never sends this mail** — a discarded apartment
+keeps its visits and calendar invites exactly as they were; only a person
+explicitly editing a visit cancels or moves one (the web omits the
+`activeOnly` option on purpose — it's the manual override and works on a
+`ruled_out` row too). Stable per-visit `UID:visit-v<visitId>@turikumwe.cc` +
+epoch-seconds `SEQUENCE` makes reschedules replace rather than duplicate,
+while a follow-up visit is its own calendar event. RFC 5545 line
 folding is UTF-8-safe; headers use RFC 2047 for accents. The DESCRIPTION and
 the plain-text mail body share one fact sheet (`visitInfoLines`) that carries
 Maps and WhatsApp URLs — calendar apps linkify them, so on visit day the
